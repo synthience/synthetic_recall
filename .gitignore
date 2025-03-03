@@ -40,14 +40,17 @@ logs/
 .env.production.local
 python-sdks/
 
-# Model files
+# Model and audio files
 *.pt
 *.safetensors
 *.mdl
 *.ie
 *.fst
+*.wav
 voice_core/models/
 voice_core/cache/
+voice_core/training/
+voice_core/training/voice_samples/
 voice_core/training/trained_models/
 model_catalog.json
 
