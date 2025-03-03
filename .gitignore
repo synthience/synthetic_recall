@@ -36,19 +36,25 @@ logs/
 .env*
 python-sdks/
 
-# Model and audio files
+# Model files
 *.pt
 *.safetensors
 *.mdl
 *.ie
 *.fst
 *.wav
+model_catalog.json
+
+# Training artifacts
 voice_core/models/
 voice_core/cache/
 voice_core/training/voice_samples/
-voice_core/training/trained_models/checkpoint-*/
-voice_core/training/trained_models/final-model/
-model_catalog.json
+voice_core/training/trained_models/**/*.json
+voice_core/training/trained_models/**/*.txt
+voice_core/training/trained_models/**/*.pth
+voice_core/training/trained_models/**/*.bin
+voice_core/training/trained_models/**/*.safetensors
+voice_core/training/trained_models/**/*.png
 
 # IDE
 .vscode/
