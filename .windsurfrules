@@ -1,0 +1,112 @@
+Got it! I'll research the expected functionality and API behaviors of LiveKit Python SDK version 0.20.1 and LiveKit Server version 1.8.2. This includes:
+Expected methods and usage for LocalAudioTrack, including how to write audio frames correctly.
+Expected methods and usage for RemoteAudioTrack, particularly how to process incoming audio.
+The proper way to publish an audio track in LiveKit Python SDK 0.20.1.
+Any breaking changes in livekit-server version 1.8.2 that might affect your current implementation.
+I'll update you once I have the findings!
+LiveKit Python SDK 0.20.1 Audio Track APIs and LiveKit Server 1.8.2 Updates
+1. LocalAudioTrack API
+Available Methods and Properties
+LocalAudioTrack is a subclass of the generic Track type, representing a local (publishable) audio source. It inherits base properties like a track SID, name, kind (audio), and muted status. In addition, it provides methods to control the track: notably mute() and unmute(), which toggle transmission of audio without fully unpublishing the track (livekit.rtc.track API documentation) (livekit.rtc.track API documentation). For example, calling track.mute() will halt audio flow (setting an internal muted flag), and track.unmute() resumes it (livekit.rtc.track API documentation) (livekit.rtc.track API documentation). The LocalAudioTrack is not constructed directly via its constructor; instead you use a factory method as described below.
+Creating and Managing a LocalAudioTrack
+To create a local audio track, you must first instantiate an AudioSource – a real-time audio source that you will feed PCM data into. The AudioSource is configured with a specific sample rate and channel count. For example:
+source = rtc.AudioSource(48000, 1)  # 48 kHz, mono
+track = rtc.LocalAudioTrack.create_audio_track("example-track", source)
+
+This uses LocalAudioTrack.create_audio_track(name, source) to produce a track tied to that source (Receiving and publishing tracks | LiveKit Docs). Managing the track involves managing the source: you continue to feed audio frames into the AudioSource, and when finished you can close the source or unpublish the track. The AudioSource provides an async method aclose() to clean up its internal resources when you are done streaming audio (livekit.rtc.audio_source API documentation). Typically, you will also use the LocalParticipant API (see below) to unpublish the track if you want to remove it from the room.
+Writing Audio Frames to a LocalAudioTrack
+You do not write audio samples directly to the LocalAudioTrack object; instead, you push audio data into the associated AudioSource. LiveKit uses an internal queue (buffer) to handle audio data flow. The AudioSource.capture_frame(frame) method is used to enqueue an AudioFrame for sending. This method is blocking (async) – it will not return until the frame's data has been fully added to the queue (Receiving and publishing tracks | LiveKit Docs). This design helps backpressure the producer if the network stack is slower than the input rate, and allows for easier handling of interruption (you can await capture_frame to naturally throttle).
+Each AudioFrame must contain raw PCM samples (16-bit signed int) with the exact format expected (interleaved by channel). You can create an AudioFrame either by using the static constructor (to allocate a buffer of the correct size) or by providing your own byte buffer. For example, to create a 10ms mono frame at 48kHz, you need 480 samples (since 480 samples at 48000 Hz = 0.01s). You could do:
+frame = rtc.AudioFrame.create(sample_rate=48000, num_channels=1, samples_per_channel=480)
+# fill frame.data with PCM int16 samples...
+await source.capture_frame(frame)
+
+Using AudioFrame.create ensures the underlying byte buffer is the correct length (livekit.rtc API documentation) (livekit.rtc API documentation). Alternatively, if you have audio samples in a NumPy array or bytes, you can construct AudioFrame(data, rate, channels, samples_per_channel) directly – but you must match the buffer length to num_channels * samples_per_channel * 2 bytes (2 bytes per int16 sample) or a ValueError will be raised (livekit.rtc API documentation). In practice, this means adjusting the last frame if it’s smaller than the standard frame size, otherwise the end of the buffer may contain invalid data (noise) (Receiving and publishing tracks | LiveKit Docs).
+Feeding the AudioSource: Once your track is created and published (see publishing below), continually write frames to it. The LiveKit docs illustrate sending a continuous sine wave: generate each frame’s PCM samples, copy them into an AudioFrame, then call await source.capture_frame(frame) in a loop (Receiving and publishing tracks | LiveKit Docs). The AudioSource internally buffers about 50ms of audio by default, so choosing frame sizes around 20ms or 10ms is typical. For real-time input (like a microphone or a streaming text-to-speech), produce frames at a steady cadence (e.g. every 20ms) to maintain smooth audio. If the queue becomes full, capture_frame will pause until there's space, ensuring you don't overflow.
+Example
+source = rtc.AudioSource(SAMPLE_RATE, NUM_CHANNELS)
+track = rtc.LocalAudioTrack.create_audio_track("mic-track", source)
+# Publish the track (see Publishing section below)
+... 
+# In an async loop, capture audio frames:
+while capturing:
+    pcm_bytes = get_next_20ms_audio()        # your code to capture or generate 20ms of audio
+    frame = rtc.AudioFrame(pcm_bytes, SAMPLE_RATE, NUM_CHANNELS, samples_per_channel)
+    await source.capture_frame(frame)        # enqueue audio for sending
+# When done:
+await source.aclose()  # clean up the source
+
+2. RemoteAudioTrack API
+Available Methods and Characteristics
+A RemoteAudioTrack represents an audio track published by a remote participant. Unlike local tracks, you cannot write to a RemoteAudioTrack; instead, it is a read-only stream of audio data. The RemoteAudioTrack class is essentially a subclass of Track with no additional public methods beyond those of the base class (it mainly provides a custom __repr__ for debugging) (livekit.rtc API documentation). You can retrieve identifying information (SID, name, etc.) and track metadata from it, but its primary use is to receive audio. There are no special methods like “play” or “record” on RemoteAudioTrack in the Python SDK – handling incoming audio is done via the streaming API described next.
+Receiving and Processing Incoming Audio
+To get audio data from a RemoteAudioTrack, use the AudioStream helper. LiveKit Python exposes WebRTC track streams as async iterators. You can construct an AudioStream with the track, then iterate over it to receive frames. For example:
+audio_stream = rtc.AudioStream(remote_track)
+async for event in audio_stream:
+    frame = event.frame
+    # process the AudioFrame (e.g., convert to numpy and run speech recognition)
+await audio_stream.aclose()
+
+Every iteration yields an AudioFrameEvent containing an AudioFrame in its frame property (livekit.rtc API documentation). The AudioFrame provides the raw PCM data and info about format. Specifically, you can get frame.data (bytes of PCM samples), frame.sample_rate, frame.num_channels, and frame.samples_per_channel for each chunk of audio (livekit.rtc API documentation). The sample format is 16-bit signed integers, interleaved if stereo (livekit.rtc API documentation). In most cases, you'll likely convert frame.data to a NumPy array of type int16 for analysis or feed it into your voice assistant’s speech recognition pipeline.
+Subscribing to Remote Tracks: Remote audio tracks become available when a participant publishes an audio track and your local participant is subscribed to it. By default, if you joined the room with auto-subscribe enabled (the default), the SDK will automatically subscribe and emit a track_subscribed event. In that event handler, you can inspect the track and start processing if it's audio. For example:
+@room.on(\"track_subscribed\")
+def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+    if track.kind == rtc.TrackKind.KIND_AUDIO:
+        # track is a RemoteAudioTrack
+        asyncio.create_task(handle_audio(track))
+
+Inside handle_audio, you would create the AudioStream(track) as shown above (Receiving and publishing tracks | LiveKit Docs) (Receiving and publishing tracks | LiveKit Docs). This is the recommended way to retrieve incoming audio – it ensures you get a continuous stream of AudioFrame events as they arrive. (Under the hood, the SDK uses WebRTC’s jitter buffer to deliver smooth audio frames to you).
+If needed, you can also manage subscription manually. The RemoteTrackPublication associated with the track (accessible via the publication in the event or via the remote participant’s track list) has a method set_subscribed(bool) to toggle subscription (livekit.rtc API documentation) (livekit.rtc API documentation). But for most use cases (especially voice assistants), you will remain subscribed to the audio for the duration of the conversation.
+3. Publishing Audio Tracks
+Publishing an Audio Track in LiveKit Python 0.20.1
+Once you have a LocalAudioTrack (as created earlier), publishing it to the room makes it available to other participants. In the Python SDK, you publish tracks via the LocalParticipant.publish_track() method. You can get the local participant object from the connected Room (e.g. room.local_participant). For example:
+options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+publication = await room.local_participant.publish_track(local_audio_track, options)
+
+This will send a request to the LiveKit server to publish your track, returning a LocalTrackPublication on success (Receiving and publishing tracks | LiveKit Docs). The TrackPublishOptions allows you to specify how the track should be published (more on this below). In this case, we’re marking the track’s source as a microphone. By default, audio tracks are published with Opus codec at a suitable bitrate for speech. Once published, the track will appear in remote participants’ track lists and (if they are auto-subscribed) trigger a track_subscribed event on their end.
+Note: Ensure you call publish_track after joining the room. Also, publish_track is an async operation – you might want to await it before proceeding to send audio frames, to be sure the track is fully set up.
+Recommended TrackPublishOptions for Audio
+When publishing audio, you can usually rely on the defaults, but there are a few options to consider:
+Source Type: It’s recommended to set the track’s source to indicate what kind of audio it is. For microphone input or live voice, use TrackSource.SOURCE_MICROPHONE (Receiving and publishing tracks | LiveKit Docs) as in the example above. This is mainly for metadata (it can help the server or UIs identify the track as a microphone source). If you were publishing, say, a synthesized speech or music, you could use TrackSource.SOURCE_MICROPHONE as well (there isn’t a special enum for TTS vs mic; MICROPHONE generally covers any live audio input).
+
+
+Bitrate (AudioEncoding): By default, the audio track will use the LiveKit server’s default audio bitrate (often around 32kbps for mono speech). If your use case demands a specific quality or bandwidth restriction, you can set an AudioEncoding in the options. For example: TrackPublishOptions(audio_encoding=rtc.AudioEncoding(max_bitrate=48000)) would request a max bitrate of 48 kbps for the opus stream (Receiving and publishing tracks | LiveKit Docs). This might be useful if you want to ensure higher quality audio for music or lower bandwidth for low-quality voice. In many cases, you can omit this and use server defaults.
+
+
+Name and Stream: The track name is already provided when creating the track ("example-track" in our creation call). You typically do not need to set a separate name in TrackPublishOptions. LiveKit will use this name and your participant identity when propagating track info. If you publish multiple tracks, you might consider setting a TrackPublishOptions(name=...) or a stream name to group tracks, but for a single audio track it’s not necessary. (In LiveKit JS SDK, audio & video tracks with the same stream name sync A/V; in Python, just publishing one audio track doesn’t need special grouping (TrackPublishOptions | Documentation - LiveKit Docs).)
+
+
+Disabling DTX or other codec settings: LiveKit audio (Opus) by default uses Discontinuous Transmission (DTX) for microphone sources (to reduce bitrate during silence). There isn’t an exposed flag in the Python SDK’s TrackPublishOptions to turn it off in 0.20.1; it will follow server defaults which are suitable for most cases. If needed, such lower-level config would be set on the server or not at all. Therefore, the recommended practice is to simply use the defaults for things like DTX.
+
+
+In summary, for a voice assistant audio track, keep it simple: set the source to MICROPHONE, and optionally adjust bitrate if needed. The example below demonstrates publishing with options:
+options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+pub = await room.local_participant.publish_track(my_audio_track, options)
+print("Published audio with SID:", pub.sid)
+
+(The TrackPublishOptions also has fields for video-specific settings like simulcast, which don’t apply to audio.)
+4. Breaking Changes in LiveKit Server 1.8.2 and SDK Considerations
+LiveKit Server 1.8.2 is a minor update in the 1.x series. There are no breaking changes specifically in how LocalAudioTrack or RemoteAudioTrack are used compared to recent 1.x versions – the Python SDK 0.20.1 remains compatible. However, there have been some evolution in the SDK APIs around participants and track publication that are worth noting:
+Participant API (participants vs remote_participants): In newer LiveKit SDKs, the room’s participant list is now clearly separated into a local participant and a map of remote participants. Previously, one might use room.participants to get all others; now in 0.20.1, use room.remote_participants which is a dictionary keyed by participant identity (SDK migration from v1 to v2 | LiveKit Docs). The local participant is accessible via room.local_participant (livekit.rtc API documentation). This isn’t so much a breaking change as a clarification that came with the LiveKit v2 API updates. If you were on an older version, ensure you update any code that iterates participants to use remote_participants. The change in key (identity vs SID) means you should access by the user’s identity string if you use that dict.
+
+
+Track vs TrackPublication: Another change (from the general v1 to v2 SDK transition) is avoiding ambiguous use of the term “track.” Now, when you publish or subscribe, you often deal with a TrackPublication object that contains track metadata. For example, room.local_participant.publish_track(...) returns a LocalTrackPublication which has the track’s SID, name, etc., separate from the raw track (livekit.rtc API documentation) (livekit.rtc API documentation). In event callbacks, you receive both the Track and its TrackPublication (Receiving and publishing tracks | LiveKit Docs). Ensure your implementation distinguishes between the two when needed. (In Python 0.20.1, this is already the case – e.g., the track_subscribed callback provides a TrackPublication object as shown above.)
+
+
+TrackPublishOptions changes: There haven’t been disruptive changes to TrackPublishOptions in 1.8.2, but newer fields have been added over time. For instance, the source field used above is a relatively recent addition (to classify tracks) – make sure to use the enum from rtc.TrackSource when setting it. The default behavior for not specifying options should remain the same (the track will be published with default codec settings and with source “unknown”). If you came from an older SDK, just note that constructing a TrackPublishOptions without arguments and then setting properties (as in the earlier GitHub issue example) is equivalent to using keyword args in the constructor (rtc sdk: publish audio from local participant · Issue #258 · livekit/python-sdks · GitHub) (rtc sdk: publish audio from local participant · Issue #258 · livekit/python-sdks · GitHub). In 0.20.1 you can do it either way.
+
+
+Room/Participant events: LiveKit Server 1.8.x introduced some improvements in timing of events (e.g., a TrackSubscribed event is emitted as soon as the downtrack is added on the server (Releases · livekit/livekit · GitHub)). This means your agent might receive the track a few milliseconds earlier than in older versions. This isn’t a breaking change in API, but be aware that the sequence of events might differ slightly if you rely on them. Also, the DisconnectReason field was added to participant info in 1.8.0 (Releases · livekit/livekit · GitHub), which could be useful for cleanup logic but doesn’t affect audio tracks directly.
+
+
+In summary, LiveKit Server 1.8.2 does not require significant code changes for audio tracks. Just ensure you are using the latest Python SDK (0.20.1) which aligns with these API conventions. Follow the documented patterns for publishing and subscribing to tracks, and you should not run into compatibility issues. All the core functionality for LocalAudioTrack (feeding audio via AudioSource.capture_frame) and RemoteAudioTrack (reading via AudioStream) remains as described in the documentation for 0.20.1 (Receiving and publishing tracks | LiveKit Docs) (Receiving and publishing tracks | LiveKit Docs).
+References:
+LiveKit Python SDK documentation – Audio source and track APIs (Receiving and publishing tracks | LiveKit Docs) (Receiving and publishing tracks | LiveKit Docs) (Receiving and publishing tracks | LiveKit Docs) (Receiving and publishing tracks | LiveKit Docs)
+LiveKit Python SDK documentation – Receiving audio tracks (AudioStream) (Receiving and publishing tracks | LiveKit Docs) (Receiving and publishing tracks | LiveKit Docs)
+LiveKit Python SDK documentation – Track publish example and options (Receiving and publishing tracks | LiveKit Docs) (Receiving and publishing tracks | LiveKit Docs)
+LiveKit Docs – Explanation of participant/track API changes in v2 (SDK migration from v1 to v2 | LiveKit Docs) (SDK migration from v1 to v2 | LiveKit Docs) (reflected in Python SDK 0.20.1)
+LiveKit Python SDK source – Class definitions for LocalAudioTrack, RemoteAudioTrack, etc. (livekit.rtc.track API documentation) (livekit.rtc.track API documentation) (livekit.rtc API documentation) (for available methods)
+LiveKit Python SDK source – AudioFrame requirements (livekit.rtc API documentation) (PCM format expectations and error on size mismatch)
+
+
+

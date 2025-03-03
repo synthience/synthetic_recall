@@ -1,0 +1,26 @@
+# Core dependencies
+torch>=2.0.0
+torchaudio>=2.0.0
+numpy>=1.20.0
+matplotlib>=3.5.0
+
+# Hugging Face libraries
+transformers>=4.30.0
+datasets>=2.10.0
+
+# Audio processing
+pyaudio>=0.2.13
+sounddevice>=0.4.6
+wave>=0.0.2
+keyboard>=0.13.5
+
+# UI enhancements
+tqdm>=4.64.0
+rich>=13.0.0
+
+# Metrics and evaluation
+jiwer>=3.0.0
+tensorboard>=2.13.0
+
+# Optional: for GPU support
+# cuda-python>=11.8.0  # Uncomment if using NVIDIA GPU

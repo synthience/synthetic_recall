@@ -1,0 +1,38 @@
+# Core dependencies
+numpy>=1.20.0
+torch>=1.13.0
+torchaudio>=0.13.0
+faster-whisper>=0.6.0
+webrtcvad>=2.0.10
+soundfile>=0.12.1
+df-nightly
+tokenizers==0.21.0
+
+# Optional: Speaker diarization
+pyannote.audio>=2.1.1
+
+# Optional: Neural VAD
+silero-vad
+
+# Optional: VOSK (for alternative STT)
+vosk>=0.3.45
+
+# Optional: Whisper & Faster-Whisper (Optimized STT)
+openai-whisper>=20231117
+faster-whisper @ git+https://github.com/guillaumekln/faster-whisper.git
+
+# Optional: AI-Based Noise Suppression
+df-nightly>=0.5.6
+
+# Optional: Voice Activity Detection (VAD)
+torchvision>=0.16.0
+
+# Optional: Audio Processing
+librosa>=0.10.1
+ffmpeg-python>=0.2.0
+
+# Optional: JSON & Async Management
+aiohttp>=3.9.0
+
+# Optional: Logging & Debugging
+loguru>=0.7.2

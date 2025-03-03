@@ -1,0 +1,74 @@
+graph TD
+    %% Main modules
+    A[main.py] --> B[voice_core]
+    A --> Config[config module]
+    
+    %% Voice Core Modules
+    B --> STT[voice_core/stt]
+    B --> TTS[voice_core/tts]
+    B --> LLM[voice_core/llm]
+    B --> State[voice_core/state]
+    B --> Audio[voice_core/audio]
+    B --> LiveKit[voice_core/livekit_integration]
+    
+    %% STT module dependencies
+    STT --> Audio
+    STT --> State
+    STT --> Whisper[External: whisper]
+    STT --> Vosk[External: vosk]
+    
+    %% TTS module dependencies
+    TTS --> Audio
+    TTS --> State
+    TTS --> EdgeTTS[External: edge_tts]
+    
+    %% LLM module dependencies
+    LLM --> AIOHTTP[External: aiohttp]
+    LLM --> Config
+    
+    %% State management
+    State --> LiveKit
+    
+    %% Audio processing
+    Audio --> Numpy[External: numpy]
+    Audio --> SciPy[External: scipy]
+    
+    %% LiveKit integration
+    LiveKit --> LKSDK[External: livekit]
+    LiveKit --> State
+    
+    %% Utility modules
+    Utils[voice_core/utils] --> Config
+    Utils --> Audio
+    
+    %% Additional dependencies
+    Config --> DotEnv[External: dotenv]
+    State --> LiveKit
+    
+    %% Voice Pipeline
+    Agent[agent1.py/agent2.py] --> B
+    Agent --> LiveKit
+    
+    %% Worker Factory
+    WorkerFactory[agents/worker_factory.py] --> LiveKit
+    WorkerFactory --> STT
+    WorkerFactory --> TTS
+    WorkerFactory --> LLM
+    
+    %% Dependencies between core modules
+    STT --> State
+    TTS --> State
+    LLM --> State
+    
+    %% Connection Utilities
+    ConnUtils[connection_utils.py] --> LiveKit
+    Agent --> ConnUtils
+    
+    %% Testing Modules
+    Tests[tests] --> STT
+    Tests --> Audio
+    
+    %% Plugin system
+    Plugins[voice_core/plugins] --> State
+    Plugins --> LiveKit
+    TTS --> Plugins
