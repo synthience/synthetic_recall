@@ -57,10 +57,12 @@ voice_core/training/trained_models/**/*.safetensors
 voice_core/training/trained_models/**/*.png
 
 # Whisper fine-tuning artifacts
+voice_core/whisper-finetune/
 voice_core/whisper-finetune/wandb/
 voice_core/whisper-finetune/outputs/
 voice_core/whisper-finetune/checkpoints/
 voice_core/whisper-finetune/logs/
+whisper-finetune-output/
 
 # Large files (>100MB)
 *.ckpt
