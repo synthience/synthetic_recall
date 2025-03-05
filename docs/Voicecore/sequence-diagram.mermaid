@@ -1,0 +1,59 @@
+sequenceDiagram
+    actor User
+    participant LK as LiveKit Room
+    participant VSM as VoiceStateManager
+    participant STT as EnhancedSTTService
+    participant LLM as LocalLLMPipeline
+    participant TTS as InterruptibleTTSService
+    participant UI as LiveKit UI
+
+    User->>LK: Audio input
+    LK->>STT: Audio frame
+    
+    activate STT
+    STT->>STT: Detect speech
+    STT->>STT: Buffer audio
+    
+    Note over STT: Speech detected & accumulated
+    
+    STT->>STT: Process with Whisper
+    STT->>VSM: handle_stt_transcript(text)
+    deactivate STT
+    
+    activate VSM
+    VSM->>UI: Publish user transcript
+    VSM->>VSM: transition_to(PROCESSING)
+    VSM->>LLM: Generate response
+    deactivate VSM
+    
+    activate LLM
+    LLM->>LLM: Process with context
+    LLM-->>VSM: Response text
+    deactivate LLM
+    
+    activate VSM
+    VSM->>VSM: handle_assistant_response(text)
+    VSM->>UI: Publish assistant response
+    VSM->>VSM: transition_to(SPEAKING)
+    VSM->>TTS: speak(text)
+    deactivate VSM
+    
+    activate TTS
+    TTS->>TTS: Convert text to speech (Edge TTS)
+    TTS->>LK: Publish audio frames
+    
+    alt User interrupts
+        User->>LK: Interrupt audio
+        LK->>STT: New audio frame
+        STT->>VSM: Detected speech during TTS
+        VSM->>TTS: stop()
+        VSM->>VSM: transition_to(INTERRUPTED)
+    else Normal completion
+        TTS-->>VSM: TTS completed
+        VSM->>VSM: transition_to(LISTENING)
+    end
+    deactivate TTS
+    
+    VSM->>UI: Update UI with new state
+    
+    note over User, UI: Ready for next interaction

@@ -1,0 +1,26 @@
+port: 7880
+log_level: debug
+rtc:
+  tcp_port: 7881
+  port_range_start: 40000
+  port_range_end: 40100
+  use_external_ip: false
+  udp_port: 7882
+
+keys:
+  devkey: secret
+
+room:
+  enable_remote_unmute: true
+  max_participants: 20
+  auto_create: true
+
+turn:
+  domain: localhost
+  tls_port: 5349
+  udp_port: 3478
+  external_tls: false
+
+webhook:
+  api_key: devkey
+  urls: []

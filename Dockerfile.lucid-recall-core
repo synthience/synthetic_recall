@@ -1,0 +1,43 @@
+# Use NVIDIA PyTorch container as base
+FROM nvcr.io/nvidia/pytorch:23.12-py3
+
+# Set working directory
+WORKDIR /workspace/project
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir \
+    sentence-transformers \
+    websockets \
+    requests
+
+# Install additional CUDA dependencies
+RUN pip install --no-cache-dir \
+    cupy-cuda12x \
+    torch-scatter \
+    -f https://pytorch-geometric.com/whl/torch-2.1.0+cu121.html
+
+# Copy project files
+COPY . .
+
+# Set environment variables
+ENV PYTHONPATH=/workspace/project
+ENV CUDA_VISIBLE_DEVICES=all
+ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6+PTX"
+ENV TORCH_NVCC_FLAGS="-Xfatbin -compress-all"
+
+# Set up entry point
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["docker-entrypoint.sh"]
+
+# Default command
+CMD ["/bin/bash"]

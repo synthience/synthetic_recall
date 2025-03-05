@@ -1,0 +1,80 @@
+flowchart TD
+    Start([Start Pipeline]) --> Initialize
+    
+    subgraph Initialization
+        Initialize[Initialize Services] --> InitSTT[Initialize STT Service]
+        InitSTT --> InitTTS[Initialize TTS Service]
+        InitTTS --> InitLLM[Initialize LLM Service]
+        InitLLM --> SetupState[Setup State Manager]
+        SetupState --> ConnectRoom[Connect to LiveKit Room]
+    end
+    
+    ConnectRoom --> ListenForAudio[Listen for Audio Input]
+    
+    subgraph "STT Processing"
+        ListenForAudio --> IsVoice{Is Voice?}
+        IsVoice -->|No| ListenForAudio
+        IsVoice -->|Yes| BufferAudio[Buffer Audio]
+        BufferAudio --> SilenceDetected{Silence Detected?}
+        SilenceDetected -->|No| BufferAudio
+        SilenceDetected -->|Yes| ProcessAudio[Process Audio with Whisper]
+        ProcessAudio --> GetTranscript[Get Final Transcript]
+    end
+    
+    GetTranscript --> HandleTranscript[Handle Transcript]
+    
+    subgraph "LLM Processing"
+        HandleTranscript --> UpdateState[Update State to PROCESSING]
+        UpdateState --> BuildContext[Build Context with History]
+        BuildContext --> SendToLLM[Send to LLM]
+        SendToLLM --> ProcessLLMResponse[Process LLM Response]
+    end
+    
+    ProcessLLMResponse --> SpeakResponse[Speak Response]
+    
+    subgraph "TTS Processing"
+        SpeakResponse --> UpdateStateToSpeaking[Update State to SPEAKING]
+        UpdateStateToSpeaking --> GenerateAudio[Generate Audio with Edge TTS]
+        GenerateAudio --> StreamAudio[Stream Audio to LiveKit]
+        StreamAudio --> TTSComplete{TTS Complete?}
+        TTSComplete -->|Yes| ReturnToListening[Return to LISTENING State]
+        TTSComplete -->|Interrupted| HandleInterruption[Handle Interruption]
+    end
+    
+    ReturnToListening --> ListenForAudio
+    HandleInterruption --> UpdateStateInterrupted[Update State to INTERRUPTED]
+    UpdateStateInterrupted --> ListenForAudio
+    
+    subgraph "Error Handling"
+        Initialize -- Error --> HandleInitError[Log and Report Error]
+        GetTranscript -- Error --> HandleSTTError[Log STT Error]
+        SendToLLM -- Error --> HandleLLMError[Log LLM Error]
+        GenerateAudio -- Error --> HandleTTSError[Log TTS Error]
+        
+        HandleInitError --> RetryInit{Retry?}
+        RetryInit -->|Yes| Initialize
+        RetryInit -->|No| FailGracefully[Fail Gracefully]
+        
+        HandleSTTError --> RecoverAndContinue[Recover and Continue]
+        HandleLLMError --> FallbackResponse[Use Fallback Response]
+        HandleTTSError --> TextFallback[Text-only Fallback]
+        
+        RecoverAndContinue --> ListenForAudio
+        FallbackResponse --> SpeakResponse
+        TextFallback --> ReturnToListening
+    end
+    
+    subgraph "Cleanup"
+        Shutdown[Shutdown Request] --> CleanupTasks[Stop Active Tasks]
+        CleanupTasks --> ReleaseServices[Release Service Resources]
+        ReleaseServices --> DisconnectRoom[Disconnect from Room]
+        DisconnectRoom --> End([End Pipeline])
+    end
+    
+    classDef stateNode fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef processNode fill:#bbf,stroke:#333,stroke-width:1px;
+    classDef errorNode fill:#fbb,stroke:#333,stroke-width:1px;
+    
+    class UpdateState,UpdateStateToSpeaking,UpdateStateInterrupted,ReturnToListening stateNode;
+    class HandleSTTError,HandleLLMError,HandleTTSError,HandleInitError errorNode;
+    class ProcessAudio,SendToLLM,GenerateAudio processNode;

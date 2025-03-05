@@ -56,6 +56,21 @@ voice_core/training/trained_models/**/*.bin
 voice_core/training/trained_models/**/*.safetensors
 voice_core/training/trained_models/**/*.png
 
+# Whisper fine-tuning artifacts
+voice_core/whisper-finetune/wandb/
+voice_core/whisper-finetune/outputs/
+voice_core/whisper-finetune/checkpoints/
+voice_core/whisper-finetune/logs/
+
+# Large files (>100MB)
+*.ckpt
+*.bin
+*.tar
+*.tar.gz
+*.zip
+*.7z
+*.rar
+
 # IDE
 .vscode/
 .idea/
