@@ -96,7 +96,11 @@ class LucidiaVoiceAgent:
             tensor_server_url=TENSOR_SERVER_URL,
             hpc_server_url=HPC_SERVER_URL,
             session_id=self.session_id,
-            user_id=self._get_local_identity()
+            user_id=self._get_local_identity(),
+            ping_interval=30.0,  # Increased ping interval for more stable connections
+            max_retries=5,       # More retries for better resilience
+            retry_delay=1.5,     # Slightly longer delay between retries
+            connection_timeout=15.0  # Longer timeout for initial connections
         )
         
         # Create core services
@@ -137,9 +141,13 @@ class LucidiaVoiceAgent:
             
             # Initialize memory client first
             logger.info("Initializing memory client...")
-            if not await self.memory_client.initialize():
-                logger.error("Failed to initialize memory client")
-                raise RuntimeError("Memory client initialization failed")
+            try:
+                if not await self.memory_client.initialize():
+                    logger.error("Failed to initialize memory client")
+                    raise RuntimeError("Memory client initialization failed")
+            except Exception as e:
+                logger.error(f"Error initializing memory client: {e}", exc_info=True)
+                raise
             
             # Connection handling first
             if not self.job_context or not self.job_context.room:
@@ -182,10 +190,6 @@ class LucidiaVoiceAgent:
             logger.info("Connecting memory client to LLM service...")
             self.llm_service.set_memory_client(self.memory_client)
             
-            # Initialize memory client
-            logger.info("Initializing memory client...")
-            await self.memory_client.initialize()
-            
             # Register transcript handler with state manager
             self.state_manager.register_transcript_handler(self._handle_transcript)
             
@@ -202,6 +206,10 @@ class LucidiaVoiceAgent:
             
             logger.info("Initializing LLM service...")
             await self.llm_service.initialize()
+            
+            # Explicitly initialize memory client to ensure background tasks start
+            logger.info("Initializing memory client...")
+            await self.memory_client.initialize()
             
             # Publish initialization status to UI
             await self._publish_ui_update({
@@ -223,63 +231,6 @@ class LucidiaVoiceAgent:
             logger.error(f"Initialization error: {e}", exc_info=True)
             await self.state_manager.register_error(e, "initialization")
             raise
-            
-    async def _connection_heartbeat(self) -> None:
-        """Monitor connection health with heartbeat."""
-        try:
-            logger.info("Starting connection heartbeat")
-            heartbeat_interval = 5  # seconds
-            max_retries = 5
-            backoff_factor = 2
-            attempt = 0
-            
-            while not self._shutdown_requested:
-                try:
-                    # Check room connection
-                    if not self.room:
-                        logger.warning("No room available for heartbeat")
-                        await asyncio.sleep(heartbeat_interval)
-                        continue
-                        
-                    # Check connection state
-                    if self.room.connection_state != rtc.ConnectionState.CONN_CONNECTED:
-                        if attempt < max_retries:
-                            self._connection_retry_count += 1
-                            logger.info(f"Attempting reconnection ({self._connection_retry_count}/{max_retries})")
-                            await self.job_context.reconnect()
-                            attempt += 1
-                            await asyncio.sleep(heartbeat_interval * (backoff_factor ** attempt))
-                        else:
-                            logger.error("Max reconnection attempts reached, shutting down")
-                            self._shutdown_requested = True
-                            await self.cleanup()
-                            break
-                    else:
-                        # Reset retry count on successful connection
-                        attempt = 0  # Reset on successful connection
-                        
-                    # Send heartbeat data for debugging
-                    if self.room and self.room.local_participant and attempt % 12 == 0:
-                        await self._publish_ui_update({
-                            "type": "heartbeat",
-                            "count": self._connection_retry_count,
-                            "timestamp": time.time(),
-                            "agent_id": self.session_id,
-                            "state": self.state_manager.current_state.name,
-                            "metrics": self._get_metrics()
-                        })
-                        
-                    # Wait for next interval
-                    await asyncio.sleep(heartbeat_interval)
-                    
-                except Exception as e:
-                    logger.error(f"Heartbeat error: {e}")
-                    await asyncio.sleep(heartbeat_interval)
-                
-        except asyncio.CancelledError:
-            logger.info("Heartbeat task cancelled")
-        except Exception as e:
-            logger.error(f"Fatal error in heartbeat: {e}", exc_info=True)
             
     async def start(self) -> None:
         """Start the voice agent with greeting."""
@@ -353,6 +304,12 @@ class LucidiaVoiceAgent:
                 # Detect and store personal details from user message
                 await self.memory_client.detect_and_store_personal_details(text, role="user")
                 
+                # Detect emotional context
+                emotional_context = await self.memory_client.detect_emotional_context(text)
+                if emotional_context:
+                    logger.info(f"Detected emotional context: {emotional_context}")
+                    await self.memory_client.store_emotional_context(emotional_context)
+                
             # Process with LLM
             llm_task = asyncio.create_task(self.llm_service.generate_response(text))
             self.state_manager._in_progress_task = llm_task
@@ -375,7 +332,7 @@ class LucidiaVoiceAgent:
                     
                     # Store assistant response in memory
                     if response:
-                        await self.memory_client.store_conversation(response, role="assistant")
+                        await self.memory_client.store_transcript(response, role="assistant")
                         
                     # Track metrics
                     self.metrics["conversations"] += 1
@@ -577,72 +534,175 @@ class LucidiaVoiceAgent:
         }
             
     async def cleanup(self) -> None:
-        """Clean up resources."""
-        logger.info("Cleaning up agent resources")
+        """
+        Clean up resources and ensure memory persistence before shutdown.
+        Implements robust error handling and timeout protection to prevent memory loss.
+        """
+        self.logger.info("Starting agent cleanup process")
+        cleanup_start = time.time()
         
-        self._shutdown_requested = True
-        self._running = False
+        # Track cleanup tasks for better monitoring
+        cleanup_tasks = {
+            "memory_persistence": False,
+            "websocket_connections": False,
+            "audio_resources": False,
+            "background_tasks": False
+        }
         
-        # Publish final metrics
         try:
-            await self._publish_ui_update({
-                "type": "agent_metrics",
-                "metrics": self._get_metrics(),
-                "timestamp": time.time()
-            })
-        except Exception as e:
-            logger.error(f"Error publishing final metrics: {e}")
-        
-        # Cancel all tracked tasks
-        for name, task in list(self._tasks.items()):
-            if not task.done():
-                logger.info(f"Cancelling task: {name}")
-                task.cancel()
+            # First, ensure all memories are persisted
+            if self.memory_client:
                 try:
-                    await asyncio.wait_for(task, timeout=0.5)
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    pass
+                    self.logger.info("Forcing final memory persistence before shutdown")
+                    
+                    # Use a timeout to prevent hanging during shutdown
+                    persistence_timeout = 10  # seconds
+                    try:
+                        # Create a task for memory persistence
+                        persistence_task = asyncio.create_task(self.memory_client.force_persistence())
+                        
+                        # Wait for the task with a timeout
+                        await asyncio.wait_for(persistence_task, timeout=persistence_timeout)
+                        self.logger.info("Final memory persistence completed successfully")
+                        cleanup_tasks["memory_persistence"] = True
+                    except asyncio.TimeoutError:
+                        self.logger.error(f"Memory persistence timed out after {persistence_timeout} seconds")
+                        # Continue with cleanup even if persistence times out
+                    except Exception as e:
+                        self.logger.error(f"Error during final memory persistence: {e}")
+                except Exception as e:
+                    self.logger.error(f"Failed to force memory persistence: {e}")
+            
+            # Clean up WebSocket connections
+            try:
+                if hasattr(self, 'ws_client') and self.ws_client:
+                    await self.ws_client.close()
+                    self.logger.info("Closed WebSocket client connection")
+                cleanup_tasks["websocket_connections"] = True
+            except Exception as e:
+                self.logger.error(f"Error closing WebSocket connection: {e}")
+            
+            # Clean up audio resources
+            try:
+                if hasattr(self, 'audio_manager') and self.audio_manager:
+                    await self.audio_manager.cleanup()
+                    self.logger.info("Cleaned up audio manager resources")
+                cleanup_tasks["audio_resources"] = True
+            except Exception as e:
+                self.logger.error(f"Error cleaning up audio resources: {e}")
+            
+            # Cancel any remaining background tasks
+            try:
+                if hasattr(self, '_background_tasks') and self._background_tasks:
+                    self.logger.info(f"Cancelling {len(self._background_tasks)} background tasks")
+                    for task in self._background_tasks:
+                        if not task.done() and not task.cancelled():
+                            task.cancel()
+                    
+                    # Wait for tasks to be cancelled with a timeout
+                    tasks_timeout = 5  # seconds
+                    try:
+                        await asyncio.wait(self._background_tasks, timeout=tasks_timeout)
+                        self.logger.info("All background tasks cancelled successfully")
+                    except asyncio.TimeoutError:
+                        self.logger.warning(f"Some background tasks did not cancel within {tasks_timeout} seconds")
+                    except Exception as e:
+                        self.logger.error(f"Error waiting for background tasks to cancel: {e}")
+                    
+                    self._background_tasks.clear()
+                    cleanup_tasks["background_tasks"] = True
+            except Exception as e:
+                self.logger.error(f"Error cancelling background tasks: {e}")
+            
+            # Final cleanup of memory client
+            if self.memory_client:
+                try:
+                    # Use a timeout for memory client cleanup
+                    memory_cleanup_timeout = 5  # seconds
+                    try:
+                        memory_cleanup_task = asyncio.create_task(self.memory_client.cleanup())
+                        await asyncio.wait_for(memory_cleanup_task, timeout=memory_cleanup_timeout)
+                        self.logger.info("Memory client cleanup completed successfully")
+                    except asyncio.TimeoutError:
+                        self.logger.error(f"Memory client cleanup timed out after {memory_cleanup_timeout} seconds")
+                    except Exception as e:
+                        self.logger.error(f"Error during memory client cleanup: {e}")
+                except Exception as e:
+                    self.logger.error(f"Failed to clean up memory client: {e}")
+            
+            # Log cleanup status
+            cleanup_time = time.time() - cleanup_start
+            successful_tasks = sum(1 for status in cleanup_tasks.values() if status)
+            self.logger.info(f"Agent cleanup completed in {cleanup_time:.2f}s: {successful_tasks}/{len(cleanup_tasks)} tasks successful")
+            
+        except Exception as e:
+            self.logger.error(f"Unexpected error during agent cleanup: {e}")
+        finally:
+            # Ensure we always log completion even if there are errors
+            self.logger.info("Agent cleanup process finished")
         
-        # Clear task dictionary
-        self._tasks.clear()
-                
-        # Clean up services with buffer clearing
-        services = []
-        
-        if self.stt_service:
-            services.append(self.stt_service.cleanup())
-            await self.stt_service.clear_buffer()
-            
-        if self.tts_service:
-            services.append(self.tts_service.cleanup())
-            
-        if self.llm_service:
-            services.append(self.llm_service.cleanup())
-            
-        # Clean up state manager
-        if self.state_manager:
-            services.append(self.state_manager.cleanup())
-            
-        # Clean up memory client
-        if hasattr(self, 'memory_client'):
-            services.append(self.memory_client.cleanup())
-            
-        # Wait for all services to clean up
-        if services:
-            await asyncio.gather(*services, return_exceptions=True)
-            
-        # Publish final cleanup
-        await self._publish_ui_update({
-            "type": "agent_cleanup",
-            "timestamp": time.time(),
-            "agent_id": self.session_id
-        })
-
     def _get_local_identity(self) -> str:
         """Get the local participant identity or a default value if not available."""
         if self.room and self.room.local_participant:
             return self.room.local_participant.identity
         return "assistant"  # Default fallback
+
+    async def _connection_heartbeat(self) -> None:
+        """Monitor connection health with heartbeat."""
+        try:
+            logger.info("Starting connection heartbeat")
+            heartbeat_interval = 5  # seconds
+            max_retries = 5
+            backoff_factor = 2
+            attempt = 0
+            
+            while not self._shutdown_requested:
+                try:
+                    # Check room connection
+                    if not self.room:
+                        logger.warning("No room available for heartbeat")
+                        await asyncio.sleep(heartbeat_interval)
+                        continue
+                        
+                    # Check connection state
+                    if self.room.connection_state != rtc.ConnectionState.CONN_CONNECTED:
+                        if attempt < max_retries:
+                            self._connection_retry_count += 1
+                            logger.info(f"Attempting reconnection ({self._connection_retry_count}/{max_retries})")
+                            await self.job_context.reconnect()
+                            attempt += 1
+                            await asyncio.sleep(heartbeat_interval * (backoff_factor ** attempt))
+                        else:
+                            logger.error("Max reconnection attempts reached, shutting down")
+                            self._shutdown_requested = True
+                            await self.cleanup()
+                            break
+                    else:
+                        # Reset retry count on successful connection
+                        attempt = 0  # Reset on successful connection
+                        
+                    # Send heartbeat data for debugging
+                    if self.room and self.room.local_participant and attempt % 12 == 0:
+                        await self._publish_ui_update({
+                            "type": "heartbeat",
+                            "count": self._connection_retry_count,
+                            "timestamp": time.time(),
+                            "agent_id": self.session_id,
+                            "state": self.state_manager.current_state.name,
+                            "metrics": self._get_metrics()
+                        })
+                        
+                    # Wait for next interval
+                    await asyncio.sleep(heartbeat_interval)
+                    
+                except Exception as e:
+                    logger.error(f"Heartbeat error: {e}")
+                    await asyncio.sleep(heartbeat_interval)
+                
+        except asyncio.CancelledError:
+            logger.info("Heartbeat task cancelled")
+        except Exception as e:
+            logger.error(f"Fatal error in heartbeat: {e}", exc_info=True)
 
 # --------------------------------------------------------------------------------
 # Debug Utilities

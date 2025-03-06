@@ -6,6 +6,13 @@ import json
 import time
 from typing import Dict, Any, List, Optional, Tuple
 import re
+import uuid
+import torch
+import asyncio
+import os
+import shutil
+import random
+import copy
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +22,8 @@ class ToolsMixin:
     - Embedding creation
     - Searching/storing memories
     - tool endpoints for retrieval
+    - emotional context detection
+    - personal details management
     """
 
     async def process_embedding(self, text: str) -> Tuple[Optional[np.ndarray], float]:
@@ -201,125 +210,188 @@ class ToolsMixin:
         Returns:
             bool: Success status
         """
+        if not content or not content.strip():
+            logger.warning("Attempted to store empty memory content")
+            return False
+            
         try:
-            # Generate embedding and get significance
-            embedding, auto_significance = await self.process_embedding(content)
-            
-            # If embedding failed but we have a significance override, create a dummy embedding
-            if embedding is None:
+            # Generate embedding and significance
+            try:
+                embedding, memory_significance = await self.process_embedding(content)
+                
+                # Use provided significance if available
                 if significance is not None:
-                    logger.warning("Using dummy embedding with provided significance")
-                    # Create a dummy embedding (all zeros) for storage
-                    embedding = np.zeros(768)  # Standard embedding size
-                    auto_significance = significance
+                    try:
+                        memory_significance = float(significance)
+                        # Clamp to valid range
+                        memory_significance = max(0.0, min(1.0, memory_significance))
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid significance value: {significance}, using calculated value: {memory_significance}")
+                
+            except Exception as e:
+                logger.error(f"Error generating embedding: {e}")
+                # Fallback: Use zero embedding and default significance
+                if hasattr(self, 'embedding_dim'):
+                    embedding = torch.zeros(self.embedding_dim)
                 else:
-                    logger.error("Failed to create embedding for memory and no significance override provided")
-                    return False
-            
-            # Use provided significance or auto-calculated
-            memory_significance = significance if significance is not None else auto_significance
+                    embedding = torch.zeros(384)  # Default embedding dimension
+                memory_significance = 0.5 if significance is None else significance
             
             # Create memory object
+            memory_id = str(uuid.uuid4())
             memory = {
-                "id": str(time.time()),
+                "id": memory_id,
                 "content": content,
-                "embedding": embedding.tolist(),
+                "embedding": embedding,
                 "timestamp": time.time(),
                 "significance": memory_significance,
                 "metadata": metadata or {}
             }
             
-            # Add to memory store
+            # Add to memory list
             async with self._memory_lock:
                 self.memories.append(memory)
+                
+            logger.info(f"Stored new memory with ID {memory_id} and significance {memory_significance:.2f}")
             
-            logger.info(f"Stored memory with significance {memory_significance:.2f}")
+            # For high-significance memories, force immediate persistence
+            if memory_significance >= 0.7 and hasattr(self, 'persistence_enabled') and self.persistence_enabled:
+                logger.info(f"Forcing immediate persistence for high-significance memory: {memory_id}")
+                
+                # Set up retry parameters
+                max_retries = 3
+                retry_delay = 0.5  # seconds
+                success = False
+                
+                for retry in range(max_retries):
+                    try:
+                        # Save memory immediately instead of waiting for background task
+                        memory_copy = copy.deepcopy(memory)
+                        
+                        # Convert complex types for JSON serialization
+                        memory_copy = self._convert_numpy_to_python(memory_copy)
+                        
+                        # Ensure storage directory exists
+                        os.makedirs(self.storage_path, exist_ok=True)
+                        
+                        # Use atomic write pattern with temporary file
+                        file_path = self.storage_path / f"{memory_id}.json"
+                        temp_file_path = self.storage_path / f"{memory_id}.json.tmp"
+                        backup_file_path = self.storage_path / f"{memory_id}.json.bak"
+                        
+                        try:
+                            # Write to temporary file first (atomic write operation)
+                            with open(temp_file_path, 'w', encoding='utf-8') as f:
+                                json.dump(memory_copy, f, ensure_ascii=False, indent=2)
+                                
+                            # If the file exists, create a backup before overwriting
+                            if file_path.exists():
+                                try:
+                                    shutil.copy2(file_path, backup_file_path)
+                                except Exception as e:
+                                    logger.warning(f"Failed to create backup for memory {memory_id}: {e}")
+                            
+                            # Rename temporary file to actual file (atomic operation)
+                            os.replace(temp_file_path, file_path)
+                            
+                            # Verify file integrity
+                            with open(file_path, 'r', encoding='utf-8') as f:
+                                _ = json.load(f)  # Just load to verify it's valid JSON
+                            
+                            # If we get here, the file is valid JSON
+                            logger.info(f"Successfully persisted high-significance memory immediately: {memory_id}")
+                            
+                            # Remove backup if everything succeeded
+                            if backup_file_path.exists():
+                                os.remove(backup_file_path)
+                                
+                            success = True
+                            break  # Exit retry loop on success
+                        except json.JSONDecodeError:
+                            logger.error(f"Memory file {file_path} contains invalid JSON after writing")
+                            # Restore from backup if verification failed
+                            if backup_file_path.exists():
+                                try:
+                                    os.replace(backup_file_path, file_path)
+                                    logger.info(f"Restored memory {memory_id} from backup after verification failure")
+                                except Exception as e:
+                                    logger.error(f"Failed to restore backup for memory {memory_id}: {e}")
+                            # Continue with retry
+                        except Exception as e:
+                            # Clean up temp file if it exists
+                            if temp_file_path.exists():
+                                try:
+                                    os.remove(temp_file_path)
+                                except Exception:
+                                    pass
+                            raise e  # Re-raise for retry handling
+                    
+                    except Exception as e:
+                        error_msg = f"Error persisting high-significance memory {memory_id} (attempt {retry+1}/{max_retries}): {e}"
+                        if retry < max_retries - 1:
+                            logger.warning(error_msg + ", retrying...")
+                            # Exponential backoff with jitter
+                            backoff_time = retry_delay * (2 ** retry) * (0.5 + 0.5 * random.random())
+                            await asyncio.sleep(backoff_time)
+                        else:
+                            logger.error(error_msg + ", giving up")
+                
+                if not success:
+                    logger.error(f"Failed to persist high-significance memory after {max_retries} attempts")
+                    # Note: We still return True because the memory was added to the in-memory list
+                    # It will be persisted later by the background task
+            
             return True
-            
         except Exception as e:
             logger.error(f"Error storing memory: {e}")
             return False
-    
-    def get_memory_tools(self) -> List[Dict[str, Any]]:
+            
+    def _convert_numpy_to_python(self, obj):
         """
-        Return OpenAI-compatible function definitions for memory tools.
+        Recursively convert numpy types to Python native types for JSON serialization.
         
+        Args:
+            obj: The object to convert
+            
         Returns:
-            List of tool definitions
+            The converted object with numpy types replaced by Python native types
         """
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "search_memory",
-                    "description": "Search for relevant memories based on semantic similarity",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "Search query to find relevant memories"
-                            },
-                            "limit": {
-                                "type": "integer",
-                                "description": "Maximum number of memories to return",
-                                "default": 5
-                            },
-                            "min_significance": {
-                                "type": "number",
-                                "description": "Minimum significance threshold (0.0 to 1.0)",
-                                "default": 0.0
-                            }
-                        },
-                        "required": ["query"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "store_important_memory",
-                    "description": "Store an important memory with high significance",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "content": {
-                                "type": "string",
-                                "description": "The memory content to store"
-                            },
-                            "significance": {
-                                "type": "number",
-                                "description": "Memory significance (0.0 to 1.0)",
-                                "default": 0.8
-                            }
-                        },
-                        "required": ["content"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_important_memories",
-                    "description": "Retrieve the most important memories",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "limit": {
-                                "type": "integer",
-                                "description": "Maximum number of important memories to return",
-                                "default": 5
-                            },
-                            "min_significance": {
-                                "type": "number",
-                                "description": "Minimum significance threshold (0.0 to 1.0)",
-                                "default": 0.7
-                            }
-                        }
-                    }
-                }
-            }
-        ]
+        # Handle None
+        if obj is None:
+            return None
+            
+        # Handle NumPy arrays
+        if hasattr(obj, '__module__') and obj.__module__ == 'numpy':
+            if hasattr(obj, 'tolist'):
+                return obj.tolist()
+            return str(obj)
+            
+        # Handle PyTorch tensors
+        if hasattr(obj, '__module__') and 'torch' in obj.__module__:
+            if hasattr(obj, 'tolist'):
+                return obj.tolist()
+            if hasattr(obj, 'detach') and hasattr(obj.detach(), 'numpy') and hasattr(obj.detach().numpy(), 'tolist'):
+                return obj.detach().numpy().tolist()
+            return str(obj)
+            
+        # Handle dictionaries
+        if isinstance(obj, dict):
+            return {k: self._convert_numpy_to_python(v) for k, v in obj.items()}
+            
+        # Handle lists and tuples
+        if isinstance(obj, (list, tuple)):
+            return [self._convert_numpy_to_python(item) for item in obj]
+            
+        # Handle sets
+        if isinstance(obj, set):
+            return [self._convert_numpy_to_python(item) for item in obj]
+            
+        # Handle other non-serializable types
+        try:
+            json.dumps(obj)
+            return obj
+        except (TypeError, OverflowError):
+            return str(obj)
     
     async def search_memory_tool(self, query: str = "", memory_type: str = "all", max_results: int = 5, min_significance: float = 0.0, time_range: Dict = None) -> Dict[str, Any]:
         """
@@ -563,3 +635,257 @@ class ToolsMixin:
         except Exception as e:
             logger.error(f"Error getting important memories: {e}")
             return {"memories": [], "count": 0}
+
+    async def get_emotional_context(self, args: Dict = None, limit: int = 5) -> Dict[str, Any]:
+        """
+        Tool implementation to get emotional context information.
+        
+        Args:
+            args: Optional arguments (unused)
+            limit: Maximum number of emotions to include
+            
+        Returns:
+            Dict with emotional context information
+        """
+        try:
+            if not hasattr(self, "emotions") or not self.emotions:
+                return {
+                    "success": True,
+                    "summary": "No emotional context information available yet.",
+                    "emotions": {}
+                }
+            
+            # Get recent emotions (limited by the limit parameter)
+            recent_emotions = list(self.emotions.values())[-limit:] if self.emotions else []
+            
+            # Calculate average sentiment
+            avg_sentiment = sum(e.get("sentiment", 0) for e in recent_emotions) / max(len(recent_emotions), 1)
+            
+            # Get dominant emotions
+            all_detected = {}
+            for emotion_data in recent_emotions:
+                for emotion, score in emotion_data.get("emotions", {}).items():
+                    if emotion not in all_detected:
+                        all_detected[emotion] = []
+                    all_detected[emotion].append(score)
+            
+            # Average the scores
+            dominant_emotions = {}
+            for emotion, scores in all_detected.items():
+                dominant_emotions[emotion] = sum(scores) / len(scores)
+            
+            # Sort dominant emotions by score
+            sorted_emotions = sorted(dominant_emotions.items(), key=lambda x: x[1], reverse=True)
+            top_emotions = dict(sorted_emotions[:3])  # Top 3 emotions
+            
+            # Create emotional context summary
+            if avg_sentiment > 0.6:
+                sentiment_desc = "very positive"
+            elif avg_sentiment > 0.2:
+                sentiment_desc = "positive"
+            elif avg_sentiment > -0.2:
+                sentiment_desc = "neutral"
+            elif avg_sentiment > -0.6:
+                sentiment_desc = "negative"
+            else:
+                sentiment_desc = "very negative"
+                
+            emotion_list = ", ".join([f"{emotion}" for emotion, _ in sorted_emotions[:3]])
+            summary = f"User's recent emotional state appears {sentiment_desc} with prevalent emotions of {emotion_list}."
+            
+            return {
+                "success": True,
+                "summary": summary,
+                "sentiment": avg_sentiment,
+                "emotions": top_emotions,
+                "recent_emotions": recent_emotions
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting emotional context: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "summary": "Failed to retrieve emotional context."
+            }
+    
+    async def get_personal_details_tool(self, args: Dict = None, category: str = None) -> Dict[str, Any]:
+        """
+        Tool implementation to get personal details about the user.
+        
+        Args:
+            args: Optional arguments (unused)
+            category: Optional category of personal details to retrieve
+            
+        Returns:
+            Dict with personal details
+        """
+        try:
+            details = {}
+            
+            # Try to get from personal details cache first
+            if hasattr(self, "personal_details") and self.personal_details:
+                # If category is specified, only return that category
+                if category and category in self.personal_details:
+                    details = {category: self.personal_details[category]}
+                    logger.info(f"Retrieved personal detail for category: {category}")
+                else:
+                    details = self.personal_details.copy()
+                    logger.info(f"Retrieved {len(details)} personal details from cache")
+            
+            # If no details in cache, try to extract from memories
+            if not details and hasattr(self, "memories") and self.memories:
+                # Look for memories with personal detail metadata
+                async with self._memory_lock:
+                    personal_memories = [m for m in self.memories 
+                                        if m.get("metadata", {}).get("type") in 
+                                        ["personal_detail", "name_reference", "location_reference", 
+                                         "birthday_reference", "job_reference", "family_reference"]]
+                
+                # Extract details from memory content
+                if personal_memories:
+                    logger.info(f"Found {len(personal_memories)} personal detail memories")
+                    
+                    # Look for name references
+                    name_memories = [m for m in personal_memories 
+                                   if m.get("metadata", {}).get("type") == "name_reference" or 
+                                      "name" in m.get("content", "").lower()]
+                    if name_memories:
+                        # Sort by significance and recency
+                        name_memories = sorted(name_memories, 
+                                              key=lambda x: (x.get("significance", 0), x.get("timestamp", 0)), 
+                                              reverse=True)
+                        details["name"] = name_memories[0].get("content")
+                    
+                    # Look for location references
+                    location_memories = [m for m in personal_memories 
+                                      if m.get("metadata", {}).get("type") == "location_reference" or 
+                                         "location" in m.get("content", "").lower() or 
+                                         "live" in m.get("content", "").lower()]
+                    if location_memories:
+                        location_memories = sorted(location_memories, 
+                                                 key=lambda x: (x.get("significance", 0), x.get("timestamp", 0)), 
+                                                 reverse=True)
+                        details["location"] = location_memories[0].get("content")
+                    
+                    # Add other detail types as needed
+            
+            # If we found details, cache them for future use
+            if details and hasattr(self, "personal_details"):
+                self.personal_details.update(details)
+            
+            return {
+                "success": len(details) > 0,
+                "details": details
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting personal details: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "details": {}
+            }
+
+    async def get_memory_tools(self) -> List[Dict[str, Any]]:
+        """
+        Return OpenAI-compatible function definitions for memory tools.
+        
+        Returns:
+            List of tool definitions
+        """
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_memory",
+                    "description": "Search for relevant memories based on semantic similarity",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Search query to find relevant memories"
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of memories to return",
+                                "default": 5
+                            },
+                            "min_significance": {
+                                "type": "number",
+                                "description": "Minimum significance threshold (0.0 to 1.0)",
+                                "default": 0.0
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "store_important_memory",
+                    "description": "Store an important memory with high significance",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": "The memory content to store"
+                            },
+                            "significance": {
+                                "type": "number",
+                                "description": "Memory significance (0.0 to 1.0)",
+                                "default": 0.8
+                            }
+                        },
+                        "required": ["content"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_important_memories",
+                    "description": "Retrieve the most important memories",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of important memories to return",
+                                "default": 5
+                            },
+                            "min_significance": {
+                                "type": "number",
+                                "description": "Minimum significance threshold (0.0 to 1.0)",
+                                "default": 0.7
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_emotional_context",
+                    "description": "Get the current emotional context and patterns from memory",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_personal_details",
+                    "description": "Get personal details about the user from memory",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                }
+            }
+        ]

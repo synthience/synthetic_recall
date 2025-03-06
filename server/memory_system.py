@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class MemorySystem:
     def __init__(self, config: Dict[str, Any] = None):
         self.config = {
-            'storage_path': Path('../memory/stored'),
+            'storage_path': Path.cwd() / 'memory/stored',  # Use absolute path
             'embedding_dim': 384,
             'rebuild_threshold': 100,
             'device': 'cuda' if torch.cuda.is_available() else 'cpu',
@@ -23,6 +23,9 @@ class MemorySystem:
         self.storage_path = Path(self.config['storage_path'])
         self.storage_path.mkdir(parents=True, exist_ok=True)
         
+        # Log the actual storage path being used
+        logger.info(f"Memory storage path: {self.storage_path.absolute()}")
+        
         # Load existing memories
         self._load_memories()
         logger.info(f"Initialized MemorySystem with {len(self.memories)} memories")
@@ -31,17 +34,44 @@ class MemorySystem:
         """Load all memories from disk."""
         self.memories = []
         try:
-            for file_path in self.storage_path.glob('*.json'):
-                with open(file_path, 'r') as f:
-                    memory = json.load(f)
-                    if isinstance(memory, dict) and 'timestamp' in memory:
-                        self.memories.append(memory)
+            logger.info(f"Loading memories from {self.storage_path}")
+            
+            # Check if directory exists
+            if not self.storage_path.exists():
+                logger.warning(f"Memory storage path does not exist: {self.storage_path}")
+                self.storage_path.mkdir(parents=True, exist_ok=True)
+                return
+            
+            # Count memory files
+            memory_files = list(self.storage_path.glob('*.json'))
+            logger.info(f"Found {len(memory_files)} memory files")
+            
+            # Load each file
+            for file_path in memory_files:
+                try:
+                    with open(file_path, 'r') as f:
+                        memory = json.load(f)
+                        if isinstance(memory, dict) and 'timestamp' in memory:
+                            # Convert embedding from list to tensor if needed
+                            if 'embedding' in memory and isinstance(memory['embedding'], list):
+                                memory['embedding'] = memory['embedding']  # Keep as list for now
+                            
+                            self.memories.append(memory)
+                            logger.debug(f"Loaded memory {memory.get('id', 'unknown')} from {file_path}")
+                        else:
+                            logger.warning(f"Invalid memory format in {file_path}")
+                except Exception as e:
+                    logger.error(f"Error loading memory file {file_path}: {str(e)}")
             
             # Sort by timestamp if memories exist
             if self.memories:
                 self.memories.sort(key=lambda x: x.get('timestamp', 0))
+                logger.info(f"Successfully loaded {len(self.memories)} memories")
+            else:
+                logger.info("No valid memories found")
+                
         except Exception as e:
-            logger.error(f"Error loading memories: {str(e)}")
+            logger.error(f"Error loading memories: {str(e)}", exc_info=True)
             self.memories = []
 
     async def add_memory(self, text: str, embedding: torch.Tensor, 
@@ -114,11 +144,32 @@ class MemorySystem:
     def _save_memory(self, memory: Dict[str, Any]):
         """Save memory to disk."""
         try:
-            file_path = self.storage_path / f"{memory['id']}.json"
+            memory_id = memory.get('id')
+            if not memory_id:
+                logger.warning("Cannot save memory without an ID")
+                return
+                
+            file_path = self.storage_path / f"{memory_id}.json"
+            logger.debug(f"Saving memory {memory_id} to {file_path}")
+            
+            # Ensure the directory exists
+            self.storage_path.mkdir(parents=True, exist_ok=True)
+            
+            # Make a copy to avoid modifying the original
+            memory_copy = memory.copy()
+            
+            # Convert any tensor to list for JSON serialization
+            if 'embedding' in memory_copy and isinstance(memory_copy['embedding'], torch.Tensor):
+                memory_copy['embedding'] = memory_copy['embedding'].tolist()
+            
+            # Save to file
             with open(file_path, 'w') as f:
-                json.dump(memory, f)
+                json.dump(memory_copy, f)
+                
+            logger.info(f"Successfully saved memory {memory_id} to {file_path}")
+            
         except Exception as e:
-            logger.error(f"Error saving memory {memory['id']}: {str(e)}")
+            logger.error(f"Error saving memory {memory.get('id', 'unknown')}: {str(e)}", exc_info=True)
 
     def get_stats(self) -> Dict[str, Any]:
         """Get memory system statistics."""

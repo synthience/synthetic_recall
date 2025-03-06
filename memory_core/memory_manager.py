@@ -6,6 +6,33 @@ from typing import Dict, Any, Optional, List
 
 from memory_core.enhanced_memory_client import EnhancedMemoryClient
 
+# Add this method to the MemoryManager class in memory_manager.py
+
+async def detect_emotional_context(self, text: str) -> Dict[str, Any]:
+    """
+    Detect emotional context in text.
+    
+    Args:
+        text: The text to analyze
+        
+    Returns:
+        Dict with emotional context information
+    """
+    try:
+        # Just pass through to the memory client
+        return await self.memory_client.detect_emotional_context(text)
+    except Exception as e:
+        logger.error(f"Error detecting emotional context: {e}")
+        # Return default neutral context on error
+        return {
+            "timestamp": time.time(),
+            "text": text,
+            "emotions": {"neutral": 1.0},
+            "sentiment": 0.0,
+            "emotional_state": "neutral",
+            "error": str(e)
+        }
+
 logger = logging.getLogger(__name__)
 
 class MemoryManager:

@@ -196,7 +196,6 @@ class MemoryEntry:
         """String representation of memory."""
         return f"Memory({self.id[:8]}, type={self.memory_type.value}, sig={self.significance:.2f}): {self.content[:50]}..."
 
-
 class UnifiedMemoryStorage:
     """
     Unified memory storage interface for consistent operations.
@@ -752,3 +751,199 @@ class UnifiedMemoryStorage:
             'last_prune_time': self.stats['last_prune_time'],
             'last_backup_time': self.stats['last_backup_time']
         }
+
+import torch
+import json
+import time
+import uuid
+import asyncio
+import logging
+from pathlib import Path
+from typing import Dict, Any, List, Optional, Union
+
+# Import from memory system
+from server.memory_system import MemorySystem
+from server.memory_index import MemoryIndex
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class UnifiedMemoryStorage:
+    """
+    Unified memory storage system that combines MemorySystem and MemoryIndex.
+    
+    This class provides a unified interface for storing and retrieving memories,
+    with both persistent storage and fast search capabilities.
+    """
+    
+    def __init__(self, config: Dict[str, Any] = None):
+        """
+        Initialize the unified memory storage system.
+        
+        Args:
+            config: Configuration dictionary with the following optional keys:
+                - storage_path: Path to store memories
+                - embedding_dim: Dimension of embeddings
+                - rebuild_threshold: Number of memories before rebuilding index
+                - time_decay: Rate at which memory relevance decays over time
+                - min_similarity: Minimum similarity threshold for search results
+        """
+        self.config = config or {}
+        
+        # Initialize memory system for persistence
+        self.memory_system = MemorySystem(config)
+        
+        # Initialize memory index for fast search
+        self.memory_index = MemoryIndex(
+            embedding_dim=self.config.get('embedding_dim', 384),
+            rebuild_threshold=self.config.get('rebuild_threshold', 100),
+            time_decay=self.config.get('time_decay', 0.01),
+            min_similarity=self.config.get('min_similarity', 0.7)
+        )
+        
+        # Lock for thread safety
+        self._lock = asyncio.Lock()
+        
+        # Load memories from system into index
+        self._initialize_index()
+        
+        logger.info(f"Initialized UnifiedMemoryStorage with {len(self.memory_system.memories)} memories")
+    
+    def _initialize_index(self):
+        """
+        Initialize the memory index with existing memories from the memory system.
+        """
+        try:
+            for memory in self.memory_system.memories:
+                # Skip if missing required fields
+                if not all(k in memory for k in ['id', 'embedding', 'timestamp']):
+                    continue
+                    
+                # Add to index
+                asyncio.create_task(self.memory_index.add_memory(
+                    memory_id=memory['id'],
+                    embedding=memory['embedding'],
+                    timestamp=memory['timestamp'],
+                    significance=memory.get('significance', 0.5),
+                    content=memory.get('text', "")
+                ))
+            
+            # Build the index
+            self.memory_index.build_index()
+            logger.info(f"Initialized memory index with {len(self.memory_system.memories)} memories")
+        except Exception as e:
+            logger.error(f"Error initializing memory index: {e}")
+    
+    async def store_memory(self, text: str, embedding: Union[torch.Tensor, List[float]], 
+                          significance: float = None) -> Dict[str, Any]:
+        """
+        Store a memory in both the memory system and index.
+        
+        Args:
+            text: The memory content
+            embedding: The embedding vector (tensor or list)
+            significance: Optional significance score (0.0-1.0)
+            
+        Returns:
+            The stored memory object
+        """
+        try:
+            # Ensure embedding is a tensor
+            if isinstance(embedding, list):
+                embedding = torch.tensor(embedding, dtype=torch.float32)
+            
+            # Use default significance if not provided
+            if significance is None:
+                significance = 0.5
+            
+            async with self._lock:
+                # Store in memory system (persistence)
+                memory = await self.memory_system.add_memory(
+                    text=text,
+                    embedding=embedding,
+                    significance=significance
+                )
+                
+                # Store in memory index (search)
+                await self.memory_index.add_memory(
+                    memory_id=memory['id'],
+                    embedding=memory['embedding'],
+                    timestamp=memory['timestamp'],
+                    significance=memory.get('significance', 0.5),
+                    content=text
+                )
+                
+                logger.info(f"Stored memory {memory['id']} with significance {significance}")
+                return memory
+        except Exception as e:
+            logger.error(f"Error storing memory: {e}")
+            # Return minimal memory object on error
+            return {
+                'id': str(uuid.uuid4()),
+                'text': text,
+                'timestamp': time.time(),
+                'significance': significance or 0.5,
+                'error': str(e)
+            }
+    
+    async def search_memories(self, query_embedding: Union[torch.Tensor, List[float]], 
+                            limit: int = 5, min_significance: float = 0.0) -> List[Dict[str, Any]]:
+        """
+        Search for similar memories using the memory index.
+        
+        Args:
+            query_embedding: The query embedding vector (tensor or list)
+            limit: Maximum number of results to return
+            min_significance: Minimum significance threshold
+            
+        Returns:
+            List of matching memories
+        """
+        try:
+            # Ensure embedding is a tensor
+            if isinstance(query_embedding, list):
+                query_embedding = torch.tensor(query_embedding, dtype=torch.float32)
+            
+            # Search in memory index
+            results = self.memory_index.search(query_embedding, k=limit * 2)
+            
+            # Filter by significance
+            filtered_results = [
+                r for r in results 
+                if r['memory'].get('significance', 0.0) >= min_significance
+            ]
+            
+            # Format results
+            formatted_results = []
+            for result in filtered_results[:limit]:
+                memory = result['memory']
+                formatted_results.append({
+                    'id': memory.get('id', ''),
+                    'text': memory.get('content', ''),
+                    'significance': memory.get('significance', 0.0),
+                    'timestamp': memory.get('timestamp', 0),
+                    'similarity': result.get('similarity', 0.0)
+                })
+            
+            return formatted_results
+        except Exception as e:
+            logger.error(f"Error searching memories: {e}")
+            return []
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics about the memory storage system.
+        
+        Returns:
+            Dictionary with memory statistics
+        """
+        system_stats = self.memory_system.get_stats()
+        
+        # Add index-specific stats
+        stats = {
+            **system_stats,
+            'index_initialized': self.memory_index.index is not None,
+            'index_size': len(self.memory_index.memories),
+        }
+        
+        return stats

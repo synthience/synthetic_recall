@@ -107,22 +107,24 @@ class PersonalDetailsMixin:
             bool: Success status
         """
         try:
-            # Store in personal details dict
+            # Store in personal details dict with clear user attribution
             self.personal_details[category] = {
                 "value": value,
                 "timestamp": time.time(),
-                "significance": significance
+                "significance": significance,
+                "belongs_to": "USER"  # Explicit attribution to USER
             }
             
-            # Also store as a high-significance memory
-            memory_content = f"User {category}: {value}"
+            # Also store as a high-significance memory with clear USER attribution
+            memory_content = f"USER {category}: {value}"
             await self.store_memory(
                 content=memory_content,
                 significance=significance,
                 metadata={
                     "type": "personal_detail",
                     "category": category,
-                    "value": value
+                    "value": value,
+                    "belongs_to": "USER"  # Explicit attribution
                 }
             )
             
@@ -130,7 +132,7 @@ class PersonalDetailsMixin:
             if category == "name":
                 self._detected_names.add(value.lower())
             
-            logger.info(f"Stored personal detail: {category}={value}")
+            logger.info(f"Stored USER personal detail: {category}={value}")
             return True
             
         except Exception as e:
@@ -177,13 +179,14 @@ class PersonalDetailsMixin:
         if name_references:
             for name in name_references:
                 # Create a memory about the name reference
-                memory_content = f"User mentioned name: {name}"
+                memory_content = f"USER mentioned name: {name}"
                 await self.store_memory(
                     content=memory_content,
                     significance=0.75,  # Slightly lower than initial detection
                     metadata={
                         "type": "name_reference",
-                        "name": name
+                        "name": name,
+                        "belongs_to": "USER"  # Explicit attribution
                     }
                 )
     
@@ -203,12 +206,14 @@ class PersonalDetailsMixin:
             value = await self.get_personal_detail("name")
             
             if value:
-                logger.info(f"Retrieved user name from personal details: {value}")
+                logger.info(f"Retrieved USER name from personal details: {value}")
                 return {
                     "found": True,
                     "category": "name",
                     "value": value,
-                    "confidence": 0.95
+                    "confidence": 0.95,
+                    "belongs_to": "USER",  # Explicit attribution
+                    "note": "This is the USER's name, not the assistant's name. The assistant's name is Lucidia."
                 }
             
             # If not found in personal details, try searching memory
@@ -221,15 +226,15 @@ class PersonalDetailsMixin:
                         min_significance=0.8
                     )
                     
-                    # Look for name patterns in the results
+                    # Look for explicit name statements
                     for memory in name_memories:
                         content = memory.get("content", "")
                         
                         # Check for explicit name statements
                         name_patterns = [
-                            r"User name: ([A-Za-z]+(?: [A-Za-z]+){0,2})",
-                            r"User explicitly stated their name is ([A-Za-z]+(?: [A-Za-z]+){0,2})",
-                            r"The user's name is ([A-Za-z]+(?: [A-Za-z]+){0,2})",
+                            r"USER name: ([A-Za-z]+(?: [A-Za-z]+){0,2})",
+                            r"USER explicitly stated their name is ([A-Za-z]+(?: [A-Za-z]+){0,2})",
+                            r"The USER's name is ([A-Za-z]+(?: [A-Za-z]+){0,2})",
                             r"([A-Za-z]+(?: [A-Za-z]+){0,2}) is my name"
                         ]
                         
@@ -237,7 +242,7 @@ class PersonalDetailsMixin:
                             matches = re.findall(pattern, content, re.IGNORECASE)
                             if matches:
                                 found_name = matches[0].strip()
-                                logger.info(f"Found name in memory: {found_name}")
+                                logger.info(f"Found USER name in memory: {found_name}")
                                 
                                 # Store it in personal details for future reference
                                 await self.store_personal_detail("name", found_name, 0.9)
@@ -247,7 +252,9 @@ class PersonalDetailsMixin:
                                     "category": "name",
                                     "value": found_name,
                                     "confidence": 0.85,
-                                    "source": "memory"
+                                    "source": "memory",
+                                    "belongs_to": "USER",  # Explicit attribution
+                                    "note": "This is the USER's name, not the assistant's name. The assistant's name is Lucidia."
                                 }
             except Exception as e:
                 logger.error(f"Error searching memory for name: {e}")
@@ -258,7 +265,9 @@ class PersonalDetailsMixin:
             return {
                 "found": value is not None,
                 "category": category,
-                "value": value
+                "value": value,
+                "belongs_to": "USER",  # Explicit attribution
+                "note": f"This is the USER's {category}, not the assistant's {category}."
             }
         
         # Return all personal details
@@ -268,5 +277,7 @@ class PersonalDetailsMixin:
         
         return {
             "personal_details": formatted_details,
-            "count": len(formatted_details)
+            "count": len(formatted_details),
+            "belongs_to": "USER",  # Explicit attribution
+            "note": "These are the USER's personal details, not the assistant's."
         }
