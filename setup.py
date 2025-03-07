@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name="voice_core",
     version="0.1.0",
-    packages=find_packages() + ['memory_core'],
+    packages=find_packages() + ['memory_core', 'memory.lucidia_memory_system'],
     install_requires=[
         'livekit>=0.18.1',
         'livekit-agents>=0.12.0',

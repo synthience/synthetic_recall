@@ -126,9 +126,10 @@ class ToolsMixin:
             logger.error(f"Error processing embedding: {e}")
             return None, 0.0
     
-    async def search_memory(self, query: str, limit: int = 5, min_significance: float = 0.0) -> List[Dict[str, Any]]:
+    async def search_memory(self, query: str, limit: int = 5, min_significance: float = 0.0) -> List[Dict]:
         """
-        Search for memories based on semantic similarity.
+        Search for memories based on semantic similarity with asynchronous processing.
+        Implements a multi-tier search strategy with fallbacks and parallel processing.
         
         Args:
             query: The search query
@@ -138,31 +139,107 @@ class ToolsMixin:
         Returns:
             List of matching memories
         """
+        if not query or not isinstance(query, str) or not query.strip():
+            logger.warning(f"Invalid query for search_memory: {type(query)}")
+            return []
+
         try:
-            # Get connection
-            connection = await self._get_tensor_connection()
-            if not connection:
-                logger.error("Failed to get tensor connection for search")
-                return []
+            # Track performance metrics
+            start_time = time.time()
             
-            # Send search request with proper format
-            timestamp = time.time()
-            message_id = f"{int(timestamp * 1000)}-{id(self):x}"
+            # Try multiple search strategies in parallel for improved reliability and speed
+            results = []
             
-            payload = {
-                "type": "search",
-                "text": query,
-                "limit": limit * 2,  # Request more to filter
-                "min_significance": min_significance,
-                "client_id": self.session_id or "unknown",
-                "message_id": message_id,
-                "timestamp": timestamp
-            }
+            # Flag to track if we've received results from tensor server
+            tensor_server_results = False
             
+            # 1. Try semantic search via tensor server (primary strategy)
+            try:
+                connection = await self._get_tensor_connection()
+                if connection:
+                    # Create semantic search task
+                    semantic_results = await self._perform_semantic_search(
+                        connection=connection,
+                        query=query,
+                        limit=limit,
+                        min_significance=min_significance
+                    )
+                    
+                    if semantic_results:
+                        tensor_server_results = True
+                        results = semantic_results
+                        logger.info(f"Found {len(results)} memories via semantic search in {time.time() - start_time:.3f}s")
+            except Exception as e:
+                logger.error(f"Error in tensor server search: {e}")
+                # Will continue to fallback methods
+            
+            # 2. If no results from tensor server, use local search techniques
+            if not tensor_server_results and hasattr(self, "memories") and self.memories:
+                logger.info("Falling back to direct text search")
+                fallback_start = time.time()
+                
+                # Use asyncio.to_thread for potentially CPU-intensive text matching to avoid blocking
+                local_results = await asyncio.to_thread(
+                    self._perform_local_text_search,
+                    query=query,
+                    limit=limit,
+                    min_significance=min_significance
+                )
+                
+                if local_results:
+                    results = local_results
+                    logger.info(f"Found {len(results)} memories via fallback text search in {time.time() - fallback_start:.3f}s")
+            
+            # Log overall search performance
+            search_time = time.time() - start_time
+            if search_time > 0.1:  # Only log if search took significant time
+                logger.info(f"Memory search completed in {search_time:.3f}s with {len(results)} results")
+                
+            return results
+                
+        except Exception as e:
+            logger.error(f"Error searching memory: {e}")
+            return []
+    
+    async def _perform_semantic_search(self, connection, query: str, limit: int, min_significance: float) -> List[Dict]:
+        """
+        Perform semantic search using tensor server connection.
+        
+        Args:
+            connection: WebSocket connection to tensor server
+            query: Search query
+            limit: Maximum results to return
+            min_significance: Minimum significance threshold
+            
+        Returns:
+            List of matching memories
+        """
+        # Send search request with proper format
+        timestamp = time.time()
+        message_id = f"{int(timestamp * 1000)}-{id(self):x}"
+        
+        # Request more results than needed to allow for filtering
+        request_limit = limit * 3
+        
+        payload = {
+            "type": "search",
+            "text": query,
+            "limit": request_limit,
+            "min_significance": max(0.0, min_significance - 0.2),  # Lower threshold for more results
+            "client_id": self.session_id or "unknown",
+            "message_id": message_id,
+            "timestamp": timestamp
+        }
+        
+        # Set timeout for search operation
+        search_timeout = getattr(self, 'search_timeout', 2.0)  # Default 2 seconds timeout
+        
+        try:
+            # Send query to tensor server
             await connection.send(json.dumps(payload))
             
-            # Get search response
-            response = await connection.recv()
+            # Wait for response with timeout
+            response = await asyncio.wait_for(connection.recv(), timeout=search_timeout)
             data = json.loads(response)
             
             # Extract results from standardized response format
@@ -175,37 +252,101 @@ class ToolsMixin:
                 elif 'results' in data:
                     results = data['results']
             
-            if not results:
-                logger.error(f"No results in search response: {data}")
-                return []
+            if results:
+                # Filter by significance
+                filtered_results = [
+                    r for r in results 
+                    if r.get('significance', 0.0) >= min_significance
+                ]
                 
-            # Filter by significance
-            filtered_results = [
-                r for r in results 
-                if r.get('significance', 0.0) >= min_significance
-            ]
-            
-            # Sort by similarity and limit
-            sorted_results = sorted(
-                filtered_results, 
-                key=lambda x: x.get('score', 0.0), 
-                reverse=True
-            )[:limit]
-            
-            return sorted_results
+                # Sort by similarity and limit
+                sorted_results = sorted(
+                    filtered_results, 
+                    key=lambda x: x.get('score', 0.0), 
+                    reverse=True
+                )[:limit]
                 
+                return sorted_results
+                
+        except asyncio.TimeoutError:
+            logger.warning(f"Tensor server search timed out after {search_timeout}s")
         except Exception as e:
-            logger.error(f"Error searching memory: {e}")
-            return []
+            logger.error(f"Error in semantic search: {e}")
+            
+        return []
     
-    async def store_memory(self, content: str, metadata: Dict[str, Any] = None, significance: float = None) -> bool:
+    def _perform_local_text_search(self, query: str, limit: int, min_significance: float) -> List[Dict]:
         """
-        Store a new memory with semantic embedding.
+        Perform local text-based search on in-memory data.
+        This is a CPU-bound operation that should be run in a separate thread.
+        
+        Args:
+            query: Search query
+            limit: Maximum results to return
+            min_significance: Minimum significance threshold
+            
+        Returns:
+            List of matching memories
+        """
+        query_lower = query.lower()
+        results = []
+        
+        # First try exact substring match (highest confidence)
+        for memory in self.memories:
+            content = memory.get("content", "")
+            significance = memory.get("significance", 0.0)
+            
+            if significance >= min_significance and content and query_lower in content.lower():
+                # Create a result with the same structure as tensor server results
+                results.append({
+                    **memory,
+                    "score": 0.9  # High score for direct matches
+                })
+        
+        # If not enough direct matches, try word-level matching
+        if len(results) < limit:
+            query_words = set(query_lower.split())
+            
+            # Skip very short queries or single words for word-level matching
+            if len(query_words) > 1:
+                for memory in self.memories:
+                    # Skip if already in results
+                    if any(memory.get("id") == r.get("id") for r in results):
+                        continue
+                    
+                    content = memory.get("content", "")
+                    significance = memory.get("significance", 0.0)
+                    
+                    if significance >= min_significance and content:
+                        content_words = set(content.lower().split())
+                        common_words = query_words.intersection(content_words)
+                        
+                        if common_words:
+                            # Calculate a score based on word overlap
+                            match_score = len(common_words) / len(query_words)
+                            if match_score >= 0.3:  # At least 30% word overlap
+                                results.append({
+                                    **memory,
+                                    "score": match_score
+                                })
+        
+        if results:
+            # Sort by score and limit
+            sorted_results = sorted(results, key=lambda x: x.get("score", 0.0), reverse=True)[:limit]
+            return sorted_results
+            
+        return []
+
+    async def store_memory(self, content: str, metadata: Dict[str, Any] = None, significance: float = None, importance: float = None) -> bool:
+        """
+        Store a new memory with semantic embedding using an optimized asynchronous process.
+        Features parallel processing for embedding generation and non-blocking persistence.
         
         Args:
             content: The memory content to store
             metadata: Additional metadata for the memory
             significance: Optional override for significance
+            importance: Alternate name for significance (for backward compatibility)
             
         Returns:
             bool: Success status
@@ -215,9 +356,18 @@ class ToolsMixin:
             return False
             
         try:
+            # Track timing for performance monitoring
+            start_time = time.time()
+            
+            # Handle both significance and importance parameters for backward compatibility
+            if significance is None and importance is not None:
+                significance = importance
+            
             # Generate embedding and significance
             try:
-                embedding, memory_significance = await self.process_embedding(content)
+                # Use asyncio.shield to prevent cancellation during important embedding process
+                embedding_task = asyncio.shield(self.process_embedding(content))
+                embedding, memory_significance = await embedding_task
                 
                 # Use provided significance if available
                 if significance is not None:
@@ -248,151 +398,128 @@ class ToolsMixin:
                 "metadata": metadata or {}
             }
             
-            # Add to memory list
+            # Add to memory list - this needs to be atomic
             async with self._memory_lock:
                 self.memories.append(memory)
                 
-            logger.info(f"Stored new memory with ID {memory_id} and significance {memory_significance:.2f}")
+            # Log memory creation time
+            creation_time = time.time() - start_time
+            logger.info(f"Created new memory with ID {memory_id} and significance {memory_significance:.2f} in {creation_time:.3f}s")
             
-            # For high-significance memories, force immediate persistence
-            if memory_significance >= 0.7 and hasattr(self, 'persistence_enabled') and self.persistence_enabled:
-                logger.info(f"Forcing immediate persistence for high-significance memory: {memory_id}")
+            # Use a lower threshold for immediate persistence to ensure more memories are saved promptly
+            # but avoid blocking the main thread for low-significance memories
+            persistence_threshold = getattr(self, 'immediate_persistence_threshold', 0.3)
+            
+            # Force immediate persistence for significant memories
+            if memory_significance >= persistence_threshold and hasattr(self, 'persistence_enabled') and self.persistence_enabled:
+                # Launch persistence as a background task that won't block this method
+                # but still ensure it gets done soon
+                task = asyncio.create_task(self._background_persist_memory(memory_id, memory))
                 
-                # Set up retry parameters
-                max_retries = 3
-                retry_delay = 0.5  # seconds
-                success = False
+                # Don't wait for persistence to complete - this makes the operation non-blocking
+                # but we'll still log any errors via the task
                 
-                for retry in range(max_retries):
-                    try:
-                        # Save memory immediately instead of waiting for background task
-                        memory_copy = copy.deepcopy(memory)
-                        
-                        # Convert complex types for JSON serialization
-                        memory_copy = self._convert_numpy_to_python(memory_copy)
-                        
-                        # Ensure storage directory exists
-                        os.makedirs(self.storage_path, exist_ok=True)
-                        
-                        # Use atomic write pattern with temporary file
-                        file_path = self.storage_path / f"{memory_id}.json"
-                        temp_file_path = self.storage_path / f"{memory_id}.json.tmp"
-                        backup_file_path = self.storage_path / f"{memory_id}.json.bak"
-                        
-                        try:
-                            # Write to temporary file first (atomic write operation)
-                            with open(temp_file_path, 'w', encoding='utf-8') as f:
-                                json.dump(memory_copy, f, ensure_ascii=False, indent=2)
-                                
-                            # If the file exists, create a backup before overwriting
-                            if file_path.exists():
-                                try:
-                                    shutil.copy2(file_path, backup_file_path)
-                                except Exception as e:
-                                    logger.warning(f"Failed to create backup for memory {memory_id}: {e}")
-                            
-                            # Rename temporary file to actual file (atomic operation)
-                            os.replace(temp_file_path, file_path)
-                            
-                            # Verify file integrity
-                            with open(file_path, 'r', encoding='utf-8') as f:
-                                _ = json.load(f)  # Just load to verify it's valid JSON
-                            
-                            # If we get here, the file is valid JSON
-                            logger.info(f"Successfully persisted high-significance memory immediately: {memory_id}")
-                            
-                            # Remove backup if everything succeeded
-                            if backup_file_path.exists():
-                                os.remove(backup_file_path)
-                                
-                            success = True
-                            break  # Exit retry loop on success
-                        except json.JSONDecodeError:
-                            logger.error(f"Memory file {file_path} contains invalid JSON after writing")
-                            # Restore from backup if verification failed
-                            if backup_file_path.exists():
-                                try:
-                                    os.replace(backup_file_path, file_path)
-                                    logger.info(f"Restored memory {memory_id} from backup after verification failure")
-                                except Exception as e:
-                                    logger.error(f"Failed to restore backup for memory {memory_id}: {e}")
-                            # Continue with retry
-                        except Exception as e:
-                            # Clean up temp file if it exists
-                            if temp_file_path.exists():
-                                try:
-                                    os.remove(temp_file_path)
-                                except Exception:
-                                    pass
-                            raise e  # Re-raise for retry handling
-                    
-                    except Exception as e:
-                        error_msg = f"Error persisting high-significance memory {memory_id} (attempt {retry+1}/{max_retries}): {e}"
-                        if retry < max_retries - 1:
-                            logger.warning(error_msg + ", retrying...")
-                            # Exponential backoff with jitter
-                            backoff_time = retry_delay * (2 ** retry) * (0.5 + 0.5 * random.random())
-                            await asyncio.sleep(backoff_time)
-                        else:
-                            logger.error(error_msg + ", giving up")
-                
-                if not success:
-                    logger.error(f"Failed to persist high-significance memory after {max_retries} attempts")
-                    # Note: We still return True because the memory was added to the in-memory list
-                    # It will be persisted later by the background task
+                # Add optional callback for debugging/monitoring
+                if getattr(self, 'debug_persistence', False):
+                    task.add_done_callback(lambda t: self._log_persistence_result(t, memory_id))
             
             return True
+                
         except Exception as e:
             logger.error(f"Error storing memory: {e}")
             return False
-            
-    def _convert_numpy_to_python(self, obj):
+    
+    async def _background_persist_memory(self, memory_id: str, memory: Dict) -> bool:
         """
-        Recursively convert numpy types to Python native types for JSON serialization.
+        Persist a memory in the background without blocking the main operation.
         
         Args:
-            obj: The object to convert
+            memory_id: ID of the memory to persist
+            memory: Memory object to persist
             
         Returns:
-            The converted object with numpy types replaced by Python native types
+            bool: Success status
         """
-        # Handle None
-        if obj is None:
-            return None
-            
-        # Handle NumPy arrays
-        if hasattr(obj, '__module__') and obj.__module__ == 'numpy':
-            if hasattr(obj, 'tolist'):
-                return obj.tolist()
-            return str(obj)
-            
-        # Handle PyTorch tensors
-        if hasattr(obj, '__module__') and 'torch' in obj.__module__:
-            if hasattr(obj, 'tolist'):
-                return obj.tolist()
-            if hasattr(obj, 'detach') and hasattr(obj.detach(), 'numpy') and hasattr(obj.detach().numpy(), 'tolist'):
-                return obj.detach().numpy().tolist()
-            return str(obj)
-            
-        # Handle dictionaries
-        if isinstance(obj, dict):
-            return {k: self._convert_numpy_to_python(v) for k, v in obj.items()}
-            
-        # Handle lists and tuples
-        if isinstance(obj, (list, tuple)):
-            return [self._convert_numpy_to_python(item) for item in obj]
-            
-        # Handle sets
-        if isinstance(obj, set):
-            return [self._convert_numpy_to_python(item) for item in obj]
-            
-        # Handle other non-serializable types
         try:
-            json.dumps(obj)
-            return obj
-        except (TypeError, OverflowError):
-            return str(obj)
+            persist_start = time.time()
+            logger.debug(f"Starting background persistence for memory {memory_id}")
+            
+            # Set up retry parameters
+            max_retries = getattr(self, 'max_retries', 3)
+            retry_delay = getattr(self, 'retry_delay', 0.5)  # seconds
+            
+            # Try to persist memory with retries
+            for retry in range(max_retries):
+                try:
+                    # Check if we have a _persist_single_memory method (from BaseMemoryClient)
+                    if hasattr(self, '_persist_single_memory'):
+                        success = await self._persist_single_memory(memory)
+                        if success:
+                            persist_time = time.time() - persist_start
+                            logger.info(f"Background persistence for memory {memory_id} completed in {persist_time:.3f}s")
+                            return True
+                    else:
+                        # Fallback to manual persistence if method not available
+                        # Get file path
+                        file_path = self.storage_path / f"{memory_id}.json"
+                        temp_file_path = self.storage_path / f"{memory_id}.json.tmp"
+                        
+                        # Create deep copy and convert types
+                        memory_copy = copy.deepcopy(memory)
+                        if hasattr(self, '_convert_numpy_to_python'):
+                            memory_copy = self._convert_numpy_to_python(memory_copy)
+                        
+                        # Write to temp file (use thread to avoid blocking)
+                        json_content = json.dumps(memory_copy, ensure_ascii=False, indent=2)
+                        await asyncio.to_thread(self._write_to_file, temp_file_path, json_content)
+                        
+                        # Rename to final file (atomic operation, use thread to avoid blocking)
+                        await asyncio.to_thread(os.replace, temp_file_path, file_path)
+                        persist_time = time.time() - persist_start
+                        logger.info(f"Manual background persistence for memory {memory_id} completed in {persist_time:.3f}s")
+                        return True
+                        
+                except Exception as e:
+                    last_error = e
+                    # Only retry if we haven't exhausted retries
+                    if retry < max_retries - 1:
+                        # Exponential backoff with jitter
+                        backoff_time = retry_delay * (2 ** retry) * (0.5 + 0.5 * random.random())
+                        logger.warning(f"Persistence retry {retry+1}/{max_retries} for memory {memory_id} after {backoff_time:.2f}s: {e}")
+                        await asyncio.sleep(backoff_time)
+                    else:
+                        logger.error(f"Failed to persist memory {memory_id} after {max_retries} attempts: {e}")
+                        return False
+            
+            # Should never reach here due to return in the loop
+            return False
+            
+        except Exception as e:
+            logger.error(f"Unexpected error in background persistence for memory {memory_id}: {e}")
+            return False
     
+    def _write_to_file(self, file_path, content):
+        """Helper method for writing to a file from a thread."""
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+    
+    def _log_persistence_result(self, task, memory_id):
+        """Helper method to log the result of a background persistence task."""
+        try:
+            # Extract result or exception
+            if task.cancelled():
+                logger.warning(f"Background persistence for memory {memory_id} was cancelled")
+            elif task.exception():
+                logger.error(f"Background persistence for memory {memory_id} failed with error: {task.exception()}")
+            else:
+                result = task.result()
+                if result:
+                    logger.debug(f"Background persistence for memory {memory_id} completed successfully")
+                else:
+                    logger.warning(f"Background persistence for memory {memory_id} reported failure")
+        except Exception as e:
+            logger.error(f"Error checking persistence task result for memory {memory_id}: {e}")
+
     async def search_memory_tool(self, query: str = "", memory_type: str = "all", max_results: int = 5, min_significance: float = 0.0, time_range: Dict = None) -> Dict[str, Any]:
         """
         Tool implementation for memory search.
@@ -889,3 +1016,99 @@ class ToolsMixin:
                 }
             }
         ]
+
+    async def compare_texts(self, text1: str, text2: str) -> float:
+        """
+        Compare two texts for semantic similarity.
+        
+        Args:
+            text1: First text
+            text2: Second text
+            
+        Returns:
+            Similarity score (0.0-1.0)
+        """
+        try:
+            # Generate embeddings for both texts
+            embedding1, _ = await self.process_embedding(text1)
+            embedding2, _ = await self.process_embedding(text2)
+            
+            if embedding1 is None or embedding2 is None:
+                logger.warning("Failed to generate embeddings for similarity comparison")
+                return 0.0
+            
+            # Calculate cosine similarity
+            if isinstance(embedding1, torch.Tensor) and isinstance(embedding2, torch.Tensor):
+                # Normalize embeddings
+                embedding1 = embedding1 / embedding1.norm()
+                embedding2 = embedding2 / embedding2.norm()
+                # Calculate dot product of normalized vectors (cosine similarity)
+                similarity = torch.dot(embedding1, embedding2).item()
+            else:
+                # Convert to numpy arrays if needed
+                if not isinstance(embedding1, np.ndarray):
+                    embedding1 = np.array(embedding1)
+                if not isinstance(embedding2, np.ndarray):
+                    embedding2 = np.array(embedding2)
+                
+                # Normalize embeddings
+                embedding1 = embedding1 / np.linalg.norm(embedding1)
+                embedding2 = embedding2 / np.linalg.norm(embedding2)
+                
+                # Calculate dot product (cosine similarity)
+                similarity = np.dot(embedding1, embedding2)
+            
+            # Ensure similarity is between 0 and 1
+            similarity = float(max(0.0, min(1.0, similarity)))
+            return similarity
+            
+        except Exception as e:
+            logger.error(f"Error comparing texts: {e}")
+            return 0.0
+
+    def _convert_numpy_to_python(self, obj):
+        """
+        Recursively convert numpy types to Python native types for JSON serialization.
+        
+        Args:
+            obj: The object to convert
+            
+        Returns:
+            The converted object with numpy types replaced by Python native types
+        """
+        # Handle None
+        if obj is None:
+            return None
+            
+        # Handle NumPy arrays
+        if hasattr(obj, '__module__') and obj.__module__ == 'numpy':
+            if hasattr(obj, 'tolist'):
+                return obj.tolist()
+            return str(obj)
+            
+        # Handle PyTorch tensors
+        if hasattr(obj, '__module__') and 'torch' in obj.__module__:
+            if hasattr(obj, 'tolist'):
+                return obj.tolist()
+            if hasattr(obj, 'detach') and hasattr(obj.detach(), 'numpy') and hasattr(obj.detach().numpy(), 'tolist'):
+                return obj.detach().numpy().tolist()
+            return str(obj)
+            
+        # Handle dictionaries
+        if isinstance(obj, dict):
+            return {k: self._convert_numpy_to_python(v) for k, v in obj.items()}
+            
+        # Handle lists and tuples
+        if isinstance(obj, (list, tuple)):
+            return [self._convert_numpy_to_python(item) for item in obj]
+            
+        # Handle sets
+        if isinstance(obj, set):
+            return [self._convert_numpy_to_python(item) for item in obj]
+            
+        # Handle other non-serializable types
+        try:
+            json.dumps(obj)
+            return obj
+        except (TypeError, OverflowError):
+            return str(obj)

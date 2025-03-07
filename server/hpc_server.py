@@ -4,8 +4,8 @@ import json
 import logging
 import torch
 
-# Example HPC manager (you'll see the real code below in hpc_sig_flow_manager.py)
-from hpc_sig_flow_manager import HPCSIGFlowManager
+# Import the HPCSIGFlowManager from the memory system
+from memory.lucidia_memory_system.core.integration.hpc_sig_flow_manager import HPCSIGFlowManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -90,6 +90,75 @@ class HPCServer:
         async with websockets.serve(self.handle_websocket, self.host, self.port):
             logger.info(f"HPC Server running on ws://{self.host}:{self.port}")
             await asyncio.Future()  # keep running
+
+class HPCClient:
+    """Client for the HPCServer to handle hyperdimensional computing operations via WebSocket."""
+    
+    def __init__(self, url: str = 'ws://localhost:5005', ping_interval: int = 20, ping_timeout: int = 20):
+        self.url = url
+        self.ping_interval = ping_interval
+        self.ping_timeout = ping_timeout
+        self.websocket = None
+        self.connected = False
+        logger.info(f"Initializing HPCClient, will connect to {url}")
+    
+    async def connect(self):
+        """Connect to the HPCServer."""
+        try:
+            self.websocket = await websockets.connect(
+                self.url,
+                ping_interval=self.ping_interval,
+                ping_timeout=self.ping_timeout
+            )
+            self.connected = True
+            logger.info(f"Connected to HPCServer at {self.url}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to HPCServer: {str(e)}")
+            self.connected = False
+            return False
+    
+    async def disconnect(self):
+        """Disconnect from the HPCServer."""
+        if self.websocket:
+            await self.websocket.close()
+            self.connected = False
+            logger.info("Disconnected from HPCServer")
+    
+    async def process_embeddings(self, embeddings):
+        """Process embeddings through the HPC system."""
+        if not self.connected:
+            await self.connect()
+        
+        request = {
+            'type': 'process',
+            'embeddings': embeddings if isinstance(embeddings, list) else embeddings.tolist()
+        }
+        
+        try:
+            await self.websocket.send(json.dumps(request))
+            response = await self.websocket.recv()
+            return json.loads(response)
+        except Exception as e:
+            logger.error(f"Error processing embeddings: {str(e)}")
+            return {'type': 'error', 'error': str(e)}
+    
+    async def get_stats(self):
+        """Get server statistics."""
+        if not self.connected:
+            await self.connect()
+        
+        request = {
+            'type': 'stats'
+        }
+        
+        try:
+            await self.websocket.send(json.dumps(request))
+            response = await self.websocket.recv()
+            return json.loads(response)
+        except Exception as e:
+            logger.error(f"Error getting stats: {str(e)}")
+            return {'type': 'error', 'error': str(e)}
 
 if __name__ == '__main__':
     server = HPCServer()

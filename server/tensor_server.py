@@ -15,7 +15,7 @@ import torch
 import time
 from sentence_transformers import SentenceTransformer
 from typing import Dict, Any, List
-from server.hpc_sig_flow_manager import HPCSIGFlowManager
+from memory.lucidia_memory_system.core.integration.hpc_sig_flow_manager import HPCSIGFlowManager
 from server.memory_system import MemorySystem
 
 logging.basicConfig(level=logging.INFO)
@@ -178,6 +178,94 @@ class TensorServer:
         async with websockets.serve(self.handle_websocket, self.host, self.port):
             logger.info(f"Server running on ws://{self.host}:{self.port}")
             await asyncio.Future()
+
+class TensorClient:
+    """Client for the TensorServer to handle embedding and memory operations via WebSocket."""
+    
+    def __init__(self, url: str = 'ws://localhost:5001', ping_interval: int = 20, ping_timeout: int = 20):
+        self.url = url
+        self.ping_interval = ping_interval
+        self.ping_timeout = ping_timeout
+        self.websocket = None
+        self.connected = False
+        logger.info(f"Initializing TensorClient, will connect to {url}")
+    
+    async def connect(self):
+        """Connect to the TensorServer."""
+        try:
+            self.websocket = await websockets.connect(
+                self.url,
+                ping_interval=self.ping_interval,
+                ping_timeout=self.ping_timeout
+            )
+            self.connected = True
+            logger.info(f"Connected to TensorServer at {self.url}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to TensorServer: {str(e)}")
+            self.connected = False
+            return False
+    
+    async def disconnect(self):
+        """Disconnect from the TensorServer."""
+        if self.websocket:
+            await self.websocket.close()
+            self.connected = False
+            logger.info("Disconnected from TensorServer")
+    
+    async def get_embedding(self, text: str) -> dict:
+        """Get embedding for a text."""
+        if not self.connected:
+            await self.connect()
+        
+        request = {
+            'type': 'embed',
+            'text': text
+        }
+        
+        try:
+            await self.websocket.send(json.dumps(request))
+            response = await self.websocket.recv()
+            return json.loads(response)
+        except Exception as e:
+            logger.error(f"Error getting embedding: {str(e)}")
+            return {'type': 'error', 'error': str(e)}
+    
+    async def search_memories(self, text: str, limit: int = 5) -> dict:
+        """Search for memories similar to the given text."""
+        if not self.connected:
+            await self.connect()
+        
+        request = {
+            'type': 'search',
+            'text': text,
+            'limit': limit
+        }
+        
+        try:
+            await self.websocket.send(json.dumps(request))
+            response = await self.websocket.recv()
+            return json.loads(response)
+        except Exception as e:
+            logger.error(f"Error searching memories: {str(e)}")
+            return {'type': 'error', 'error': str(e)}
+    
+    async def get_stats(self) -> dict:
+        """Get server statistics."""
+        if not self.connected:
+            await self.connect()
+        
+        request = {
+            'type': 'stats'
+        }
+        
+        try:
+            await self.websocket.send(json.dumps(request))
+            response = await self.websocket.recv()
+            return json.loads(response)
+        except Exception as e:
+            logger.error(f"Error getting stats: {str(e)}")
+            return {'type': 'error', 'error': str(e)}
 
 if __name__ == '__main__':
     server = TensorServer()

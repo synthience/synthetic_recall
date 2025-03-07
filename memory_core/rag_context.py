@@ -91,8 +91,11 @@ class RAGContextMixin:
             # If not a personal detail query or no direct match found, search memories
             logger.info(f"Searching for relevant memories for query: {query} with min_significance={min_significance}")
             
+            # Check for semantic memory matches
+            memories = []
+            high_sig_threshold = 0.5  # Lowered from 0.7 to include more important memories
+            
             # First, try to get memories with high significance
-            high_sig_threshold = max(min_significance, 0.7)  # Use the higher of provided threshold or 0.7
             try:
                 high_sig_memories = await self.search_memory(query, limit=limit, min_significance=high_sig_threshold)
                 logger.debug(f"Found {len(high_sig_memories)} high significance memories")
@@ -101,7 +104,6 @@ class RAGContextMixin:
                 high_sig_memories = []
             
             # If we don't have enough high significance memories, get some with lower significance
-            memories = high_sig_memories
             if len(high_sig_memories) < limit:
                 remaining = limit - len(high_sig_memories)
                 try:
@@ -114,6 +116,25 @@ class RAGContextMixin:
                     memories = high_sig_memories + low_sig_memories
                 except Exception as e:
                     logger.error(f"Error searching for low significance memories: {e}")
+            
+            # If memory search fails, try a direct content search without semantic matching
+            if not memories and not personal_detail_found:
+                try:
+                    # Fallback to direct content search
+                    if hasattr(self, "memories"):
+                        # Simple text matching fallback when semantic search fails
+                        query_lower = query.lower()
+                        direct_matches = []
+                        
+                        for mem in self.memories:
+                            if query_lower in mem.get("content", "").lower():
+                                direct_matches.append(mem)
+                        
+                        if direct_matches:
+                            logger.info(f"Found {len(direct_matches)} memories by direct text matching")
+                            memories = sorted(direct_matches, key=lambda x: x.get("significance", 0.0), reverse=True)[:limit]
+                except Exception as e:
+                    logger.error(f"Error in fallback direct search: {e}")
             
             if not memories and not personal_detail_found:
                 logger.info("No relevant memories found for RAG context")

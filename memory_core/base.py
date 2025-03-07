@@ -189,84 +189,74 @@ class BaseMemoryClient:
         logger.info("Started memory management background task")
         
     async def _memory_management_loop(self) -> None:
-        """Background task for memory management.
+        """
+        Background task for memory management.
         
         This task runs periodically to:
         - Persist memories to storage
         - Prune low-significance memories
         - Update memory significances
         """
-        # Initial delay to allow system to stabilize
-        await asyncio.sleep(5)
-        
-        # Track consecutive failures to detect persistent issues
         consecutive_failures = 0
         max_consecutive_failures = 5
+        delay_base = 30  # seconds between memory management cycles
+        delay_backoff_factor = 1.5  # Backoff factor for consecutive failures
+        max_delay = 300  # Maximum delay (5 minutes)
         
         while True:
             try:
-                logger.debug("Running memory management cycle")
+                # Dynamic delay based on recent failures
+                current_delay = min(delay_base * (delay_backoff_factor ** consecutive_failures), max_delay)
                 
-                # Persist memories to storage
-                if self.persistence_enabled:
-                    try:
-                        success_count, failure_count = await self._persist_memories()
-                        if failure_count > 0:
-                            logger.warning(f"Memory persistence had {failure_count} failures")
-                            consecutive_failures += 1
-                        else:
-                            # Reset failure counter on success
-                            consecutive_failures = 0
-                    except Exception as e:
-                        logger.error(f"Error in memory persistence: {e}", exc_info=True)
-                        consecutive_failures += 1
+                # Distribute work over time to avoid CPU spikes
+                # First persist memories
+                logger.debug("Running memory persistence cycle")
+                persist_start = time.time()
+                success_count, error_count = await self._persist_memories()
+                persist_duration = time.time() - persist_start
                 
-                # Prune low-significance memories
-                try:
-                    await self._prune_memories()
-                except Exception as e:
-                    logger.error(f"Error pruning memories: {e}")
-                    # Don't increment failure counter for pruning issues
+                # Log performance metrics for persistence cycle
+                if success_count > 0 or error_count > 0:
+                    logger.info(f"Memory persistence cycle took {persist_duration:.2f}s: {success_count} succeeded, {error_count} failed")
                 
-                # Check for persistent failures and take recovery action if needed
-                if consecutive_failures >= max_consecutive_failures:
-                    logger.critical(f"Detected {consecutive_failures} consecutive memory management failures. Attempting recovery...")
-                    # Recovery actions:
-                    # 1. Log detailed state for debugging
-                    logger.info(f"Current memory count: {len(self.memories)}")
-                    logger.info(f"Storage path exists: {self.storage_path.exists()}")
-                    
-                    # 2. Try to recreate storage directory
-                    try:
-                        self.storage_path.mkdir(parents=True, exist_ok=True)
-                        logger.info("Recreated storage directory")
-                    except Exception as e:
-                        logger.error(f"Failed to recreate storage directory: {e}")
-                    
-                    # 3. Reset failure counter after recovery attempt
+                # Wait a small interval before next task to avoid CPU spiking
+                await asyncio.sleep(max(0.1, current_delay * 0.2))
+                
+                # Then prune memories if necessary
+                prune_start = time.time()
+                await self._prune_memories()
+                prune_duration = time.time() - prune_start
+                
+                if prune_duration > 1.0:
+                    logger.info(f"Memory pruning took {prune_duration:.2f}s")
+                
+                # Reset failure counter since everything worked
+                if consecutive_failures > 0:
                     consecutive_failures = 0
+                    logger.info("Memory management recovered after previous failures")
                 
-                # Wait before next cycle (60 seconds by default)
-                # Use a series of shorter sleeps to allow for cleaner shutdown
-                for _ in range(6):  # 6 x 10 seconds = 60 seconds
-                    await asyncio.sleep(10)
-                    
+                # Wait until next cycle (adjusted for work already done)
+                elapsed = time.time() - persist_start
+                next_delay = max(0.1, current_delay - elapsed)
+                logger.debug(f"Next memory management cycle in {next_delay:.1f}s")
+                await asyncio.sleep(next_delay)
+                
             except asyncio.CancelledError:
-                logger.info("Memory management loop cancelled")
-                # Perform one final persistence before exiting
-                if self.persistence_enabled:
-                    try:
-                        await self._persist_memories()
-                        logger.info("Final memory persistence completed")
-                    except Exception as e:
-                        logger.error(f"Error in final memory persistence: {e}")
+                logger.info("Memory management loop was cancelled, exiting")
                 break
                 
             except Exception as e:
-                logger.error(f"Unexpected error in memory management loop: {e}", exc_info=True)
                 consecutive_failures += 1
-                # Use shorter wait time after errors
-                await asyncio.sleep(30)
+                logger.error(f"Error in memory management loop (attempt {consecutive_failures}): {e}")
+                
+                if consecutive_failures >= max_consecutive_failures:
+                    logger.critical(f"Too many consecutive failures ({consecutive_failures}) in memory management loop, increasing delay")
+                    # Don't break - keep trying but with increased delay to reduce system load
+                
+                # Wait with exponential backoff
+                backoff_delay = min(delay_base * (delay_backoff_factor ** consecutive_failures), max_delay)
+                logger.info(f"Will retry memory management in {backoff_delay:.1f}s")
+                await asyncio.sleep(backoff_delay)
     
     async def _load_memories(self) -> Dict[str, Any]:
         """
@@ -492,8 +482,12 @@ class BaseMemoryClient:
     
     async def _persist_memories(self) -> Tuple[int, int]:
         """
-        Persist memories to disk with robust error handling and retry logic.
+        Persist memories to disk with asynchronous, non-blocking I/O and robust error handling.
         Handles complex data types like NumPy arrays and PyTorch tensors.
+        
+        This implementation uses aiofiles for non-blocking file I/O and processes memories
+        in configurable-sized batches to prevent long-running operations from blocking
+        other critical tasks.
         
         Returns:
             Tuple[int, int]: A tuple containing (success_count, error_count)
@@ -508,6 +502,10 @@ class BaseMemoryClient:
         # Create storage directory if it doesn't exist
         os.makedirs(self.storage_path, exist_ok=True)
             
+        # Get settings for batch processing
+        # These can be configured in __init__ or derived from system resources
+        batch_size = getattr(self, 'persistence_batch_size', 10)  # Default to 10 memories per batch
+        
         async with self._memory_lock:
             persist_start = time.time()
             success_count = 0
@@ -517,85 +515,45 @@ class BaseMemoryClient:
             attempted_memories = set()
             
             # First, try to persist high-significance memories
-            high_sig_memories = [m for m in self.memories if m.get('significance', 0.0) > 0.7]
+            significance_priority_threshold = getattr(self, 'significance_priority_threshold', 0.7)
+            high_sig_memories = [m for m in self.memories if m.get('significance', 0.0) > significance_priority_threshold]
             if high_sig_memories:
                 logger.info(f"Prioritizing persistence of {len(high_sig_memories)} high-significance memories")
             
             # Combine high significance memories with regular memories, prioritizing high significance ones
             prioritized_memories = high_sig_memories + [m for m in self.memories if m not in high_sig_memories]
             
-            for memory in prioritized_memories:
-                memory_id = memory.get('id')
-                if not memory_id:
-                    logger.warning("Found memory without ID, skipping persistence")
-                    error_count += 1
-                    continue
+            # Process memories in batches
+            for i in range(0, len(prioritized_memories), batch_size):
+                batch = prioritized_memories[i:i+batch_size]
+                batch_tasks = []
+                
+                for memory in batch:
+                    memory_id = memory.get('id')
+                    if not memory_id:
+                        logger.warning("Found memory without ID, skipping persistence")
+                        error_count += 1
+                        continue
+                        
+                    # Track that we've attempted this memory
+                    attempted_memories.add(memory_id)
                     
-                # Track that we've attempted this memory
-                attempted_memories.add(memory_id)
+                    # Create persistence task for this memory
+                    task = self._persist_single_memory(memory)
+                    batch_tasks.append(task)
                 
-                file_path = self.storage_path / f"{memory_id}.json"
-                temp_file_path = self.storage_path / f"{memory_id}.json.tmp"
-                backup_file_path = self.storage_path / f"{memory_id}.json.bak"
-                
-                # Set up retry parameters
-                max_retries = 3
-                retry_delay = 0.5  # seconds
-                
-                for retry_count in range(max_retries):
-                    try:
-                        # Create a deep copy of the memory to avoid modifying the original
-                        memory_copy = copy.deepcopy(memory)
-                        
-                        # Convert any NumPy arrays or PyTorch tensors to Python lists
-                        memory_copy = self._convert_numpy_to_python(memory_copy)
-                        
-                        # Write to a temporary file first (atomic write operation)
-                        with open(temp_file_path, 'w', encoding='utf-8') as f:
-                            json.dump(memory_copy, f, ensure_ascii=False, indent=2)
-                            
-                        # If the file exists, create a backup before overwriting
-                        if file_path.exists():
-                            try:
-                                shutil.copy2(file_path, backup_file_path)
-                            except Exception as e:
-                                logger.warning(f"Failed to create backup for memory {memory_id}: {e}")
-                        
-                        # Rename temporary file to actual file (atomic operation)
-                        os.replace(temp_file_path, file_path)
-                        
-                        # Verify file integrity
-                        try:
-                            with open(file_path, 'r', encoding='utf-8') as f:
-                                _ = json.load(f)  # Just load to verify it's valid JSON
-                            # If we get here, the file is valid JSON
-                            success_count += 1
-                            
-                            # Remove backup if everything succeeded
-                            if backup_file_path.exists():
-                                os.remove(backup_file_path)
-                                
-                            # Break out of retry loop on success
-                            break
-                        except json.JSONDecodeError:
-                            logger.error(f"Memory file {file_path} contains invalid JSON after writing")
-                            # Restore from backup if verification failed
-                            if backup_file_path.exists():
-                                try:
-                                    os.replace(backup_file_path, file_path)
-                                    logger.info(f"Restored memory {memory_id} from backup after verification failure")
-                                except Exception as e:
-                                    logger.error(f"Failed to restore backup for memory {memory_id}: {e}")
+                # Wait for all batch tasks to complete
+                if batch_tasks:
+                    batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                    
+                    # Process results
+                    for result in batch_results:
+                        if isinstance(result, Exception):
+                            logger.error(f"Exception during batch persistence: {result}")
                             error_count += 1
-                    except Exception as e:
-                        error_msg = f"Error persisting memory {memory_id} (attempt {retry_count+1}/{max_retries}): {e}"
-                        if retry_count < max_retries - 1:
-                            logger.warning(error_msg + ", retrying...")
-                            # Exponential backoff with jitter
-                            backoff_time = retry_delay * (2 ** retry_count) * (0.5 + 0.5 * random.random())
-                            await asyncio.sleep(backoff_time)
+                        elif result is True:
+                            success_count += 1
                         else:
-                            logger.error(error_msg + ", giving up")
                             error_count += 1
             
             # Log persistence statistics
@@ -608,72 +566,122 @@ class BaseMemoryClient:
                 logger.warning(f"Found {len(missing_memories)} memories that weren't attempted to be persisted: {missing_memories[:5]}")
             
             return (success_count, error_count)
-    
-    def _convert_numpy_to_python(self, obj):
+
+    async def _persist_single_memory(self, memory: dict) -> bool:
         """
-        Recursively convert NumPy arrays and PyTorch tensors to Python lists.
-        Also handles other non-serializable types.
+        Persist a single memory with robust error handling and retry mechanism.
+        Uses asynchronous file I/O to prevent blocking the event loop.
         
         Args:
-            obj: The object to convert
+            memory: The memory to persist
             
         Returns:
-            The converted object with all NumPy arrays and PyTorch tensors converted to lists
+            bool: True if successful, False otherwise
         """
-        # Handle None
-        if obj is None:
-            return None
+        memory_id = memory.get('id')
+        if not memory_id:
+            logger.warning("Attempted to persist memory without ID")
+            return False
             
-        # Handle NumPy arrays
-        if hasattr(obj, '__module__') and obj.__module__ == 'numpy':
-            if hasattr(obj, 'tolist'):
+        file_path = self.storage_path / f"{memory_id}.json"
+        temp_file_path = self.storage_path / f"{memory_id}.json.tmp"
+        backup_file_path = self.storage_path / f"{memory_id}.json.bak"
+        
+        # Set up retry parameters
+        max_retries = self.max_retries if hasattr(self, 'max_retries') else 3
+        base_retry_delay = self.retry_delay if hasattr(self, 'retry_delay') else 0.5  # seconds
+        
+        for retry_count in range(max_retries):
+            try:
+                # Create a deep copy of the memory to avoid modifying the original
+                memory_copy = copy.deepcopy(memory)
+                
+                # Convert any NumPy arrays or PyTorch tensors to Python lists
+                memory_copy = self._convert_numpy_to_python(memory_copy)
+                
+                # Convert to JSON string
+                json_content = json.dumps(memory_copy, ensure_ascii=False, indent=2)
+                
+                # Try to import aiofiles for async file I/O
                 try:
-                    return obj.tolist()
-                except Exception as e:
-                    logger.warning(f"Error converting NumPy array to list: {e}")
-                    return str(obj)
-            return str(obj)
-            
-        # Handle PyTorch tensors
-        if hasattr(obj, '__module__') and 'torch' in obj.__module__:
-            if hasattr(obj, 'tolist'):
+                    import aiofiles
+                    has_aiofiles = True
+                except ImportError:
+                    has_aiofiles = False
+                    logger.warning("aiofiles package not found, falling back to synchronous I/O")
+                
+                # Write to temp file using async I/O if available
+                if has_aiofiles:
+                    async with aiofiles.open(temp_file_path, 'w', encoding='utf-8') as f:
+                        await f.write(json_content)
+                else:
+                    # Fallback to synchronous I/O inside executor to avoid blocking
+                    await asyncio.to_thread(self._write_sync, temp_file_path, json_content)
+                        
+                # If the file exists, create a backup before overwriting
+                if file_path.exists():
+                    try:
+                        # Use asyncio.to_thread to prevent blocking on file copy
+                        await asyncio.to_thread(shutil.copy2, file_path, backup_file_path)
+                    except Exception as e:
+                        logger.warning(f"Failed to create backup for memory {memory_id}: {e}")
+                
+                # Rename temporary file to actual file (using to_thread to avoid blocking)
+                await asyncio.to_thread(os.replace, temp_file_path, file_path)
+                
+                # Verify file integrity
                 try:
-                    return obj.tolist()
-                except Exception as e:
-                    logger.warning(f"Error converting PyTorch tensor to list: {e}")
-                    return str(obj)
-            if hasattr(obj, 'detach'):
-                try:
-                    detached = obj.detach()
-                    if hasattr(detached, 'numpy'):
-                        numpy_array = detached.numpy()
-                        if hasattr(numpy_array, 'tolist'):
-                            return numpy_array.tolist()
-                    return str(obj)
-                except Exception as e:
-                    logger.warning(f"Error detaching PyTorch tensor: {e}")
-                    return str(obj)
-            return str(obj)
-            
-        # Handle dictionaries
-        if isinstance(obj, dict):
-            return {k: self._convert_numpy_to_python(v) for k, v in obj.items()}
-            
-        # Handle lists and tuples
-        if isinstance(obj, (list, tuple)):
-            return [self._convert_numpy_to_python(item) for item in obj]
-            
-        # Handle sets
-        if isinstance(obj, set):
-            return [self._convert_numpy_to_python(item) for item in obj]
-            
-        # Handle other non-serializable types
-        try:
-            json.dumps(obj)
-            return obj
-        except (TypeError, OverflowError):
-            return str(obj)
+                    # Verify file asynchronously if possible
+                    if has_aiofiles:
+                        async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                            content = await f.read()
+                            _ = json.loads(content)  # Verify it's valid JSON
+                    else:
+                        # Fallback to synchronous verification in a thread
+                        await asyncio.to_thread(self._verify_json_file, file_path)
+                    
+                    # Remove backup if everything succeeded (asynchronously)
+                    if backup_file_path.exists():
+                        await asyncio.to_thread(os.remove, backup_file_path)
+                        
+                    # Success
+                    return True
+                        
+                except json.JSONDecodeError:
+                    logger.error(f"Memory file {file_path} contains invalid JSON after writing")
+                    # Restore from backup if verification failed
+                    if backup_file_path.exists():
+                        try:
+                            await asyncio.to_thread(os.replace, backup_file_path, file_path)
+                            logger.info(f"Restored memory {memory_id} from backup after verification failure")
+                        except Exception as e:
+                            logger.error(f"Failed to restore backup for memory {memory_id}: {e}")
+                    return False
+                    
+            except Exception as e:
+                error_msg = f"Error persisting memory {memory_id} (attempt {retry_count+1}/{max_retries}): {e}"
+                if retry_count < max_retries - 1:
+                    logger.warning(error_msg + ", retrying...")
+                    # Exponential backoff with jitter
+                    backoff_time = base_retry_delay * (2 ** retry_count) * (0.5 + 0.5 * random.random())
+                    await asyncio.sleep(backoff_time)
+                else:
+                    logger.error(error_msg + ", giving up")
+                    return False
+        
+        # Should never reach here due to return in the loop, but just in case
+        return False
+
+    def _write_sync(self, file_path, content):
+        """Synchronous file write operation to be used with asyncio.to_thread."""
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
     
+    def _verify_json_file(self, file_path):
+        """Synchronous JSON file verification to be used with asyncio.to_thread."""
+        with open(file_path, 'r', encoding='utf-8') as f:
+            json.load(f)
+
     async def _prune_memories(self) -> None:
         """
         Prune low-significance memories based on threshold.
@@ -930,3 +938,68 @@ class BaseMemoryClient:
         logger.info(f"Forced persistence completed in {stats['elapsed_time']:.2f}s: {stats['persisted']} succeeded, {stats['failed']} failed")
         
         return stats
+    
+    def _convert_numpy_to_python(self, obj):
+        """
+        Recursively convert NumPy arrays and PyTorch tensors to Python lists.
+        Also handles other non-serializable types.
+        
+        Args:
+            obj: The object to convert
+            
+        Returns:
+            The converted object with all NumPy arrays and PyTorch tensors converted to lists
+        """
+        # Handle None
+        if obj is None:
+            return None
+            
+        # Handle NumPy arrays
+        if hasattr(obj, '__module__') and obj.__module__ == 'numpy':
+            if hasattr(obj, 'tolist'):
+                try:
+                    return obj.tolist()
+                except Exception as e:
+                    logger.warning(f"Error converting NumPy array to list: {e}")
+                    return str(obj)
+            return str(obj)
+            
+        # Handle PyTorch tensors
+        if hasattr(obj, '__module__') and 'torch' in obj.__module__:
+            if hasattr(obj, 'tolist'):
+                try:
+                    return obj.tolist()
+                except Exception as e:
+                    logger.warning(f"Error converting PyTorch tensor to list: {e}")
+                    return str(obj)
+            if hasattr(obj, 'detach'):
+                try:
+                    detached = obj.detach()
+                    if hasattr(detached, 'numpy'):
+                        numpy_array = detached.numpy()
+                        if hasattr(numpy_array, 'tolist'):
+                            return numpy_array.tolist()
+                    return str(obj)
+                except Exception as e:
+                    logger.warning(f"Error detaching PyTorch tensor: {e}")
+                    return str(obj)
+            return str(obj)
+            
+        # Handle dictionaries
+        if isinstance(obj, dict):
+            return {k: self._convert_numpy_to_python(v) for k, v in obj.items()}
+            
+        # Handle lists and tuples
+        if isinstance(obj, (list, tuple)):
+            return [self._convert_numpy_to_python(item) for item in obj]
+            
+        # Handle sets
+        if isinstance(obj, set):
+            return [self._convert_numpy_to_python(item) for item in obj]
+            
+        # Handle other non-serializable types
+        try:
+            json.dumps(obj)
+            return obj
+        except (TypeError, OverflowError):
+            return str(obj)

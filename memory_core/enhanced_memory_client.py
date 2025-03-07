@@ -1535,17 +1535,14 @@ async def detect_emotional_context(self, text: str) -> Dict[str, Any]:
             emotional_context["emotions"][emotion] = 1.0
             
             # Store the emotional context for future reference
-            if hasattr(self, "emotions") and not isinstance(self.emotions, dict):
-                self.emotions = {}
+            if hasattr(self, "_emotional_history"):
+                self._emotional_history.append(emotional_context)
                 
-            if hasattr(self, "emotions"):
-                self.emotions[str(timestamp)] = {
-                    "emotion": emotion,
-                    "text": text,
-                    "timestamp": timestamp,
-                    "sentiment": 0.0,  # Default neutral sentiment
-                    "emotions": {emotion: 1.0}  # Default confidence
-                }
+                # Trim emotional history if needed
+                if hasattr(self, "_max_emotional_history") and len(self._emotional_history) > self._max_emotional_history:
+                    self._emotional_history = self._emotional_history[-self._max_emotional_history:]
+                    
+                logger.debug(f"Added to emotional history (total: {len(self._emotional_history)})")
             
             logger.info(f"Detected emotion: {emotion} for text: {text[:30]}...")
             return emotional_context
@@ -1570,7 +1567,7 @@ async def detect_emotional_context(self, text: str) -> Dict[str, Any]:
         "emotional_state": "neutral"
     }
 
-    async def store_memory(self, content: str, metadata: Dict[str, Any] = None, significance: float = None) -> bool:
+    async def store_memory(self, content: str, metadata: Dict[str, Any] = None, significance: float = None, importance: float = None) -> bool:
         """
         Store a new memory with semantic embedding and ensure proper persistence.
         
@@ -1578,6 +1575,7 @@ async def detect_emotional_context(self, text: str) -> Dict[str, Any]:
             content: The memory content to store
             metadata: Additional metadata for the memory
             significance: Optional override for significance
+            importance: Alternate name for significance (for backward compatibility)
             
         Returns:
             bool: Success status
@@ -1587,6 +1585,10 @@ async def detect_emotional_context(self, text: str) -> Dict[str, Any]:
             return False
             
         try:
+            # Handle both significance and importance parameters for backward compatibility
+            if significance is None and importance is not None:
+                significance = importance
+            
             # Generate embedding and significance
             try:
                 embedding, memory_significance = await self.process_embedding(content)
@@ -1826,3 +1828,619 @@ async def detect_emotional_context(self, text: str) -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"Error storing important memory: {e}")
             return {"success": False, "error": str(e)}
+
+    async def classify_query(self, query: str) -> str:
+        """Classify a user query into a specific query type to determine memory retrieval strategy.
+        
+        Types include:
+        - recall: User is asking to recall a specific memory or conversation
+        - information: User is asking for factual information
+        - new_learning: User is providing new information to be stored
+        - emotional: User is expressing emotions or seeking emotional support
+        - clarification: User is asking for clarification on something previously said
+        - task: User is requesting a specific task to be performed
+        - greeting: User is greeting or making small talk
+        - other: Default category for queries that don't fit elsewhere
+        
+        Args:
+            query (str): The user's query text
+            
+        Returns:
+            str: The classified query type
+        """
+        try:
+            if not query or not isinstance(query, str):
+                logger.warning("Empty or invalid query provided to classify_query")
+                return "other"
+                
+            # Normalize query
+            query = query.lower().strip()
+            
+            # Quick pattern matching for common cases
+            if re.search(r'\b(remember|recall|what did (i|you) say|previous|earlier|before)\b', query):
+                return "recall"
+                
+            if re.search(r'\b(who|what|where|when|why|how|explain|tell me about|information)\b', query):
+                return "information"
+                
+            if re.search(r'\b(remember this|note this|save this|store this|keep this|remember that)\b', query):
+                return "new_learning"
+                
+            if re.search(r'\b(feel|feeling|sad|happy|angry|upset|depressed|worried|anxious|excited)\b', query):
+                return "emotional"
+                
+            if re.search(r'\b(what do you mean|clarify|explain again|confused|didn\'t understand)\b', query):
+                return "clarification"
+                
+            if re.search(r'\b(do this|perform|execute|run|start|stop|create|make|build)\b', query):
+                return "task"
+                
+            if re.search(r'\b(hello|hi|hey|good morning|good afternoon|good evening|how are you)\b', query):
+                return "greeting"
+                
+            # More sophisticated classification with LLM if available
+            try:
+                if hasattr(self, 'llm_pipeline') and self.llm_pipeline:
+                    llm_classification = await self._classify_with_llm(query)
+                    if llm_classification in ["recall", "information", "new_learning", "emotional", 
+                                            "clarification", "task", "greeting", "other"]:
+                        logger.info(f"LLM classified query as: {llm_classification}")
+                        return llm_classification
+            except Exception as e:
+                logger.warning(f"Error during LLM classification, falling back to heuristics: {e}")
+            
+            # Default to information search if nothing else matched
+            return "information"
+            
+        except Exception as e:
+            logger.error(f"Error classifying query: {e}", exc_info=True)
+            return "other"
+            
+    async def _classify_with_llm(self, query: str) -> str:
+        """Use LLM to classify the query type more accurately.
+        
+        Args:
+            query (str): The user query to classify
+            
+        Returns:
+            str: The classified query type
+        """
+        try:
+            prompt = f"""Classify the following user query into exactly one of these categories: 
+            recall, information, new_learning, emotional, clarification, task, greeting, other.
+            Respond with only the category name, nothing else.
+            
+            Query: "{query}"
+            
+            Classification:"""
+            
+            response = await self.llm_pipeline.agenerate_text(
+                prompt=prompt,
+                max_tokens=10,
+                temperature=0.2
+            )
+            
+            # Clean and validate response
+            if response and isinstance(response, str):
+                response = response.lower().strip()
+                valid_types = ["recall", "information", "new_learning", "emotional", 
+                              "clarification", "task", "greeting", "other"]
+                if response in valid_types:
+                    return response
+                    
+            return "information"  # Default fallback
+        except Exception as e:
+            logger.error(f"Error in LLM classification: {e}", exc_info=True)
+            return "information"  # Default fallback on error
+    
+    async def retrieve_memories(self, query: str, limit: int = 5, min_significance: float = 0.3) -> List[Dict[str, Any]]:
+        """
+        Retrieve memories relevant to the given query using semantic search.
+        
+        Args:
+            query: The query text to search for related memories
+            limit: Maximum number of memories to return
+            min_significance: Minimum significance threshold for retrieved memories
+            
+        Returns:
+            List of dictionaries containing memory entries
+        """
+        try:
+            logger.info(f"Retrieving memories for query: '{query[:50]}...'")
+            
+            # Input validation
+            if not query or not isinstance(query, str):
+                logger.warning("Empty or invalid query provided to retrieve_memories")
+                return []
+                
+            if limit <= 0:
+                logger.warning(f"Invalid limit parameter: {limit}, using default of 5")
+                limit = 5
+                
+            # Check which memory system to use
+            if hasattr(self, 'memory_integration') and self.memory_integration:
+                # Use hierarchical memory system
+                try:
+                    memories = await self.memory_integration.retrieve_memories(
+                        query=query,
+                        limit=limit,
+                        min_significance=min_significance
+                    )
+                    logger.info(f"Retrieved {len(memories)} memories from hierarchical memory system")
+                    return memories
+                except Exception as e:
+                    logger.error(f"Error retrieving from hierarchical memory: {e}", exc_info=True)
+                    # Fall back to standard retrieval
+            
+            # Standard memory retrieval using embedding similarity
+            try:
+                # Generate query embedding
+                query_embedding = await self._generate_embedding(query)
+                if not query_embedding:
+                    logger.warning("Failed to generate embedding for query")
+                    return []
+                    
+                # Retrieve memories from database
+                memories = await self._retrieve_memories_by_embedding(
+                    query_embedding=query_embedding,
+                    limit=limit,
+                    min_significance=min_significance
+                )
+                
+                # Format results
+                result = []
+                for memory in memories:
+                    result.append({
+                        "id": memory.id,
+                        "content": memory.content,
+                        "timestamp": memory.timestamp.isoformat() if hasattr(memory, 'timestamp') else None,
+                        "significance": memory.significance,
+                        "memory_type": memory.memory_type.value if hasattr(memory, 'memory_type') else "transcript",
+                        "metadata": memory.metadata
+                    })
+                    
+                logger.info(f"Retrieved {len(result)} memories from standard memory system")
+                return result
+                    
+            except Exception as e:
+                logger.error(f"Error in standard memory retrieval: {e}", exc_info=True)
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error retrieving memories: {e}", exc_info=True)
+            return []
+            
+    async def _retrieve_memories_by_embedding(self, query_embedding: List[float], limit: int = 5, 
+                                           min_significance: float = 0.3) -> List[Any]:
+        """
+        Retrieve memories by comparing the query embedding against stored memory embeddings.
+        
+        Args:
+            query_embedding: Vector embedding of the query
+            limit: Maximum number of memories to return
+            min_significance: Minimum significance threshold
+            
+        Returns:
+            List of memory objects
+        """
+        try:
+            if not hasattr(self, 'memory_db') or not self.memory_db:
+                logger.warning("Memory database not initialized")
+                return []
+                
+            # Retrieve memories from database with similarity search
+            memories = await self.memory_db.get_by_vector(
+                vector=query_embedding,
+                limit=limit * 2,  # Get more than needed to filter by significance
+                collection="memories"
+            )
+            
+            # Filter by significance and sort by relevance
+            filtered_memories = []
+            for memory in memories:
+                if hasattr(memory, 'significance') and memory.significance >= min_significance:
+                    filtered_memories.append(memory)
+                elif not hasattr(memory, 'significance'):
+                    # If memory doesn't have significance attribute, include it anyway
+                    filtered_memories.append(memory)
+            
+            # Sort by relevance and limit results
+            sorted_memories = sorted(
+                filtered_memories, 
+                key=lambda x: x.similarity if hasattr(x, 'similarity') else 0.0,
+                reverse=True
+            )[:limit]
+            
+            return sorted_memories
+            
+        except Exception as e:
+            logger.error(f"Error retrieving memories by embedding: {e}", exc_info=True)
+            return []
+    
+    async def retrieve_information(self, query: str, limit: int = 5, min_significance: float = 0.3) -> List[Dict[str, Any]]:
+        """
+        Retrieve factual information relevant to the query.
+        Optimized for informational queries rather than personal memories.
+        
+        Args:
+            query: The query text
+            limit: Maximum number of information pieces to retrieve
+            min_significance: Minimum significance threshold
+            
+        Returns:
+            List of dictionaries containing information entries
+        """
+        try:
+            logger.info(f"Retrieving information for query: '{query[:50]}...'")
+            
+            # Input validation
+            if not query or not isinstance(query, str):
+                logger.warning("Empty or invalid query provided to retrieve_information")
+                return []
+                
+            # Check which memory system to use
+            if hasattr(self, 'memory_integration') and self.memory_integration:
+                # Use hierarchical memory system's information retrieval
+                try:
+                    info_results = await self.memory_integration.retrieve_information(
+                        query=query,
+                        limit=limit,
+                        min_significance=min_significance
+                    )
+                    logger.info(f"Retrieved {len(info_results)} information entries from hierarchical memory")
+                    return info_results
+                except Exception as e:
+                    logger.error(f"Error retrieving from hierarchical information store: {e}", exc_info=True)
+                    # Fall back to standard retrieval
+            
+            # Use RAG context if available
+            if hasattr(self, 'get_rag_context'):
+                try:
+                    # Generate RAG context for informational queries
+                    context_data = await self.get_rag_context(
+                        query=query,
+                        limit=limit,
+                        min_significance=min_significance,
+                        context_type="information"
+                    )
+                    
+                    # Parse the context into structured information
+                    if context_data and isinstance(context_data, str):
+                        info_entries = self._parse_information_context(context_data)
+                        if info_entries:
+                            logger.info(f"Retrieved {len(info_entries)} information entries from RAG context")
+                            return info_entries
+                except Exception as e:
+                    logger.error(f"Error retrieving RAG context for information: {e}", exc_info=True)
+            
+            # Fallback: Standard retrieval focused on information memory types
+            try:
+                # Generate query embedding
+                query_embedding = await self._generate_embedding(query)
+                if not query_embedding:
+                    logger.warning("Failed to generate embedding for query")
+                    return []
+                
+                # Retrieve information memory types from database
+                # This uses the same method but with a filter for information memory types
+                memories = await self._retrieve_memories_by_embedding(
+                    query_embedding=query_embedding,
+                    limit=limit * 2,  # Get more to filter
+                    min_significance=min_significance
+                )
+                
+                # Filter for information memory types and format results
+                result = []
+                for memory in memories:
+                    # Check if memory has the appropriate type for information
+                    is_info_type = False
+                    if hasattr(memory, 'memory_type'):
+                        info_types = ["fact", "concept", "definition", "information", "knowledge"]
+                        memory_type_value = memory.memory_type.value if hasattr(memory.memory_type, 'value') else str(memory.memory_type)
+                        is_info_type = any(info_type in memory_type_value.lower() for info_type in info_types)
+                    
+                    # For standard memories, check metadata or content for clues
+                    elif hasattr(memory, 'metadata') and memory.metadata:
+                        if memory.metadata.get('type') in ['fact', 'information', 'knowledge']:
+                            is_info_type = True
+                    
+                    # Include if it's an information type or if we can't determine (better to include than exclude)
+                    if is_info_type or not hasattr(memory, 'memory_type'):
+                        result.append({
+                            "id": memory.id if hasattr(memory, 'id') else str(uuid.uuid4()),
+                            "content": memory.content,
+                            "timestamp": memory.timestamp.isoformat() if hasattr(memory, 'timestamp') else None,
+                            "significance": getattr(memory, 'significance', 0.5),
+                            "memory_type": memory.memory_type.value if hasattr(memory, 'memory_type') and hasattr(memory.memory_type, 'value') else "information",
+                            "metadata": getattr(memory, 'metadata', {})
+                        })
+                
+                logger.info(f"Retrieved {len(result)} information entries from standard memory system")
+                return result[:limit]  # Limit to requested number
+                
+            except Exception as e:
+                logger.error(f"Error in standard information retrieval: {e}", exc_info=True)
+                return []
+        
+        except Exception as e:
+            logger.error(f"Error retrieving information: {e}", exc_info=True)
+            return []
+            
+    def _parse_information_context(self, context_data: str) -> List[Dict[str, Any]]:
+        """
+        Parse RAG context data into structured information entries.
+        
+        Args:
+            context_data: The RAG context string
+            
+        Returns:
+            List of dictionaries containing parsed information
+        """
+        try:
+            info_entries = []
+            
+            # Split context into sections (each fact or piece of information)
+            sections = re.split(r'\n(?=Fact|Information|Knowledge|Definition|Concept)\s*\d*:', context_data)
+            
+            for i, section in enumerate(sections):
+                if not section.strip():
+                    continue
+                    
+                # Extract content
+                content = section.strip()
+                
+                # Generate a unique ID
+                entry_id = str(uuid.uuid4())
+                
+                # Determine type and confidence
+                entry_type = "information"
+                confidence = 0.7  # Default confidence
+                
+                # Look for type indicators in the content
+                type_match = re.search(r'^(Fact|Information|Knowledge|Definition|Concept)', content)
+                if type_match:
+                    entry_type = type_match.group(1).lower()
+                
+                # Look for confidence indicators
+                confidence_match = re.search(r'confidence:\s*(\d+(\.\d+)?)', content, re.IGNORECASE)
+                if confidence_match:
+                    try:
+                        confidence = float(confidence_match.group(1))
+                        # Normalize to 0-1 range if it's expressed as percentage
+                        if confidence > 1:
+                            confidence /= 100
+                    except ValueError:
+                        pass
+                
+                info_entries.append({
+                    "id": entry_id,
+                    "content": content,
+                    "timestamp": datetime.now().isoformat(),
+                    "significance": confidence,
+                    "memory_type": entry_type,
+                    "metadata": {
+                        "source": "rag_context",
+                        "confidence": confidence,
+                        "index": i
+                    }
+                })
+            
+            return info_entries
+            
+        except Exception as e:
+            logger.error(f"Error parsing information context: {e}", exc_info=True)
+            return []
+    
+    async def store_and_retrieve(self, text: str, metadata: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """
+        Store new information and retrieve contextually related memories.
+        This is useful for learning new information while providing context.
+        
+        Args:
+            text: The text to store
+            metadata: Optional metadata to attach to the memory
+            
+        Returns:
+            List of related memory objects
+        """
+        try:
+            logger.info(f"Storing and retrieving context for: '{text[:50]}...'")
+            
+            # Input validation
+            if not text or not isinstance(text, str):
+                logger.warning("Empty or invalid text provided to store_and_retrieve")
+                return []
+            
+            # Default metadata if none provided
+            if metadata is None:
+                metadata = {
+                    "source": "user_input",
+                    "timestamp": datetime.now().isoformat(),
+                    "type": "new_learning"
+                }
+            
+            # Store the new information
+            store_success = False
+            if hasattr(self, 'memory_integration') and self.memory_integration:
+                try:
+                    # Use hierarchical memory system
+                    memory_id = await self.memory_integration.store(
+                        content=text,
+                        metadata=metadata
+                    )
+                    logger.info(f"Stored new information with ID {memory_id} in hierarchical memory")
+                    store_success = True
+                except Exception as e:
+                    logger.error(f"Error storing in hierarchical memory: {e}", exc_info=True)
+                    # Fall back to base memory storage
+            
+            # Fallback: Use base memory storage if hierarchical failed or not available
+            if not store_success:
+                try:
+                    memory_id = await self.store_memory(
+                        text=text,
+                        memory_type="user_input",
+                        metadata=metadata
+                    )
+                    logger.info(f"Stored new information with ID {memory_id} in base memory system")
+                    store_success = True
+                except Exception as e:
+                    logger.error(f"Error storing in base memory: {e}", exc_info=True)
+            
+            # Return immediately if storage failed
+            if not store_success:
+                logger.warning("Failed to store new information")
+                return []
+            
+            # Retrieve related memories
+            try:
+                # First try to classify the text to determine retrieval strategy
+                query_type = await self.classify_query(text)
+                
+                # Use appropriate retrieval method based on classification
+                if query_type == "information":
+                    related_memories = await self.retrieve_information(text, limit=3, min_significance=0.2)
+                else:
+                    related_memories = await self.retrieve_memories(text, limit=3, min_significance=0.2)
+                
+                logger.info(f"Retrieved {len(related_memories)} related memories")
+                return related_memories
+                
+            except Exception as e:
+                logger.error(f"Error retrieving related memories: {e}", exc_info=True)
+                return []
+            
+        except Exception as e:
+            logger.error(f"Error in store_and_retrieve: {e}", exc_info=True)
+            return []
+    
+    async def store_emotional_context(self, emotional_context: Dict[str, Any]) -> bool:
+        """
+        Store emotional context information for tracking user emotional states over time.
+        
+        Args:
+            emotional_context: Dictionary containing emotional context data
+                - emotion: Primary emotion detected
+                - intensity: Intensity score (0.0-1.0)
+                - secondary_emotions: List of secondary emotions
+                - text: Original text that generated this emotional context
+                
+        Returns:
+            bool: Success status
+        """
+        try:
+            # Input validation
+            if not emotional_context or not isinstance(emotional_context, dict) or 'emotion' not in emotional_context:
+                logger.warning("Invalid emotional context data provided")
+                return False
+            
+            # Calculate significance based on emotional intensity
+            significance = emotional_context.get('intensity', 0.5)
+            
+            # Prepare metadata
+            metadata = {
+                "type": "emotional_context",
+                "primary_emotion": emotional_context.get('emotion'),
+                "intensity": emotional_context.get('intensity', 0.5),
+                "secondary_emotions": emotional_context.get('secondary_emotions', []),
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Store in emotional history for EmotionMixin
+            if hasattr(self, '_emotional_history'):
+                self._emotional_history.append(metadata)
+                
+                # Trim emotional history if needed
+                if hasattr(self, '_max_emotional_history') and len(self._emotional_history) > self._max_emotional_history:
+                    self._emotional_history = self._emotional_history[-self._max_emotional_history:]
+                    
+                logger.debug(f"Added to emotional history (total: {len(self._emotional_history)})")
+            
+            # Also store as a memory if significant enough
+            if significance >= 0.4:  # Lower threshold to capture more emotional context
+                text = emotional_context.get('text', f"User expressed {metadata['primary_emotion']} with intensity {metadata['intensity']}")
+                
+                store_success = False
+                if hasattr(self, 'memory_integration') and self.memory_integration:
+                    try:
+                        # Use hierarchical memory system
+                        memory_id = await self.memory_integration.store(
+                            content=text,
+                            metadata=metadata,
+                            importance=significance
+                        )
+                        logger.info(f"Stored emotional context with ID {memory_id} in hierarchical memory")
+                        store_success = True
+                    except Exception as e:
+                        logger.error(f"Error storing emotional context in hierarchical memory: {e}", exc_info=True)
+                        # Fall back to base memory storage
+                
+                # Fallback: Use base memory storage if hierarchical failed or not available
+                if not store_success:
+                    try:
+                        memory_id = await self.store_memory(
+                            text=text,
+                            memory_type="emotional",
+                            significance=significance,
+                            metadata=metadata
+                        )
+                        logger.info(f"Stored emotional context with ID {memory_id} in base memory system")
+                        store_success = True
+                    except Exception as e:
+                        logger.error(f"Error storing emotional context in base memory: {e}", exc_info=True)
+            
+            logger.info(f"Stored emotional context: {metadata['primary_emotion']} (intensity: {metadata['intensity']})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error storing emotional context: {e}", exc_info=True)
+            return False
+    
+    async def compare_texts(self, text1: str, text2: str) -> float:
+        """
+        Compare two texts for semantic similarity.
+        
+        Args:
+            text1: First text
+            text2: Second text
+            
+        Returns:
+            Similarity score (0.0-1.0)
+        """
+        try:
+            # Generate embeddings for both texts
+            embedding1, _ = await self.process_embedding(text1)
+            embedding2, _ = await self.process_embedding(text2)
+            
+            if embedding1 is None or embedding2 is None:
+                logger.warning("Failed to generate embeddings for similarity comparison")
+                return 0.0
+            
+            # Calculate cosine similarity
+            if isinstance(embedding1, torch.Tensor) and isinstance(embedding2, torch.Tensor):
+                # Normalize embeddings
+                embedding1 = embedding1 / embedding1.norm()
+                embedding2 = embedding2 / embedding2.norm()
+                # Calculate dot product of normalized vectors (cosine similarity)
+                similarity = torch.dot(embedding1, embedding2).item()
+            else:
+                # Convert to numpy arrays if needed
+                if not isinstance(embedding1, np.ndarray):
+                    embedding1 = np.array(embedding1)
+                if not isinstance(embedding2, np.ndarray):
+                    embedding2 = np.array(embedding2)
+                
+                # Normalize embeddings
+                embedding1 = embedding1 / np.linalg.norm(embedding1)
+                embedding2 = embedding2 / np.linalg.norm(embedding2)
+                
+                # Calculate dot product (cosine similarity)
+                similarity = np.dot(embedding1, embedding2)
+            
+            # Ensure similarity is between 0 and 1
+            similarity = float(max(0.0, min(1.0, similarity)))
+            return similarity
+            
+        except Exception as e:
+            logger.error(f"Error comparing texts: {e}")
+            return 0.0
