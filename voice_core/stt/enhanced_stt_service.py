@@ -110,7 +110,7 @@ class EnhancedSTTService:
         # Publish initialization status
         if self.room and self.state_manager:
             try:
-                self.room.local_participant.publish_data(
+                asyncio.create_task(self.room.local_participant.publish_data(
                     json.dumps({
                         "type": "stt_initialized",
                         "models": {
@@ -120,7 +120,7 @@ class EnhancedSTTService:
                         "timestamp": time.time()
                     }).encode(),
                     reliable=True
-                )
+                ))
                 
                 if self.state_manager.current_state not in [VoiceState.SPEAKING, VoiceState.PROCESSING]:
                     asyncio.create_task(self.state_manager.transition_to(VoiceState.LISTENING))
@@ -170,17 +170,17 @@ class EnhancedSTTService:
             # Publish listening state
             if self.room and self.state_manager and self.state_manager.current_state != VoiceState.SPEAKING:
                 try:
-                    await self.room.local_participant.publish_data(
+                    asyncio.create_task(self.room.local_participant.publish_data(
                         json.dumps({
                             "type": "listening_state",
                             "active": True,
                             "timestamp": time.time()
                         }).encode(),
                         reliable=True
-                    )
+                    ))
                     
                     if self.state_manager.current_state not in [VoiceState.SPEAKING, VoiceState.PROCESSING]:
-                        await self.state_manager.transition_to(VoiceState.LISTENING)
+                        asyncio.create_task(self.state_manager.transition_to(VoiceState.LISTENING))
                         
                     self.logger.debug("Published listening state to room")
                 except Exception as e:
