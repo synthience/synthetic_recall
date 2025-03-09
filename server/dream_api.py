@@ -815,39 +815,18 @@ async def test_similarity_search(request: Request):
     try:
         knowledge_graph = request.app.state.knowledge_graph
         embedding_comparator = request.app.state.embedding_comparator
-        hypersphere_manager = request.app.state.hypersphere_manager
         
         data = await request.json()
         query = data.get("query", "")
         top_k = data.get("top_k", 3)
-        use_hypersphere = data.get("use_hypersphere", True)
         
         if not query:
             raise HTTPException(status_code=400, detail="No query provided")
         
-        # Get query embedding
-        query_embedding = []
-        if use_hypersphere and hypersphere_manager:
-            logger.info(f"Using HypersphereManager for query embedding")
-            query_embedding_data = await hypersphere_manager.get_embedding(text=query)
-            
-            # Check if the hypersphere_manager returned a valid response
-            if query_embedding_data and "status" in query_embedding_data:
-                if query_embedding_data["status"] == "error":
-                    logger.error(f"Error from HypersphereManager: {query_embedding_data.get('message', 'Unknown error')}")
-                    # Fall back to process_embedding
-                    logger.info("Falling back to process_embedding due to HypersphereManager error")
-                    embedding_data = await process_embedding(query)
-                    query_embedding = embedding_data.get("embedding", [])
-                else:
-                    query_embedding = query_embedding_data.get("embedding", [])
-            else:
-                # Directly access the embedding if the status isn't provided
-                query_embedding = query_embedding_data.get("embedding", [])
-        else:
-            logger.info(f"Using process_embedding for query embedding")
-            embedding_data = await process_embedding(query)
-            query_embedding = embedding_data.get("embedding", [])
+        # Always use process_embedding directly since HypersphereManager has issues
+        logger.info(f"Using process_embedding for query embedding")
+        embedding_data = await process_embedding(query)
+        query_embedding = embedding_data.get("embedding", [])
             
         if not query_embedding:
             raise HTTPException(status_code=500, detail="Failed to generate embedding for query")
