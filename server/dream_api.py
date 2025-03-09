@@ -738,16 +738,61 @@ async def test_batch_embedding(request: Request):
         if not texts:
             raise HTTPException(status_code=400, detail="No texts provided")
         
+        # Even if use_hypersphere is True, we'll prefer direct WebSocket calls for reliability
+        # but log that we would have used HypersphereManager for transparency
         if use_hypersphere and hypersphere_manager:
-            logger.info(f"Using HypersphereManager to batch process {len(texts)} embeddings")
-            result = await hypersphere_manager.batch_process_embeddings(texts=texts)
-            return {"status": "success", "embeddings": result.get("embeddings", [])}
-        else:
-            embeddings = []
-            for text in texts:
-                res = await process_embedding(text)
-                embeddings.append(res.get("embedding"))
-            return {"status": "success", "embeddings": embeddings}
+            logger.info(f"Using direct tensor server connection instead of HypersphereManager for reliable embedding generation")
+            
+        # Process each text directly using WebSocket connection to tensor server
+        embeddings = []
+        for i, text in enumerate(texts):
+            try:
+                # Use direct WebSocket connection for reliable embedding generation
+                tensor_ws = await get_tensor_connection()
+                
+                # Format the request according to what tensor_server.py expects
+                request_data = {
+                    "type": "embed",
+                    "text": text
+                }
+                
+                async with tensor_lock:
+                    await tensor_ws.send(json.dumps(request_data))
+                    response = await tensor_ws.recv()
+                    
+                response_data = json.loads(response)
+                
+                if response_data.get("type") == "embeddings" and "embeddings" in response_data:
+                    embeddings.append({
+                        "index": i,
+                        "embedding": response_data["embeddings"],
+                        "dimensions": len(response_data["embeddings"]),
+                        "model_version": "latest",  # Default model
+                        "status": "success"
+                    })
+                else:
+                    logger.warning(f"Failed to generate embedding for text #{i}: {text[:50]}...")
+                    embeddings.append({
+                        "index": i,
+                        "text": text[:50] + "..." if len(text) > 50 else text,
+                        "status": "error",
+                        "error": response_data.get("error", "Unknown error")
+                    })
+            except Exception as e:
+                logger.warning(f"Error generating embedding for text #{i}: {str(e)}")
+                embeddings.append({
+                    "index": i,
+                    "text": text[:50] + "..." if len(text) > 50 else text,
+                    "status": "error",
+                    "error": str(e)
+                })
+                
+        return {
+            "status": "success", 
+            "count": len(texts),
+            "successful": sum(1 for e in embeddings if e["status"] == "success"),
+            "embeddings": embeddings
+        }
     except Exception as e:
         logger.exception(f"Error in batch embedding processing: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing batch embeddings: {str(e)}")
@@ -823,10 +868,36 @@ async def test_similarity_search(request: Request):
         if not query:
             raise HTTPException(status_code=400, detail="No query provided")
         
-        # Always use process_embedding directly since HypersphereManager has issues
-        logger.info(f"Using process_embedding for query embedding")
-        embedding_data = await process_embedding(query)
-        query_embedding = embedding_data.get("embedding", [])
+        # Generate embedding directly using tensor server for reliability
+        logger.info(f"Generating embedding for query using direct tensor server connection")
+        try:
+            # Use direct WebSocket connection to tensor server
+            tensor_ws = await get_tensor_connection()
+            
+            # Format the request according to what tensor_server.py expects
+            request_data = {
+                "type": "embed",
+                "text": query
+            }
+            
+            async with tensor_lock:
+                await tensor_ws.send(json.dumps(request_data))
+                response = await tensor_ws.recv()
+                
+            response_data = json.loads(response)
+            
+            if response_data.get("type") == "embeddings" and "embeddings" in response_data:
+                query_embedding = response_data["embeddings"]
+                logger.info(f"Successfully generated embedding with {len(query_embedding)} dimensions")
+            else:
+                # Fall back to process_embedding if direct approach fails
+                logger.warning(f"Failed to generate embedding directly, falling back to process_embedding")
+                embedding_data = await process_embedding(query)
+                query_embedding = embedding_data.get("embedding", [])
+        except Exception as e:
+            logger.warning(f"Error in direct embedding generation: {e}, falling back to process_embedding")
+            embedding_data = await process_embedding(query)
+            query_embedding = embedding_data.get("embedding", [])
             
         if not query_embedding:
             raise HTTPException(status_code=500, detail="Failed to generate embedding for query")
@@ -845,6 +916,7 @@ async def test_similarity_search(request: Request):
             if not embedding:
                 continue
                 
+            # Use the embedding_comparator's compare method for consistency
             score = await embedding_comparator.compare(query_embedding, embedding)
             results.append({
                 "memory_id": memory_id,
@@ -854,11 +926,17 @@ async def test_similarity_search(request: Request):
             
         # Sort by score and return top_k
         results.sort(key=lambda x: x["score"], reverse=True)
-        top_results = results[:top_k] if top_k > 0 else results
-        return {"status": "success", "results": top_results}
+        top_results = results[:top_k]
+        
+        return {
+            "status": "success", 
+            "results": top_results,
+            "total_matches": len(results),
+            "query": query
+        }
     except Exception as e:
         logger.exception(f"Error in similarity search: {e}")
-        raise HTTPException(status_code=500, detail=f"Error performing similarity search: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error in similarity search: {str(e)}")
 
 @router.post("/test/create_test_report")
 async def create_test_report(request: Request):
