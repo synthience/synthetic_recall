@@ -176,67 +176,48 @@ class HypersphereManager:
         try:
             self.logger.info(f"Processing batch of {len(texts)} embeddings using model {model_version}")
             
-            # Check if dispatcher is properly initialized
-            if not self.dispatcher or not hasattr(self.dispatcher, 'batch_get_embeddings'):
-                raise ValueError("HypersphereDispatcher not properly initialized")
-            
-            # Process the batch of texts
-            batch_results = await self.dispatcher.batch_get_embeddings(
-                texts=texts,
-                model_version=model_version
-            )
-            
-            # Format the response
+            # Process each text individually since batch_get_embeddings may not be available
             embeddings = []
+            successful = 0
             
-            # Check if the batch_results is properly structured
-            if batch_results["status"] == "success" and "embeddings" in batch_results:
-                # Get the embeddings array from the results
-                result_embeddings = batch_results["embeddings"]
-                
-                for i, text in enumerate(texts):
-                    # Make sure we have corresponding embedding result
-                    if i < len(result_embeddings):
-                        result = result_embeddings[i]
-                        if result["status"] == "success":
-                            embeddings.append({
-                                "index": i,
-                                "embedding": result["embedding"],
-                                "dimensions": len(result["embedding"]),
-                                "model_version": result.get("model_version", model_version),
-                                "status": "success"
-                            })
-                        else:
-                            embeddings.append({
-                                "index": i,
-                                "text": text[:50] + "..." if len(text) > 50 else text,
-                                "status": "error",
-                                "error": result.get("error", "Unknown error")
-                            })
+            for i, text in enumerate(texts):
+                try:
+                    # Use the get_embedding method which should be available
+                    result = await self.dispatcher.get_embedding(text=text, model_version=model_version)
+                    
+                    if result and "embedding" in result:
+                        embeddings.append({
+                            "index": i,
+                            "embedding": result["embedding"],
+                            "dimensions": len(result["embedding"]),
+                            "model_version": result.get("model_version", model_version),
+                            "status": "success"
+                        })
+                        successful += 1
                     else:
-                        # Handle case where result is missing
+                        # Handle case where embedding is missing
+                        error_msg = result.get("message", "No embedding generated") if result else "No embedding generated"
+                        self.logger.warning(f"Failed to generate embedding for text: {text[:50]}...")
                         embeddings.append({
                             "index": i,
                             "text": text[:50] + "..." if len(text) > 50 else text,
                             "status": "error",
-                            "error": "No embedding generated"
+                            "error": error_msg
                         })
-            else:
-                # Handle error case
-                error_msg = batch_results.get("message", "Unknown error in batch processing")
-                for i, text in enumerate(texts):
+                except Exception as e:
+                    self.logger.warning(f"Failed to generate embedding for text: {text[:50]}...")
                     embeddings.append({
                         "index": i,
                         "text": text[:50] + "..." if len(text) > 50 else text,
                         "status": "error",
-                        "error": error_msg
+                        "error": str(e)
                     })
             
             return {
                 "status": "success",
                 "model_version": model_version,
                 "count": len(texts),
-                "successful": sum(1 for e in embeddings if e["status"] == "success"),
+                "successful": successful,
                 "embeddings": embeddings
             }
             
