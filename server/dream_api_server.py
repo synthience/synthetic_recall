@@ -22,8 +22,12 @@ from memory.lucidia_memory_system.core.Self.self_model import LucidiaSelfModel a
 from memory.lucidia_memory_system.core.World.world_model import LucidiaWorldModel
 from memory.lucidia_memory_system.core.embedding_comparator import EmbeddingComparator
 from memory.lucidia_memory_system.core.integration import MemoryIntegration
+from memory.lucidia_memory_system.core.reflection_engine import ReflectionEngine
+from memory.lucidia_memory_system.core.hypersphere_dispatcher import HypersphereDispatcher
+from memory.lucidia_memory_system.core.manifold_geometry import ManifoldGeometryRegistry
 from server.memory_client import EnhancedMemoryClient
 from server.llm_pipeline import LocalLLMPipeline
+from server.hypersphere_manager import HypersphereManager
 from voice_core.config.config import LLMConfig
 
 # Configure logging
@@ -57,17 +61,19 @@ llm_service = None
 self_model = None
 world_model = None  # Added world_model
 embedding_comparator = None
+reflection_engine = None
+hypersphere_manager = None
 
 # Environment variables
-TENSOR_SERVER_URL = os.getenv('TENSOR_SERVER_URL', 'ws://localhost:5001')
-HPC_SERVER_URL = os.getenv('HPC_SERVER_URL', 'ws://localhost:5005')
+STORAGE_PATH = os.getenv('LUCIDIA_STORAGE_PATH', './data')
+TENSOR_SERVER_URL = os.getenv('TENSOR_SERVER_URL', 'ws://nemo_sig_v3:5001')
+HPC_SERVER_URL = os.getenv('HPC_SERVER_URL', 'ws://nemo_sig_v3:5005')
+LLM_API_ENDPOINT = os.getenv('LLM_API_ENDPOINT', 'http://localhost:1234/v1/chat/completions')
+LLM_MODEL = os.getenv('LLM_MODEL', 'qwen2.5-7b-instruct')
+PING_INTERVAL = float(os.getenv('PING_INTERVAL', '30.0'))
 CONNECTION_RETRY_LIMIT = int(os.getenv('CONNECTION_RETRY_LIMIT', '5'))
 CONNECTION_RETRY_DELAY = float(os.getenv('CONNECTION_RETRY_DELAY', '2.0'))
-CONNECTION_TIMEOUT = float(os.getenv('CONNECTION_TIMEOUT', '10.0'))
-PING_INTERVAL = float(os.getenv('PING_INTERVAL', '30.0'))
-STORAGE_PATH = os.getenv('STORAGE_PATH', '/workspace/project/memory_store')
-LLM_API_ENDPOINT = os.getenv('LLM_API_ENDPOINT', 'http://host.docker.internal:1234/v1')  # LM Studio default endpoint
-LLM_MODEL = os.getenv('LLM_MODEL', 'qwen_qwq-32b')  # Default model from memory
+DEFAULT_MODEL_VERSION = os.getenv('DEFAULT_MODEL_VERSION', 'latest')
 
 # Dependency to get dream processor instance
 def get_dream_processor():
@@ -89,6 +95,14 @@ def get_world_model():
 def get_embedding_comparator():
     return embedding_comparator
 
+# Dependency to get reflection engine instance
+def get_reflection_engine():
+    return reflection_engine
+
+# Dependency to get hypersphere manager instance
+def get_hypersphere_manager():
+    return hypersphere_manager
+
 # Create a patched version of WorldModel that initializes entity_importance
 class PatchedWorldModel(LucidiaWorldModel):
     def __init__(self, config=None):
@@ -98,7 +112,7 @@ class PatchedWorldModel(LucidiaWorldModel):
 
 # Initialize components
 async def initialize_components():
-    global dream_processor, knowledge_graph, memory_client, llm_service, self_model, world_model, embedding_comparator
+    global dream_processor, knowledge_graph, memory_client, llm_service, self_model, world_model, embedding_comparator, reflection_engine, hypersphere_manager
     
     try:
         logger.info(f"Using storage path: {STORAGE_PATH}")
@@ -108,6 +122,7 @@ async def initialize_components():
         os.makedirs(f"{STORAGE_PATH}/world_model", exist_ok=True)
         os.makedirs(f"{STORAGE_PATH}/knowledge_graph", exist_ok=True)
         os.makedirs(f"{STORAGE_PATH}/dreams", exist_ok=True)
+        os.makedirs(f"{STORAGE_PATH}/reflection", exist_ok=True)
         
         logger.info("Initializing knowledge graph...")
         knowledge_graph = KnowledgeGraph(config={
@@ -138,6 +153,22 @@ async def initialize_components():
             "retry_delay": CONNECTION_RETRY_DELAY
         })
         await memory_client.initialize()
+        
+        logger.info("Initializing HypersphereManager for enhanced embedding operations...")
+        hypersphere_manager = HypersphereManager(
+            memory_client=memory_client,
+            config={
+                "max_connections": 5,
+                "min_batch_size": 1,
+                "max_batch_size": 32,
+                "target_latency": 100,  # ms
+                "default_model_version": DEFAULT_MODEL_VERSION,
+                "supported_model_versions": ["latest", "v1", "v2"],
+                "batch_timeout": 0.1,  # seconds
+                "use_circuit_breaker": True
+            }
+        )
+        await hypersphere_manager.initialize()
         
         logger.info("Initializing LLM service for dream processing...")
         # Create LLM configuration
@@ -174,6 +205,25 @@ async def initialize_components():
             }
         )
         
+        logger.info("Initializing reflection engine...")
+        memory_integration = MemoryIntegration(
+            config={
+                "memory_client": memory_client,
+                "knowledge_graph": knowledge_graph
+            }
+        )
+        reflection_engine = ReflectionEngine(
+            knowledge_graph=knowledge_graph,
+            memory_integration=memory_integration,
+            llm_service=llm_service,
+            hypersphere_dispatcher=hypersphere_manager.dispatcher,
+            config={
+                "storage_path": f"{STORAGE_PATH}/reflection",
+                "domain": "synthien_studies",
+                "default_model_version": DEFAULT_MODEL_VERSION
+            }
+        )
+        
         # Store components in app state for dependency injection
         app.state.memory_client = memory_client
         app.state.dream_processor = dream_processor
@@ -182,6 +232,8 @@ async def initialize_components():
         app.state.knowledge_graph = knowledge_graph
         app.state.embedding_comparator = embedding_comparator
         app.state.llm_service = llm_service  # Make LLM service available
+        app.state.reflection_engine = reflection_engine  # Make reflection engine available
+        app.state.hypersphere_manager = hypersphere_manager  # Make hypersphere manager available
         
         logger.info("All components initialized successfully")
         
@@ -293,20 +345,27 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Shutting down Dream API server...")
-    global dream_processor, memory_client
     
-    if dream_processor and dream_processor.is_dreaming:
-        await dream_processor.stop_dream_session()
-    
-    if memory_client:
-        await memory_client.close()
-    
-    # Close any open connections
+    # Close connections
     try:
-        from server.dream_api import shutdown_connections
-        await shutdown_connections()
+        # Shutdown reflection engine if it's running
+        if reflection_engine and hasattr(reflection_engine, 'stop') and callable(reflection_engine.stop):
+            await reflection_engine.stop()
+            logger.info("Reflection engine stopped")
+        
+        # Shutdown hypersphere manager
+        if hypersphere_manager and hasattr(hypersphere_manager, 'shutdown') and callable(hypersphere_manager.shutdown):
+            await hypersphere_manager.shutdown()
+            logger.info("Hypersphere manager shut down")
+            
+        # Close memory client connections
+        if memory_client and hasattr(memory_client, 'close_connections') and callable(memory_client.close_connections):
+            await memory_client.close_connections()
+            logger.info("Memory client connections closed")
     except Exception as e:
-        logger.error(f"Error shutting down connections: {e}")
+        logger.error(f"Error during shutdown: {e}")
+        
+    logger.info("Dream API server shutdown complete")
 
 # Make app_dependencies available for the router
 import sys
@@ -314,4 +373,6 @@ sys.modules["app_dependencies"] = sys.modules[__name__]
 
 # Run the server
 if __name__ == "__main__":
-    uvicorn.run("dream_api_server:app", host="0.0.0.0", port=8000, log_level="info")
+    port = int(os.getenv("DREAM_API_PORT", "8080"))
+    logger.info(f"Starting Dream API server on port {port}...")
+    uvicorn.run("dream_api_server:app", host="0.0.0.0", port=port, log_level="info")
