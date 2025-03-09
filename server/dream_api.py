@@ -845,7 +845,7 @@ async def test_similarity_search(request: Request):
             if not embedding:
                 continue
                 
-            score = embedding_comparator.calculate_similarity(query_embedding, embedding)
+            score = await embedding_comparator.compare(query_embedding, embedding)
             results.append({
                 "memory_id": memory_id,
                 "content": content,
