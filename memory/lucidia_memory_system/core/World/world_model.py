@@ -1357,13 +1357,15 @@ class LucidiaWorldModel:
         
         reverse_type = reverse_types.get(relationship_type, "related_to")
         
-        if entity1 not in self.concept_network[entity2]["relationships"]:
-            self.concept_network[entity2]["relationships"][entity1] = []
+        if concept1 not in self.concept_network[concept2]:
+            self.concept_network[concept2][concept1] = []
         
-        self.concept_network[entity2]["relationships"][entity1].append({
+        self.concept_network[concept2][concept1].append({
             "type": reverse_type,
             "strength": strength,
-            "added": datetime.now().isoformat()
+            "added": datetime.now().isoformat(),
+            "verification": "initial_knowledge",
+            "stability": 0.9  # Initial stability of the relationship
         })
 
     def register_entity(self, entity_id: str, entity_type: str, attributes: Dict[str, Any], confidence: float) -> str:
@@ -1470,11 +1472,26 @@ class LucidiaWorldModel:
             relationship_type: Type of relationship
             strength: Strength of the relationship (0.0 to 1.0)
         """
-        # Check if both entities exist
-        if entity1 not in self.entity_registry or entity2 not in self.entity_registry:
-            self.logger.warning(f"Cannot create relationship: one or both entities don't exist ({entity1}, {entity2})")
-            return
+        # Check if both entities exist and pre-register if needed
+        if entity1 not in self.entity_registry:
+            self.logger.info(f"Pre-registering missing entity before creating relationship: {entity1}")
+            self.register_entity(
+                entity_id=entity1,
+                entity_type="undefined",
+                attributes={"auto_registered": True, "needs_definition": True},
+                confidence=0.5
+            )
+            
+        if entity2 not in self.entity_registry:
+            self.logger.info(f"Pre-registering missing entity before creating relationship: {entity2}")
+            self.register_entity(
+                entity_id=entity2,
+                entity_type="undefined",
+                attributes={"auto_registered": True, "needs_definition": True},
+                confidence=0.5
+            )
         
+        # Now we can safely add the relationship
         # Add relationship to first entity
         if entity2 not in self.entity_registry[entity1]["relationships"]:
             self.entity_registry[entity1]["relationships"][entity2] = []

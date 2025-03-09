@@ -113,6 +113,2253 @@ class ChatProcessor:
         return response
 ```
 
+# dream_api_server.py
+
+```py
+# dream_api_server.py
+import asyncio
+import logging
+import os
+import sys
+import uvicorn
+from fastapi import FastAPI, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime
+
+# Add project root to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Import the dream API router
+from server.dream_api import router as dream_router
+
+# Import memory system components
+from memory.lucidia_memory_system.core.dream_processor import LucidiaDreamProcessor as DreamProcessor
+from memory.lucidia_memory_system.core.knowledge_graph import LucidiaKnowledgeGraph as KnowledgeGraph
+# Import the enhanced models from the correct paths
+from memory.lucidia_memory_system.core.Self.self_model import LucidiaSelfModel as SelfModel
+from memory.lucidia_memory_system.core.World.world_model import LucidiaWorldModel
+from memory.lucidia_memory_system.core.embedding_comparator import EmbeddingComparator
+from memory.lucidia_memory_system.core.integration import MemoryIntegration
+from memory.lucidia_memory_system.core.reflection_engine import ReflectionEngine
+from memory.lucidia_memory_system.core.hypersphere_dispatcher import HypersphereDispatcher
+from memory.lucidia_memory_system.core.manifold_geometry import ManifoldGeometryRegistry
+from server.memory_client import EnhancedMemoryClient
+from server.llm_pipeline import LocalLLMPipeline
+from server.hypersphere_manager import HypersphereManager
+from voice_core.config.config import LLMConfig
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("dream_api_server.log")
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Create FastAPI app
+app = FastAPI(title="Lucidia Dream API", description="API for dream processing in Lucidia Memory System")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global variables for dependencies
+dream_processor = None
+knowledge_graph = None
+memory_client = None
+llm_service = None
+self_model = None
+world_model = None  # Added world_model
+embedding_comparator = None
+reflection_engine = None
+hypersphere_manager = None
+
+# Environment variables
+STORAGE_PATH = os.getenv('LUCIDIA_STORAGE_PATH', './data')
+TENSOR_SERVER_URL = os.getenv('TENSOR_SERVER_URL', 'ws://nemo_sig_v3:5001')
+HPC_SERVER_URL = os.getenv('HPC_SERVER_URL', 'ws://nemo_sig_v3:5005')
+LLM_API_ENDPOINT = os.getenv('LLM_API_ENDPOINT', 'http://localhost:1234/v1/chat/completions')
+LLM_MODEL = os.getenv('LLM_MODEL', 'qwen2.5-7b-instruct')
+PING_INTERVAL = float(os.getenv('PING_INTERVAL', '30.0'))
+CONNECTION_RETRY_LIMIT = int(os.getenv('CONNECTION_RETRY_LIMIT', '5'))
+CONNECTION_RETRY_DELAY = float(os.getenv('CONNECTION_RETRY_DELAY', '2.0'))
+DEFAULT_MODEL_VERSION = os.getenv('DEFAULT_MODEL_VERSION', 'latest')
+
+# Dependency to get dream processor instance
+def get_dream_processor():
+    return dream_processor
+
+# Dependency to get knowledge graph instance
+def get_knowledge_graph():
+    return knowledge_graph
+
+# Dependency to get self model instance
+def get_self_model():
+    return self_model
+
+# Dependency to get world model instance
+def get_world_model():
+    return world_model
+
+# Dependency to get embedding comparator
+def get_embedding_comparator():
+    return embedding_comparator
+
+# Dependency to get reflection engine instance
+def get_reflection_engine():
+    return reflection_engine
+
+# Dependency to get hypersphere manager instance
+def get_hypersphere_manager():
+    return hypersphere_manager
+
+# Create a patched version of WorldModel that initializes entity_importance
+class PatchedWorldModel(LucidiaWorldModel):
+    def __init__(self, config=None):
+        # Initialize the missing attribute before parent __init__ calls _initialize_core_entities
+        self.entity_importance = {}
+        super().__init__(config)
+
+# Initialize components
+async def initialize_components():
+    global dream_processor, knowledge_graph, memory_client, llm_service, self_model, world_model, embedding_comparator, reflection_engine, hypersphere_manager
+    
+    try:
+        logger.info(f"Using storage path: {STORAGE_PATH}")
+        
+        # Ensure storage directories exist
+        os.makedirs(f"{STORAGE_PATH}/self_model", exist_ok=True)
+        os.makedirs(f"{STORAGE_PATH}/world_model", exist_ok=True)
+        os.makedirs(f"{STORAGE_PATH}/knowledge_graph", exist_ok=True)
+        os.makedirs(f"{STORAGE_PATH}/dreams", exist_ok=True)
+        os.makedirs(f"{STORAGE_PATH}/reflection", exist_ok=True)
+        
+        logger.info("Initializing knowledge graph...")
+        knowledge_graph = KnowledgeGraph(config={
+            "storage_directory": f"{STORAGE_PATH}/knowledge_graph"
+        })
+        # Knowledge graph doesn't have load method - it initializes in constructor
+        
+        logger.info("Initializing self model...")
+        self_model = SelfModel(config={
+            "storage_directory": f"{STORAGE_PATH}/self_model",
+            "show_ascii": True
+        })
+        
+        logger.info("Initializing world model...")
+        world_model = PatchedWorldModel(config={
+            "storage_directory": f"{STORAGE_PATH}/world_model"
+        })
+        
+        logger.info("Initializing memory client...")
+        # Connect to tensor and HPC servers running in the same Docker network
+        # Note: We don't establish the connections here, they will be established on-demand
+        # by the dream_api.py get_tensor_connection() and get_hpc_connection() functions
+        memory_client = EnhancedMemoryClient(config={
+            "tensor_server_url": TENSOR_SERVER_URL,
+            "hpc_server_url": HPC_SERVER_URL,
+            "ping_interval": PING_INTERVAL,
+            "max_retries": CONNECTION_RETRY_LIMIT,
+            "retry_delay": CONNECTION_RETRY_DELAY
+        })
+        await memory_client.initialize()
+        
+        logger.info("Initializing HypersphereManager for enhanced embedding operations...")
+        hypersphere_manager = HypersphereManager(
+            memory_client=memory_client,
+            config={
+                "max_connections": 5,
+                "min_batch_size": 1,
+                "max_batch_size": 32,
+                "target_latency": 100,  # ms
+                "default_model_version": DEFAULT_MODEL_VERSION,
+                "supported_model_versions": ["latest", "v1", "v2"],
+                "batch_timeout": 0.1,  # seconds
+                "use_circuit_breaker": True
+            }
+        )
+        await hypersphere_manager.initialize()
+        
+        logger.info("Initializing LLM service for dream processing...")
+        # Create LLM configuration
+        llm_config = LLMConfig(
+            api_endpoint=LLM_API_ENDPOINT,
+            model=LLM_MODEL,
+            system_prompt="You are Lucidia's reflection system, analyzing performance and suggesting improvements during dream processing.",
+            temperature=float(os.getenv('LLM_TEMPERATURE', '0.7')),
+            max_tokens=int(os.getenv('LLM_MAX_TOKENS', '1024')),
+            timeout=30
+        )
+        llm_service = LocalLLMPipeline(config=llm_config)
+        await llm_service.initialize()
+        
+        # Set memory_core in models
+        self_model.memory_core = memory_client
+        world_model.memory_core = memory_client
+        
+        # Set LLM service in models
+        self_model.llm_service = llm_service
+        world_model.llm_service = llm_service
+        
+        logger.info("Initializing embedding comparator...")
+        embedding_comparator = EmbeddingComparator(hpc_client=memory_client)
+        
+        logger.info("Initializing dream processor...")
+        dream_processor = DreamProcessor(
+            self_model=self_model,
+            world_model=world_model,
+            knowledge_graph=knowledge_graph,
+            config={
+                "storage_path": f"{STORAGE_PATH}/dreams",
+                "llm_service": llm_service
+            }
+        )
+        
+        logger.info("Initializing reflection engine...")
+        memory_integration = MemoryIntegration(
+            config={
+                "memory_client": memory_client,
+                "knowledge_graph": knowledge_graph
+            }
+        )
+        reflection_engine = ReflectionEngine(
+            knowledge_graph=knowledge_graph,
+            memory_integration=memory_integration,
+            llm_service=llm_service,
+            hypersphere_dispatcher=hypersphere_manager.dispatcher,
+            config={
+                "storage_path": f"{STORAGE_PATH}/reflection",
+                "domain": "synthien_studies",
+                "default_model_version": DEFAULT_MODEL_VERSION
+            }
+        )
+        
+        # Store components in app state for dependency injection
+        app.state.memory_client = memory_client
+        app.state.dream_processor = dream_processor
+        app.state.self_model = self_model
+        app.state.world_model = world_model
+        app.state.knowledge_graph = knowledge_graph
+        app.state.embedding_comparator = embedding_comparator
+        app.state.llm_service = llm_service  # Make LLM service available
+        app.state.reflection_engine = reflection_engine  # Make reflection engine available
+        app.state.hypersphere_manager = hypersphere_manager  # Make hypersphere manager available
+        
+        logger.info("All components initialized successfully")
+        
+        # Schedule a background task for continuous dream processing when idle
+        asyncio.create_task(continuous_dream_processing())
+        
+    except Exception as e:
+        logger.error(f"Error initializing components: {e}", exc_info=True)
+        raise
+
+# Background task for continuous dream processing
+async def continuous_dream_processing():
+    global dream_processor, self_model, world_model
+    
+    # Wait for initial startup to complete
+    await asyncio.sleep(60)
+    
+    while True:
+        try:
+            # Check if system is idle (no active voice sessions)
+            is_idle = await check_system_idle()
+            
+            if is_idle and dream_processor and not dream_processor.is_dreaming:
+                logger.info("System is idle, starting dream session...")
+                
+                # Get tensor and HPC connections from dream_api
+                from server.dream_api import get_tensor_connection, get_hpc_connection
+                tensor_conn = await get_tensor_connection()
+                hpc_conn = await get_hpc_connection()
+                
+                # Perform self-reflection before dream session
+                try:
+                    logger.info("Performing self-model reflection...")
+                    await self_model.reflect(["performance", "improvement"])
+                except Exception as e:
+                    logger.error(f"Error during self-reflection: {e}")
+                
+                # Analyze world model knowledge graph
+                try:
+                    logger.info("Analyzing world model knowledge graph...")
+                    await world_model.analyze_concept_network()
+                except Exception as e:
+                    logger.error(f"Error analyzing world model: {e}")
+                
+                # Start a dream session with the connections
+                await dream_processor.schedule_dream_session(
+                    duration_minutes=15,
+                    tensor_connection=tensor_conn,
+                    hpc_connection=hpc_conn,
+                    priority="low"  # Use low priority for background processing
+                )
+                
+                # Wait for dream session to complete
+                while dream_processor.is_dreaming:
+                    await asyncio.sleep(30)
+                
+                # Wait before checking again
+                await asyncio.sleep(300)  # 5 minutes
+            else:
+                # Check again in 1 minute
+                await asyncio.sleep(60)
+                
+        except Exception as e:
+            logger.error(f"Error in continuous dream processing: {e}")
+            await asyncio.sleep(300)  # Wait 5 minutes before retrying
+
+# Check if the system is idle (no active voice sessions)
+async def check_system_idle():
+    # This is a placeholder - implement actual idle detection logic
+    # For example, check if there are any active LiveKit sessions
+    # or if there have been any memory operations in the last 30 minutes
+    
+    try:
+        # Check if current time is within idle hours (1 AM to 5 AM by default)
+        current_hour = datetime.now().hour
+        idle_hours = os.getenv('IDLE_HOURS', '1-5')
+        
+        # Parse idle hours range
+        start_hour, end_hour = map(int, idle_hours.split('-'))
+        
+        # Check if current hour is within idle range
+        is_idle_time = start_hour <= current_hour <= end_hour
+        
+        # Check for active sessions (placeholder)
+        has_active_sessions = False  # Replace with actual check
+        
+        # Check for recent memory operations (placeholder)
+        last_memory_op_time = None  # Replace with actual check
+        recent_memory_activity = False  # Replace with actual check
+        
+        # System is idle if it's idle time and there are no active sessions or recent activity
+        return is_idle_time and not has_active_sessions and not recent_memory_activity
+        
+    except Exception as e:
+        logger.error(f"Error checking system idle state: {e}")
+        # Default to not idle if there's an error checking
+        return False
+
+# Register the dream API router
+app.include_router(dream_router)
+
+# Startup event
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Starting Dream API server...")
+    await initialize_components()
+
+# Shutdown event
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Shutting down Dream API server...")
+    
+    # Close connections
+    try:
+        # Shutdown reflection engine if it's running
+        if reflection_engine and hasattr(reflection_engine, 'stop') and callable(reflection_engine.stop):
+            await reflection_engine.stop()
+            logger.info("Reflection engine stopped")
+        
+        # Shutdown hypersphere manager
+        if hypersphere_manager and hasattr(hypersphere_manager, 'shutdown') and callable(hypersphere_manager.shutdown):
+            await hypersphere_manager.shutdown()
+            logger.info("Hypersphere manager shut down")
+            
+        # Close memory client connections
+        if memory_client and hasattr(memory_client, 'close_connections') and callable(memory_client.close_connections):
+            await memory_client.close_connections()
+            logger.info("Memory client connections closed")
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}")
+        
+    logger.info("Dream API server shutdown complete")
+
+# Make app_dependencies available for the router
+import sys
+sys.modules["app_dependencies"] = sys.modules[__name__]
+
+# Run the server
+if __name__ == "__main__":
+    port = int(os.getenv("DREAM_API_PORT", "8080"))
+    logger.info(f"Starting Dream API server on port {port}...")
+    uvicorn.run("dream_api_server:app", host="0.0.0.0", port=port, log_level="info")
+
+```
+
+# dream_api.py
+
+```py
+# api/dream_api.py
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Query, Request, Body
+from pydantic import BaseModel
+from typing import Optional, Dict, Any, List, Union
+import logging
+import asyncio
+import time
+import os
+import json
+from datetime import datetime, timedelta
+import websockets
+from websockets.exceptions import ConnectionClosed
+
+# Import the enhanced models from the correct paths
+from memory.lucidia_memory_system.core.Self.self_model import LucidiaSelfModel as SelfModel
+from memory.lucidia_memory_system.core.World.world_model import LucidiaWorldModel as WorldModel
+from memory.lucidia_memory_system.core.dream_processor import LucidiaDreamProcessor as DreamProcessor
+from memory.lucidia_memory_system.core.knowledge_graph import LucidiaKnowledgeGraph as KnowledgeGraph
+from memory.lucidia_memory_system.core.embedding_comparator import EmbeddingComparator
+from server.llm_pipeline import LocalLLMPipeline
+from memory.lucidia_memory_system.core.dream_structures import DreamReport, DreamFragment
+from memory.lucidia_memory_system.core.reflection_engine import ReflectionEngine
+
+router = APIRouter(prefix="/api/dream", tags=["Dream Processing"])
+
+logger = logging.getLogger(__name__)
+
+# In-memory store of active dream sessions
+dream_sessions = {}
+
+# Configuration values, can be overridden by environment variables
+TENSOR_SERVER_URL = os.getenv('TENSOR_SERVER_URL', 'ws://nemo_sig_v3:5001')
+HPC_SERVER_URL = os.getenv('HPC_SERVER_URL', 'ws://nemo_sig_v3:5005')
+CONNECTION_RETRY_LIMIT = int(os.getenv('CONNECTION_RETRY_LIMIT', '5'))
+CONNECTION_RETRY_DELAY = float(os.getenv('CONNECTION_RETRY_DELAY', '2.0'))
+CONNECTION_TIMEOUT = float(os.getenv('CONNECTION_TIMEOUT', '10.0'))
+
+# WebSocket connections and locks
+tensor_connection = None
+hpc_connection = None
+tensor_lock = asyncio.Lock()
+hpc_lock = asyncio.Lock()
+
+class DreamRequest(BaseModel):
+    duration_minutes: int = 30
+    mode: Optional[str] = "full"  # full, consolidate, insights, optimize
+    scheduled: bool = False  # Whether to schedule for later
+    schedule_time: Optional[str] = None  # ISO format datetime for scheduled execution
+    priority: str = "normal"  # low, normal, high
+    include_self_model: bool = True  # Whether to include self-model in dream processing
+    include_world_model: bool = True  # Whether to include world-model in dream processing
+    
+class ConsolidateRequest(BaseModel):
+    target: Optional[str] = "all"  # all, redundant, low_significance
+    limit: Optional[int] = 100
+    min_significance: Optional[float] = 0.3
+    
+class OptimizeRequest(BaseModel):
+    target: Optional[str] = "all"  # all, files, database
+    aggressive: bool = False  # Whether to be aggressive with optimization
+    
+class InsightRequest(BaseModel):
+    timeframe: Optional[str] = "recent"  # recent, all, week, month
+    limit: Optional[int] = 20
+    categories: Optional[List[str]] = None
+
+class KnowledgeGraphRequest(BaseModel):
+    concept: Optional[str] = None
+    relationship: Optional[str] = None
+    depth: int = 1
+
+class SelfReflectionRequest(BaseModel):
+    focus_areas: Optional[List[str]] = None  # identity, capabilities, improvement, etc.
+    depth: str = "standard"  # shallow, standard, deep
+
+class WorldModelUpdateRequest(BaseModel):
+    concept: str
+    definition: str
+    related: Optional[List[str]] = None
+    attributes: Optional[Dict[str, Any]] = None
+    source: Optional[str] = None
+
+class WorldModelQueryRequest(BaseModel):
+    query: str
+    max_results: int = 10
+    min_relevance: float = 0.3
+
+class ScheduleRequest(BaseModel):
+    task: str  # dream, consolidate, optimize, insights, reflection
+    schedule: str  # once, daily, weekly
+    time: str  # ISO format time or cron expression
+    parameters: Dict[str, Any] = {}
+
+class KnowledgeAddRequest(BaseModel):
+    type: str  # concept or relationship
+    id: Optional[str] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    source_id: Optional[str] = None
+    target_id: Optional[str] = None
+    relation_type: Optional[str] = None
+    strength: Optional[float] = None
+    
+    class Config:
+        # Makes the validation more lenient by allowing extra fields and coercing types
+        extra = "ignore"
+        validate_assignment = True
+
+class DreamReportRequest(BaseModel):
+    """Request model for generating a dream report."""
+    memory_ids: Optional[List[str]] = None
+    timeframe: Optional[str] = "recent"
+    limit: int = 20
+    domain: str = "synthien_studies"
+    title: Optional[str] = None
+    description: Optional[str] = None
+
+class DreamReportRefineRequest(BaseModel):
+    """Request model for refining an existing dream report."""
+    report_id: str
+    new_evidence_ids: Optional[List[str]] = None
+    update_analysis: bool = True
+
+class CreateTestReportRequest(BaseModel):
+    title: str
+    fragments: List[Dict[str, Any]]
+
+class BatchEmbeddingRequest(BaseModel):
+    texts: List[str]
+    use_hypersphere: bool = True
+
+class SimilaritySearchRequest(BaseModel):
+    query: str
+    top_k: int = 3
+    use_hypersphere: bool = True
+
+class TestMemoryRequest(BaseModel):
+    memories: List[Dict[str, Any]]
+
+class RefineReportRequest(BaseModel):
+    report_id: str
+
+# Dependency functions to get component instances
+
+def get_dream_processor(request: Request):
+    """Dependency to get dream processor instance."""
+    return request.app.state.dream_processor
+
+def get_memory_client(request: Request):
+    """Dependency to get memory client instance."""
+    return request.app.state.memory_client
+
+def get_knowledge_graph(request: Request):
+    """Dependency to get knowledge graph instance."""
+    return request.app.state.knowledge_graph
+
+def get_self_model(request: Request):
+    """Dependency to get self model instance."""
+    return request.app.state.self_model
+
+def get_world_model(request: Request):
+    """Dependency to get world model instance."""
+    return request.app.state.world_model
+
+def get_embedding_comparator(request: Request):
+    """Dependency to get embedding comparator."""
+    return request.app.state.embedding_comparator
+
+def get_llm_service(request: Request):
+    """Dependency to get LLM service instance."""
+    return request.app.state.llm_service
+
+def get_reflection_engine(request: Request):
+    """Dependency to get reflection engine instance."""
+    return request.app.state.reflection_engine
+
+async def get_tensor_connection():
+    """Get or create a connection to the tensor server."""
+    global tensor_connection
+    
+    async with tensor_lock:
+        # Check if connection exists and isn't closed
+        if tensor_connection:
+            try:
+                # Test if connection is still alive with a ping
+                pong_waiter = await tensor_connection.ping()
+                await asyncio.wait_for(pong_waiter, timeout=2.0)
+                return tensor_connection
+            except (asyncio.TimeoutError, websockets.exceptions.WebSocketException):
+                # Connection is dead or closed, need to create a new one
+                logger.info("Tensor connection is closed or unresponsive, creating a new one")
+                try:
+                    await tensor_connection.close()
+                except:
+                    pass
+                tensor_connection = None
+        
+        # Create new connection with retry logic
+        for attempt in range(CONNECTION_RETRY_LIMIT):
+            try:
+                logger.info(f"Connecting to tensor server at {TENSOR_SERVER_URL} (attempt {attempt+1}/{CONNECTION_RETRY_LIMIT})")
+                connection = await asyncio.wait_for(
+                    websockets.connect(TENSOR_SERVER_URL, ping_interval=30.0),
+                    timeout=CONNECTION_TIMEOUT
+                )
+                
+                # Test connection with a ping
+                pong_waiter = await connection.ping()
+                await asyncio.wait_for(pong_waiter, timeout=5.0)
+                
+                # Store and return connection
+                tensor_connection = connection
+                logger.info("Successfully connected to tensor server")
+                return connection
+                
+            except (asyncio.TimeoutError, ConnectionRefusedError, ConnectionError, websockets.exceptions.WebSocketException) as e:
+                logger.warning(f"Failed to connect to tensor server: {e}")
+                if attempt < CONNECTION_RETRY_LIMIT - 1:
+                    retry_delay = CONNECTION_RETRY_DELAY * (2 ** attempt)  # Exponential backoff
+                    logger.info(f"Retrying in {retry_delay:.2f}s...")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.error(f"Failed to connect to tensor server after {CONNECTION_RETRY_LIMIT} attempts")
+                    raise HTTPException(status_code=503, detail="Tensor server unavailable")
+
+async def get_hpc_connection():
+    """Get or create a connection to the HPC server."""
+    global hpc_connection
+    
+    async with hpc_lock:
+        # Check if connection exists and isn't closed
+        if hpc_connection:
+            try:
+                # Test if connection is still alive with a ping
+                pong_waiter = await hpc_connection.ping()
+                await asyncio.wait_for(pong_waiter, timeout=2.0)
+                return hpc_connection
+            except (asyncio.TimeoutError, websockets.exceptions.WebSocketException):
+                # Connection is dead or closed, need to create a new one
+                logger.info("HPC connection is closed or unresponsive, creating a new one")
+                try:
+                    await hpc_connection.close()
+                except:
+                    pass
+                hpc_connection = None
+        
+        # Create new connection with retry logic
+        for attempt in range(CONNECTION_RETRY_LIMIT):
+            try:
+                logger.info(f"Connecting to HPC server at {HPC_SERVER_URL} (attempt {attempt+1}/{CONNECTION_RETRY_LIMIT})")
+                connection = await asyncio.wait_for(
+                    websockets.connect(HPC_SERVER_URL, ping_interval=30.0),
+                    timeout=CONNECTION_TIMEOUT
+                )
+                
+                # Test connection with a ping
+                pong_waiter = await connection.ping()
+                await asyncio.wait_for(pong_waiter, timeout=5.0)
+                
+                # Store and return connection
+                hpc_connection = connection
+                logger.info("Successfully connected to HPC server")
+                return connection
+                
+            except (asyncio.TimeoutError, ConnectionRefusedError, ConnectionError, websockets.exceptions.WebSocketException) as e:
+                logger.warning(f"Failed to connect to HPC server: {e}")
+                if attempt < CONNECTION_RETRY_LIMIT - 1:
+                    retry_delay = CONNECTION_RETRY_DELAY * (2 ** attempt)  # Exponential backoff
+                    logger.info(f"Retrying in {retry_delay:.2f}s...")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.error(f"Failed to connect to HPC server after {CONNECTION_RETRY_LIMIT} attempts")
+                    raise HTTPException(status_code=503, detail="HPC server unavailable")
+
+async def process_embedding(text: str) -> Dict[str, Any]:
+    """Process text through tensor server and HPC for embedding and significance."""
+    try:
+        # Connect to tensor server
+        tensor_conn = await get_tensor_connection()
+        
+        # Create a standardized request
+        message_id = f"{int(time.time() * 1000)}-dream"
+        tensor_payload = {
+            "type": "embed",
+            "text": text,
+            "client_id": "dream_processor",
+            "message_id": message_id,
+            "timestamp": time.time()
+        }
+        
+        # Send request and get response
+        await tensor_conn.send(json.dumps(tensor_payload))
+        response = await tensor_conn.recv()
+        data = json.loads(response)
+        
+        # Extract embedding
+        embedding = None
+        if 'data' in data and 'embeddings' in data['data']:
+            embedding = data['data']['embeddings']
+        elif 'data' in data and 'embedding' in data['data']:
+            embedding = data['data']['embedding']
+        elif 'embeddings' in data:
+            embedding = data['embeddings']
+        elif 'embedding' in data:
+            embedding = data['embedding']
+        
+        if not embedding:
+            logger.error(f"Failed to extract embedding from response: {data}")
+            return {"success": False, "error": "No embedding in response"}
+        
+        # Connect to HPC for significance
+        hpc_conn = await get_hpc_connection()
+        
+        # Create HPC request
+        hpc_message_id = f"{int(time.time() * 1000)}-dream-hpc"
+        hpc_payload = {
+            "type": "process",
+            "embeddings": embedding,
+            "client_id": "dream_processor",
+            "message_id": hpc_message_id,
+            "timestamp": time.time()
+        }
+        
+        # Send request and get response
+        await hpc_conn.send(json.dumps(hpc_payload))
+        hpc_response = await hpc_conn.recv()
+        hpc_data = json.loads(hpc_response)
+        
+        # Extract significance
+        significance = 0.5  # Default
+        if 'data' in hpc_data and 'significance' in hpc_data['data']:
+            significance = hpc_data['data']['significance']
+        elif 'significance' in hpc_data:
+            significance = hpc_data['significance']
+        
+        return {
+            "success": True,
+            "embedding": embedding,
+            "significance": significance
+        }
+        
+    except Exception as e:
+        logger.error(f"Error processing embedding: {e}")
+        return {"success": False, "error": str(e)}
+
+@router.post("/start")
+async def start_dream_session(
+    background_tasks: BackgroundTasks,
+    request: DreamRequest,
+    dream_processor: DreamProcessor = Depends(get_dream_processor)
+) -> Dict[str, Any]:
+    """Start a dream processing session.
+    
+    This will run a background task that processes memories during idle time.
+    The duration parameter controls how long the dream session will run.
+    """
+    try:
+        # Connect to servers for processing
+        try:
+            tensor_conn = await get_tensor_connection()
+            hpc_conn = await get_hpc_connection()
+            logger.info("Successfully connected to tensor and HPC servers for dream session")
+        except Exception as e:
+            logger.error(f"Failed to connect to servers: {e}")
+            return {
+                "status": "error",
+                "message": f"Failed to connect to tensor/HPC servers: {str(e)}"
+            }
+        
+        # Start dream session based on mode
+        if request.mode == "full" or request.mode == "all":
+            # Pass only supported parameters to the dream processor
+            result = await dream_processor.schedule_dream_session(
+                duration_minutes=request.duration_minutes
+            )
+        elif request.mode == "consolidate":
+            # Run a more focused consolidation session
+            background_tasks.add_task(
+                dream_processor.consolidate_memories,
+                time_budget_seconds=request.duration_minutes * 60
+            )
+            result = {
+                "status": "started",
+                "mode": "consolidate",
+                "scheduled_duration": request.duration_minutes
+            }
+        elif request.mode == "insights":
+            # Run a more focused insight generation session
+            background_tasks.add_task(
+                dream_processor.generate_insights,
+                time_budget_seconds=request.duration_minutes * 60
+            )
+            result = {
+                "status": "started",
+                "mode": "insights",
+                "scheduled_duration": request.duration_minutes
+            }
+        elif request.mode == "reflection":
+            # Run a self-reflection session
+            background_tasks.add_task(
+                dream_processor.self_reflection,
+                time_budget_seconds=request.duration_minutes * 60
+            )
+            result = {
+                "status": "started",
+                "mode": "reflection",
+                "scheduled_duration": request.duration_minutes
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Unknown mode: {request.mode}"
+            }
+        
+        # Store session information
+        if "session_id" in result:
+            dream_sessions[result["session_id"]] = result
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Error starting dream session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def schedule_dream_session(dream_processor, request, delay_seconds):
+    """Helper function to schedule a dream session after a delay."""
+    try:
+        logger.info(f"Scheduling dream session to start in {delay_seconds:.2f} seconds")
+        await asyncio.sleep(delay_seconds)
+        
+        # Get fresh connections when the scheduled time arrives
+        tensor_conn = await get_tensor_connection()
+        hpc_conn = await get_hpc_connection()
+        
+        logger.info(f"Starting scheduled dream session ({request.mode})")
+        
+        # Start appropriate session type
+        if request.mode == "full" or request.mode == "all":
+            await dream_processor.schedule_dream_session(
+                duration_minutes=request.duration_minutes
+            )
+        elif request.mode == "consolidate":
+            await dream_processor.consolidate_memories(
+                time_budget_seconds=request.duration_minutes * 60
+            )
+        elif request.mode == "insights":
+            await dream_processor.generate_insights(
+                time_budget_seconds=request.duration_minutes * 60
+            )
+        elif request.mode == "optimize":
+            await dream_processor.optimize_storage(
+                time_budget_seconds=request.duration_minutes * 60
+            )
+        elif request.mode == "reflection":
+            await dream_processor.self_reflection(
+                time_budget_seconds=request.duration_minutes * 60
+            )
+        
+        logger.info(f"Scheduled dream session ({request.mode}) started successfully")
+        
+    except Exception as e:
+        logger.error(f"Error in scheduled dream session: {e}")
+
+@router.get("/status")
+async def get_dream_status(
+    session_id: Optional[str] = None,
+    dream_processor: DreamProcessor = Depends(get_dream_processor)
+) -> Dict[str, Any]:
+    """Get the status of dream processing.
+    
+    If session_id is provided, returns the status of that specific session.
+    Otherwise, returns the overall dream processor status.
+    """
+    try:
+        status = dream_processor.get_dream_status()
+        
+        if session_id:
+            # Get specific session status
+            if session_id in dream_sessions:
+                return {
+                    "session": dream_sessions[session_id],
+                    **status
+                }
+            else:
+                return {
+                    "status": "not_found",
+                    "message": f"No dream session found with ID {session_id}"
+                }
+        
+        # Add server connection status
+        status["servers"] = {
+            "tensor_server": {
+                "connected": tensor_connection is not None and not tensor_connection.closed if tensor_connection else False,
+                "url": TENSOR_SERVER_URL
+            },
+            "hpc_server": {
+                "connected": hpc_connection is not None and not hpc_connection.closed if hpc_connection else False,
+                "url": HPC_SERVER_URL
+            }
+        }
+        
+        return status
+    
+    except Exception as e:
+        logger.error(f"Error getting dream status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/stop")
+async def stop_dream_session(
+    session_id: Optional[str] = None,
+    dream_processor: DreamProcessor = Depends(get_dream_processor)
+) -> Dict[str, Any]:
+    """Stop the current dream session or a specific session by ID."""
+    try:
+        result = await dream_processor.stop_dream_session()
+        
+        # Clean up session info if provided
+        if session_id and session_id in dream_sessions:
+            del dream_sessions[session_id]
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Error stopping dream session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Memory operation endpoints
+
+@router.post("/memory/consolidate")
+async def consolidate_memories(
+    memory_client: Any = Depends(get_memory_client),
+    dream_processor: Any = Depends(get_dream_processor)
+) -> Dict[str, Any]:
+    """Consolidate similar memories to reduce redundancy."""
+    try:
+        if dream_processor is None:
+            logger.error("Dream processor is not initialized")
+            raise HTTPException(status_code=500, detail="Dream processor not initialized")
+            
+        # Use the dream processor to consolidate memories
+        results = await dream_processor.consolidate_memories(time_budget_seconds=60)
+        
+        return results
+    except AttributeError as e:
+        # Handle the specific error where memory_client doesn't have get_memories method
+        if "'EnhancedMemoryClient' object has no attribute 'get_memories'" in str(e):
+            logger.error(f"Memory client doesn't support required methods: {e}")
+            
+            # Return a successful result with zero consolidated memories
+            # This prevents the error from breaking the API flow
+            return {
+                "status": "completed",
+                "consolidated_count": 0,
+                "message": "Memory consolidation is not supported in this environment"
+            }
+        else:
+            # Re-raise other AttributeErrors
+            logger.error(f"Error in memory consolidation: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error in memory consolidation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/memory/optimize")
+async def optimize_memory_storage(
+    request: OptimizeRequest,
+    dream_processor: DreamProcessor = Depends(get_dream_processor)
+) -> Dict[str, Any]:
+    """Optimize memory storage based on the specified parameters.
+    
+    This can improve retrieval performance and reduce storage footprint.
+    """
+    try:
+        # Set time budget based on target
+        time_budget = 180  # 3 minutes default
+        
+        if request.target == "all":
+            time_budget = 300  # 5 minutes for full optimization
+        
+        result = await dream_processor.optimize_storage(
+            time_budget_seconds=time_budget,
+            target=request.target,
+            aggressive=request.aggressive
+        )
+        return result
+    
+    except Exception as e:
+        logger.error(f"Error optimizing memory storage: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/memory/insights")
+async def generate_memory_insights(
+    request: InsightRequest,
+    dream_processor: DreamProcessor = Depends(get_dream_processor)
+) -> Dict[str, Any]:
+    """Generate insights from memories based on the specified parameters.
+    
+    This can reveal patterns and connections not immediately obvious.
+    """
+    try:
+        # Get server connections for the operation
+        tensor_conn = await get_tensor_connection()
+        hpc_conn = await get_hpc_connection()
+        
+        # Set time budget based on request parameters
+        time_budget = 180  # 3 minutes default
+        
+        if request.timeframe == "all":
+            time_budget = 300  # 5 minutes for all memories
+        
+        result = await dream_processor.generate_insights(
+            time_budget_seconds=time_budget,
+            timeframe=request.timeframe,
+            categories=request.categories
+        )
+        return result
+    
+    except Exception as e:
+        logger.error(f"Error generating insights: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/self/reflect")
+async def run_self_reflection(
+    request: SelfReflectionRequest,
+    dream_processor: DreamProcessor = Depends(get_dream_processor),
+    self_model: SelfModel = Depends(get_self_model)
+) -> Dict[str, Any]:
+    """Run a self-reflection session to update Lucidia's self-model."""
+    try:
+        # Get server connections for the operation
+        tensor_conn = await get_tensor_connection()
+        hpc_conn = await get_hpc_connection()
+        
+        # Determine time budget based on depth
+        time_budget = 180  # 3 minutes for standard depth
+        if request.depth == "shallow":
+            time_budget = 60  # 1 minute for shallow reflection
+        elif request.depth == "deep":
+            time_budget = 300  # 5 minutes for deep reflection
+        
+        result = await dream_processor.self_reflection(
+            time_budget_seconds=time_budget,
+            focus_areas=request.focus_areas,
+            depth=request.depth
+        )
+        
+        # Get updated self-model
+        updated_model = self_model.get_model_summary()
+        
+        return {
+            **result,
+            "self_model": updated_model
+        }
+    
+    except Exception as e:
+        logger.error(f"Error running self reflection: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/self-model")
+async def get_self_model_data(
+    self_model: Any = Depends(get_self_model)
+) -> Dict[str, Any]:
+    """Retrieve data from the self model."""
+    try:
+        if self_model is None:
+            raise HTTPException(status_code=503, detail="Self model not initialized")
+            
+        # Get core self model data with safe attribute access
+        data = {
+            "identity": getattr(self_model, "identity", {}),
+            "capabilities": getattr(self_model, "capabilities", {}),
+            "preferences": getattr(self_model, "preferences", {}),
+            "goals": getattr(self_model, "goals", []),
+        }
+        
+        # Safely add other attributes if they exist
+        if hasattr(self_model, "limitations"):
+            data["limitations"] = self_model.limitations
+        else:
+            data["limitations"] = []  # Default empty list if attribute doesn't exist
+            
+        if hasattr(self_model, "experiences"):
+            data["experiences"] = self_model.experiences
+        else:
+            data["experiences"] = []  # Default empty list
+            
+        if hasattr(self_model, "version"):
+            data["version"] = self_model.version
+        else:
+            data["version"] = "unknown"
+            
+        # Get statistics if available
+        if hasattr(self_model, "get_stats") and callable(getattr(self_model, "get_stats")):
+            data["stats"] = self_model.get_stats()
+        else:
+            data["stats"] = {}
+            
+        return data
+    
+    except Exception as e:
+        logger.error(f"Error retrieving self-model data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Knowledge graph integrations
+
+@router.get("/knowledge")
+async def get_knowledge_graph(
+    concept: Optional[str] = Query(None, description="Concept to query relationships for"),
+    relationship: Optional[str] = Query(None, description="Filter by relationship type"),
+    depth: int = Query(1, description="Depth of relationship traversal"),
+    knowledge_graph: KnowledgeGraph = Depends(get_knowledge_graph)
+) -> Dict[str, Any]:
+    """Get knowledge graph information.
+    
+    If concept is provided, returns relationships for that concept.
+    Otherwise, returns overall graph statistics.
+    """
+    try:
+        if concept:
+            # Query relationships for a specific concept
+            result = await knowledge_graph.query_related(concept, relationship, depth)
+            return {
+                "status": "success",
+                "concept": concept,
+                "relationships": result
+            }
+        else:
+            # Return overall graph statistics
+            stats = knowledge_graph.get_stats()
+            return {
+                "status": "success",
+                "stats": stats
+            }
+    
+    except Exception as e:
+        logger.error(f"Error querying knowledge graph: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/knowledge")
+async def add_to_knowledge_graph(
+    request: KnowledgeAddRequest,
+    knowledge_graph: Any = Depends(get_knowledge_graph)
+) -> Dict[str, Any]:
+    """Add a concept or relationship to the knowledge graph."""
+    try:
+        # Ensure knowledge graph is properly initialized
+        if knowledge_graph is None:
+            logger.error("Knowledge graph is not initialized")
+            raise HTTPException(status_code=500, detail="Knowledge graph not initialized")
+        
+        # Check if knowledge_graph is a valid instance with the appropriate methods
+        from memory.lucidia_memory_system.core.knowledge_graph import KnowledgeGraph
+        
+        if not isinstance(knowledge_graph, KnowledgeGraph):
+            logger.error(f"Knowledge graph is not properly initialized. Type: {type(knowledge_graph)}")
+            raise HTTPException(status_code=500, detail="Knowledge graph not properly initialized")
+        
+        # Now we can safely proceed with adding nodes and edges
+        if request.type == "concept":
+            # For concept, name is required
+            if not request.name:
+                raise HTTPException(status_code=400, detail="name is required for concept type")
+                
+            # Add a concept node
+            node_id = request.id or request.name.lower().replace(" ", "_")
+            
+            try:
+                added = knowledge_graph.add_node(
+                    node_id=node_id,
+                    node_type="concept",
+                    properties={
+                        "name": request.name,
+                        "description": request.description or "",
+                        "category": request.category or "general",
+                        "created": datetime.now().isoformat()
+                    }
+                )
+                
+                return {
+                    "status": "success",
+                    "node_id": added["id"] if isinstance(added, dict) and "id" in added else node_id,
+                    "message": f"Added concept: {request.name}"
+                }
+            except Exception as e:
+                logger.error(f"Error adding node to knowledge graph: {e}")
+                raise HTTPException(status_code=500, detail=f"Error adding node: {str(e)}")
+            
+        elif request.type == "relationship":
+            # Add a relationship between nodes
+            if not request.source_id or not request.target_id:
+                raise HTTPException(status_code=400, detail="source_id and target_id are required for relationships")
+                
+            try:
+                added = knowledge_graph.add_edge(
+                    source_id=request.source_id,
+                    target_id=request.target_id,
+                    edge_type=request.relation_type or "related_to",
+                    properties={
+                        "strength": request.strength or 0.5,
+                        "description": request.description or "",
+                        "created": datetime.now().isoformat()
+                    }
+                )
+                
+                return {
+                    "status": "success",
+                    "edge_id": added["id"] if isinstance(added, dict) and "id" in added else f"{request.source_id}-{request.target_id}",
+                    "message": f"Added relationship between {request.source_id} and {request.target_id}"
+                }
+            except Exception as e:
+                logger.error(f"Error adding edge to knowledge graph: {e}")
+                raise HTTPException(status_code=500, detail=f"Error adding edge: {str(e)}")
+            
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown knowledge type: {request.type}")
+    
+    except Exception as e:
+        logger.error(f"Error adding to knowledge graph: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/schedule")
+async def schedule_recurring_task(
+    request: ScheduleRequest,
+    background_tasks: BackgroundTasks
+) -> Dict[str, Any]:
+    """Schedule a recurring task such as dream processing, consolidation, etc."""
+    try:
+        # Validate parameters for the task
+        if request.task not in ["dream", "consolidate", "optimize", "insights", "reflection"]:
+            return {
+                "status": "error",
+                "message": f"Unknown task: {request.task}"
+            }
+        
+        if request.schedule not in ["once", "daily", "weekly"]:
+            return {
+                "status": "error",
+                "message": f"Unknown schedule: {request.schedule}"
+            }
+        
+        # Parse time
+        try:
+            if request.schedule == "once":
+                # For one-time scheduling, expect ISO format datetime
+                scheduled_time = datetime.fromisoformat(request.time)
+                
+                # Calculate delay
+                now = datetime.now()
+                if scheduled_time <= now:
+                    return {
+                        "status": "error",
+                        "message": "Scheduled time must be in the future"
+                    }
+                    
+                delay_seconds = (scheduled_time - now).total_seconds()
+                
+                # Prepare task based on type
+                if request.task == "dream":
+                    # Create a DreamRequest from parameters
+                    dream_request = DreamRequest(
+                        duration_minutes=request.parameters.get("duration_minutes", 30),
+                        mode=request.parameters.get("mode", "full"),
+                        priority=request.parameters.get("priority", "normal")
+                    )
+                    
+                    # Schedule task
+                    from app_dependencies import dream_processor
+                    background_tasks.add_task(
+                        schedule_dream_session,
+                        dream_processor,
+                        dream_request,
+                        delay_seconds
+                    )
+                    
+                    return {
+                        "status": "scheduled",
+                        "task": request.task,
+                        "scheduled_time": request.time,
+                        "delay_seconds": delay_seconds
+                    }
+                
+                # Add other task types as needed...
+                
+            else:
+                # For recurring schedules, store in database or scheduler system
+                # This would interface with a task scheduler like Celery, APScheduler, etc.
+                
+                # For this example, we just return success but don't actually schedule
+                return {
+                    "status": "scheduled_recurring",
+                    "task": request.task,
+                    "schedule": request.schedule,
+                    "time": request.time,
+                    "message": "Recurring task scheduled (scheduler integration required)"
+                }
+                
+        except ValueError:
+            return {
+                "status": "error",
+                "message": f"Invalid time format: {request.time}. Use ISO format for datetime."
+            }
+            
+    except Exception as e:
+        logger.error(f"Error scheduling task: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/test-tensor-connection")
+async def test_tensor_connection() -> Dict[str, Any]:
+    """Test connection to tensor server."""
+    try:
+        connection = await get_tensor_connection()
+        
+        # Basic test message
+        test_message = {
+            "type": "ping",
+            "timestamp": time.time(),
+            "client_id": "dream_api_test"
+        }
+        
+        await connection.send(json.dumps(test_message))
+        response = await asyncio.wait_for(connection.recv(), timeout=5.0)
+        
+        return {
+            "status": "success",
+            "connected": True,
+            "response": json.loads(response) if response else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Error testing tensor connection: {e}")
+        return {
+            "status": "error",
+            "connected": False,
+            "error": str(e)
+        }
+
+@router.post("/test-hpc-connection")
+async def test_hpc_connection() -> Dict[str, Any]:
+    """Test connection to HPC server."""
+    try:
+        connection = await get_hpc_connection()
+        
+        # Basic test message
+        test_message = {
+            "type": "ping",
+            "timestamp": time.time(),
+            "client_id": "dream_api_test"
+        }
+        
+        await connection.send(json.dumps(test_message))
+        response = await asyncio.wait_for(connection.recv(), timeout=5.0)
+        
+        return {
+            "status": "success",
+            "connected": True,
+            "response": json.loads(response) if response else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Error testing HPC connection: {e}")
+        return {
+            "status": "error", 
+            "connected": False,
+            "error": str(e)
+        }
+
+@router.post("/process-embedding")
+async def test_process_embedding(text: str) -> Dict[str, Any]:
+    """Test embedding processing through tensor and HPC servers."""
+    try:
+        result = await process_embedding(text)
+        return result
+    except Exception as e:
+        logger.error(f"Error processing embedding: {e}")
+        return {"success": False, "error": str(e)}
+
+@router.get("/health")
+async def health_check() -> Dict[str, Any]:
+    """Health check endpoint for the dream API."""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "dream_api",
+        "tensor_server": tensor_connection is not None and not tensor_connection.closed if tensor_connection else False,
+        "hpc_server": hpc_connection is not None and not hpc_connection.closed if hpc_connection else False
+    }
+
+@router.post("/shutdown")
+async def shutdown_connections() -> Dict[str, Any]:
+    """Properly close all server connections."""
+    global tensor_connection, hpc_connection
+    
+    try:
+        if tensor_connection and not tensor_connection.closed:
+            await tensor_connection.close()
+            tensor_connection = None
+            
+        if hpc_connection and not hpc_connection.closed:
+            await hpc_connection.close()
+            hpc_connection = None
+            
+        return {
+            "status": "success",
+            "message": "All connections closed"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error shutting down connections: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@router.post("/self-model/reflect", response_model=Dict[str, Any])
+async def run_self_reflection(
+    request: SelfReflectionRequest,
+    dream_processor: DreamProcessor = Depends(get_dream_processor),
+    self_model: SelfModel = Depends(get_self_model)
+):
+    """Run a self-reflection session to update Lucidia's self-model."""
+    try:
+        logger.info(f"Starting self-reflection with focus on {request.focus_areas}")
+        
+        # Get tensor and HPC connections for embedding generation
+        tensor_conn = await get_tensor_connection()
+        hpc_conn = await get_hpc_connection()
+        
+        # Run self-reflection
+        if not request.focus_areas:
+            # Default focus areas if none provided
+            focus_areas = ["capabilities", "performance", "improvement"]
+        else:
+            focus_areas = request.focus_areas
+            
+        # Run reflection with the enhanced self model
+        reflection_result = await self_model.reflect(focus_areas)
+        
+        # Return the reflection results
+        return {
+            "status": "success",
+            "reflection_id": reflection_result.get("reflection_id", str(time.time())),
+            "focus_areas": focus_areas,
+            "insights": reflection_result.get("insights", {}),
+            "changes": reflection_result.get("changes", {}),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error during self-reflection: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Self-reflection failed: {str(e)}")
+
+@router.get("/self-model", response_model=Dict[str, Any])
+async def get_self_model_data(
+    self_model: SelfModel = Depends(get_self_model)
+):
+    """Get Lucidia's current self-model data."""
+    try:
+        # Get self-model context
+        context = await self_model.get_self_context("general")
+        
+        # Get performance metrics
+        metrics = self_model.get_performance_metrics()
+        
+        # Return formatted self-model data
+        return {
+            "identity": self_model.identity,
+            "capabilities": self_model.capabilities,
+            "limitations": self_model.limitations,
+            "values": self_model.values,
+            "context": context,
+            "performance_metrics": metrics,
+            "last_updated": self_model.last_updated.isoformat() if hasattr(self_model, "last_updated") else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Error retrieving self-model data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve self-model data: {str(e)}")
+
+# Knowledge graph integrations
+
+@router.post("/knowledge")
+async def add_to_knowledge_graph(
+    request: KnowledgeAddRequest,
+    knowledge_graph: KnowledgeGraph = Depends(get_knowledge_graph)
+) -> Dict[str, Any]:
+    """Add a concept or relationship to the knowledge graph."""
+    try:
+        # Ensure knowledge graph is properly initialized
+        if knowledge_graph is None:
+            logger.error("Knowledge graph is not initialized")
+            raise HTTPException(status_code=500, detail="Knowledge graph not initialized")
+        
+        # Check if knowledge_graph is a valid instance with the appropriate methods
+        from memory.lucidia_memory_system.core.knowledge_graph import KnowledgeGraph
+        
+        if not isinstance(knowledge_graph, KnowledgeGraph):
+            logger.error(f"Knowledge graph is not properly initialized. Type: {type(knowledge_graph)}")
+            raise HTTPException(status_code=500, detail="Knowledge graph not properly initialized")
+        
+        # Now we can safely proceed with adding nodes and edges
+        if request.type == "concept":
+            # For concept, name is required
+            if not request.name:
+                raise HTTPException(status_code=400, detail="name is required for concept type")
+                
+            # Add a concept node
+            node_id = request.id or request.name.lower().replace(" ", "_")
+            
+            try:
+                added = knowledge_graph.add_node(
+                    node_id=node_id,
+                    node_type="concept",
+                    properties={
+                        "name": request.name,
+                        "description": request.description or "",
+                        "category": request.category or "general",
+                        "created": datetime.now().isoformat()
+                    }
+                )
+                
+                return {
+                    "status": "success",
+                    "node_id": added["id"] if isinstance(added, dict) and "id" in added else node_id,
+                    "message": f"Added concept: {request.name}"
+                }
+            except Exception as e:
+                logger.error(f"Error adding node to knowledge graph: {e}")
+                raise HTTPException(status_code=500, detail=f"Error adding node: {str(e)}")
+            
+        elif request.type == "relationship":
+            # Add a relationship between nodes
+            if not request.source_id or not request.target_id:
+                raise HTTPException(status_code=400, detail="source_id and target_id are required for relationships")
+                
+            try:
+                added = knowledge_graph.add_edge(
+                    source_id=request.source_id,
+                    target_id=request.target_id,
+                    edge_type=request.relation_type or "related_to",
+                    properties={
+                        "strength": request.strength or 0.5,
+                        "description": request.description or "",
+                        "created": datetime.now().isoformat()
+                    }
+                )
+                
+                return {
+                    "status": "success",
+                    "edge_id": added["id"] if isinstance(added, dict) and "id" in added else f"{request.source_id}-{request.target_id}",
+                    "message": f"Added relationship between {request.source_id} and {request.target_id}"
+                }
+            except Exception as e:
+                logger.error(f"Error adding edge to knowledge graph: {e}")
+                raise HTTPException(status_code=500, detail=f"Error adding edge: {str(e)}")
+            
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown knowledge type: {request.type}")
+    
+    except Exception as e:
+        logger.error(f"Error adding to knowledge graph: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/test/refine_report")
+async def test_refine_report(
+    request: Request,
+):
+    """Test endpoint for refining a report and testing convergence mechanisms."""
+    try:
+        # Access app state directly
+        knowledge_graph = request.app.state.knowledge_graph
+        
+        # Parse the request body as JSON
+        data = await request.json()
+        report_id = data.get("report_id", "")
+        
+        if not report_id:
+            raise HTTPException(status_code=400, detail="Report ID is required")
+            
+        # Get the report from the knowledge graph
+        report_data = await knowledge_graph.get_node(report_id)
+            
+        if not report_data:
+            raise HTTPException(status_code=404, detail=f"Report not found: {report_id}")
+            
+        # Convert back to a DreamReport object
+        report = DreamReport.from_dict(report_data)
+        
+        # Apply some mock refinement
+        # For testing, we'll just add a new insight
+        new_insight = DreamFragment(
+            content="This is a refined insight generated during the test.",
+            fragment_type="insight",
+            confidence=0.8,
+            source_memory_ids=[]
+        )
+        
+        # Add to knowledge graph - ensure node_type is provided
+        await knowledge_graph.add_node(
+            node_id=new_insight.id, 
+            node_type="dream_fragment",
+            attributes=new_insight.to_dict(),
+            domain="general_knowledge"
+        )
+        
+        # Add to report
+        report.insight_ids.append(new_insight.id)
+        
+        # Update the report in the knowledge graph
+        await knowledge_graph.update_node(report.report_id, report.to_dict())
+        
+        return {
+            "status": "success",
+            "report_id": report.report_id,
+            "fragment_count": report.get_fragment_count(),
+            "new_insight_id": new_insight.id
+        }
+    except Exception as e:
+        logger.error(f"Error refining test report: {e}")
+        raise HTTPException(status_code=500, detail=f"Error refining test report: {str(e)}")
+
+@router.get("/test/get_report")
+async def get_test_report(
+    report_id: str,
+    knowledge_graph: KnowledgeGraph = Depends(get_knowledge_graph)
+):
+    """Get a report with its convergence metrics."""
+    try:
+        if not report_id:
+            raise HTTPException(status_code=400, detail="Report ID is required")
+        
+        # Get the report
+        report_node = await knowledge_graph.get_node(report_id)
+        if not report_node:
+            raise HTTPException(status_code=404, detail=f"Report with ID {report_id} not found")
+        
+        # The report_node is already the dictionary of attributes
+        return report_node
+    except Exception as e:
+        logger.error(f"Error getting test report: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting test report: {str(e)}")
+
+@router.post("/test/batch_embedding")
+async def test_batch_embedding(
+    request: Request,
+):
+    """Test endpoint for batch embedding processing with HypersphereManager."""
+    try:
+        # Access the app state directly to get hypersphere_manager
+        hypersphere_manager = request.app.state.hypersphere_manager
+        
+        # Parse the request body as JSON
+        data = await request.json()
+        texts = data.get("texts", [])
+        use_hypersphere = data.get("use_hypersphere", True)
+        
+        if not texts:
+            raise HTTPException(status_code=400, detail="No texts provided for embedding")
+        
+        # Use HypersphereManager if requested and available
+        if use_hypersphere and hypersphere_manager:
+            logger.info(f"Using HypersphereManager to batch process {len(texts)} embeddings")
+            # Process embeddings in batch
+            result = await hypersphere_manager.batch_process_embeddings(texts=texts)
+            return {"status": "success", "embeddings": result.get("embeddings", [])}
+        else:
+            # Fallback to individual processing
+            logger.info(f"Processing {len(texts)} embeddings individually")
+            embeddings = []
+            for text in texts:
+                embedding = await process_embedding(text)
+                embeddings.append(embedding["embedding"])
+            return {"status": "success", "embeddings": embeddings}
+    except Exception as e:
+        logger.error(f"Error in batch embedding processing: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing batch embeddings: {str(e)}")
+
+@router.post("/test/add_test_memories")
+async def add_test_memories(
+    request: Request,
+):
+    """Test endpoint to add sample memories to the system for testing."""
+    try:
+        # Access app state directly
+        knowledge_graph = request.app.state.knowledge_graph
+        hypersphere_manager = request.app.state.hypersphere_manager
+        
+        # Get the request data directly
+        data = await request.json()
+        memories = data.get("memories", [])
+        
+        if not memories:
+            raise HTTPException(status_code=400, detail="No memories provided")
+
+        memory_ids = []
+        for memory_data in memories:
+            content = memory_data.get("content")
+            if not content:
+                continue
+                
+            # Process the embedding
+            importance = memory_data.get("importance", 0.5)
+            metadata = memory_data.get("metadata", {})
+            
+            # Use HypersphereManager for embedding generation
+            embedding_data = await hypersphere_manager.get_embedding(text=content)
+            embedding = embedding_data.get("embedding", [])
+            
+            # Create a new memory node
+            memory_id = f"test_memory_{int(time.time() * 1000)}_{len(memory_ids)}"
+            
+            # Add the memory to the knowledge graph
+            node_attributes = {
+                "content": content,
+                "embedding": embedding,
+                "importance": importance,
+                "created_at": time.time(),
+                "type": "memory",
+                "metadata": metadata
+            }
+            
+            await knowledge_graph.add_node(memory_id, 'memory', node_attributes)
+            memory_ids.append(memory_id)
+        
+        return {"status": "success", "memory_ids": memory_ids}
+    except Exception as e:
+        logger.error(f"Error adding test memories: {e}")
+        raise HTTPException(status_code=500, detail=f"Error adding test memories: {str(e)}")
+
+@router.post("/world-model/update", response_model=Dict[str, Any])
+async def update_world_model(
+    request: WorldModelUpdateRequest,
+    world_model: WorldModel = Depends(get_world_model)
+):
+    """Update the world model with new knowledge."""
+    try:
+        logger.info(f"Updating world model with concept: {request.concept}")
+        
+        # Update knowledge in the world model
+        result = await world_model.update_knowledge(
+            concept=request.concept,
+            definition=request.definition,
+            related=request.related
+        )
+        
+        return {
+            "status": "success",
+            "concept": request.concept,
+            "message": f"World model updated with concept: {request.concept}",
+            "result": result
+        }
+        
+    except Exception as e:
+        logger.error(f"Error updating world model: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update world model: {str(e)}")
+
+@router.post("/world-model/query", response_model=Dict[str, Any])
+async def query_world_model(
+    request: WorldModelQueryRequest,
+    world_model: Any = Depends(get_world_model)
+) -> Dict[str, Any]:
+    """Query the world model."""
+    try:
+        if world_model is None:
+            raise HTTPException(status_code=503, detail="World model not initialized")
+        
+        logger.info(f"Querying world model with: {request.query}")
+        
+        # Check for available parameters in the method signature
+        import inspect
+        process_query_params = inspect.signature(world_model.process_query).parameters
+        query_args = {}
+        
+        # Add query parameter (this should always exist)
+        query_args['query'] = request.query
+        
+        # Conditionally add other parameters only if they exist in the method signature
+        if 'max_results' in process_query_params:
+            query_args['max_results'] = request.max_results
+        
+        if 'min_relevance' in process_query_params:
+            query_args['min_relevance'] = request.min_relevance
+            
+        if 'context' in process_query_params and request.context:
+            query_args['context'] = request.context
+        
+        # Call the process_query method with only the parameters it accepts
+        result = await world_model.process_query(**query_args)
+        
+        return {
+            "status": "success",
+            "query": request.query,
+            "results": result.get("results", []),
+            "reasoning": result.get("reasoning", ""),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error querying world model: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/world-model/metrics", response_model=Dict[str, Any])
+async def get_world_model_metrics(
+    world_model: Any = Depends(get_world_model)
+) -> Dict[str, Any]:
+    """Get metrics and statistics from the world model."""
+    try:
+        if world_model is None:
+            raise HTTPException(status_code=503, detail="World model not initialized")
+        
+        logger.info("Fetching world model metrics")
+        
+        # Get metrics from the world model
+        metrics = {}
+        
+        # Check if the world model has a get_metrics method
+        if hasattr(world_model, "get_metrics") and callable(world_model.get_metrics):
+            try:
+                metrics = await world_model.get_metrics()
+            except Exception as e:
+                logger.warning(f"Error calling get_metrics: {e}")
+                # Fall back to basic metrics
+                pass
+        
+        # If no metrics or method not available, provide basic information
+        if not metrics:
+            # Get concept count if available
+            concept_count = 0
+            if hasattr(world_model, "concepts") and isinstance(world_model.concepts, dict):
+                concept_count = len(world_model.concepts)
+            elif hasattr(world_model, "knowledge") and isinstance(world_model.knowledge, dict):
+                concept_count = len(world_model.knowledge)
+            
+            metrics = {
+                "concept_count": concept_count,
+                "last_updated": getattr(world_model, "last_updated", datetime.now()).isoformat() if hasattr(world_model, "last_updated") else None,
+                "model_version": getattr(world_model, "version", "1.0")
+            }
+        
+        return {
+            "status": "success",
+            "metrics": metrics,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error retrieving world model metrics: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve world model metrics: {str(e)}")
+
+@router.get("/world-model/analyze", response_model=Dict[str, Any])
+async def analyze_world_model(
+    world_model: WorldModel = Depends(get_world_model)
+):
+    """Analyze the world model's concept network."""
+    try:
+        logger.info("Analyzing world model concept network")
+        
+        # Analyze the concept network
+        analysis = await world_model.analyze_concept_network()
+        
+        return {
+            "status": "success",
+            "concept_count": analysis.get("concept_count", 0),
+            "relationship_count": analysis.get("relationship_count", 0),
+            "central_concepts": analysis.get("central_concepts", []),
+            "isolated_concepts": analysis.get("isolated_concepts", []),
+            "clusters": analysis.get("clusters", []),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error analyzing world model: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to analyze world model: {str(e)}")
+
+@router.get("/llm/status", response_model=Dict[str, Any])
+async def get_llm_status(
+    llm_service: LocalLLMPipeline = Depends(get_llm_service)
+):
+    """Get the status of the LLM service."""
+    try:
+        status = llm_service.get_status()
+        return {
+            "status": "success",
+            "llm_status": status
+        }
+    
+    except Exception as e:
+        logger.error(f"Error getting LLM status: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get LLM status: {str(e)}")
+
+# Dream Report endpoints
+
+@router.post("/report/generate", response_model=Dict[str, Any])
+async def generate_dream_report(
+    request: DreamReportRequest,
+    background_tasks: BackgroundTasks,
+    dream_processor: DreamProcessor = Depends(get_dream_processor),
+    knowledge_graph: KnowledgeGraph = Depends(get_knowledge_graph),
+    reflection_engine: ReflectionEngine = Depends(get_reflection_engine)
+):
+    """Generate a dream report from specified memories or recent memories.
+    
+    This endpoint analyzes memories and creates a structured report with insights,
+    questions, hypotheses, and counterfactuals.
+    """
+    try:
+        logger.info(f"Generating dream report from {request.limit} memories")
+        
+        # Get memories to analyze
+        if request.memory_ids:
+            # Use specified memory IDs
+            memories = await dream_processor.memory_client.get_memories_by_ids(request.memory_ids)
+        else:
+            # Get recent memories based on timeframe
+            if request.timeframe == "recent":
+                memories = await dream_processor.memory_client.get_recent_memories(limit=request.limit)
+            elif request.timeframe == "significant":
+                memories = await dream_processor.memory_client.get_significant_memories(limit=request.limit)
+            elif request.timeframe == "week":
+                memories = await dream_processor.memory_client.get_memories_by_timeframe(
+                    start_time=datetime.now() - timedelta(days=7),
+                    end_time=datetime.now(),
+                    limit=request.limit
+                )
+            else:
+                memories = await dream_processor.memory_client.get_recent_memories(limit=request.limit)
+        
+        if not memories:
+            return {"status": "error", "message": "No memories found for analysis"}
+        
+        # Generate the report asynchronously
+        background_tasks.add_task(
+            reflection_engine.generate_report,
+            memories=memories,
+            domain=request.domain,
+            title=request.title,
+            description=request.description
+        )
+        
+        return {
+            "status": "processing",
+            "message": f"Generating dream report from {len(memories)} memories",
+            "memory_count": len(memories)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating dream report: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error generating dream report: {str(e)}")
+
+@router.get("/report/{report_id}", response_model=Dict[str, Any])
+async def get_dream_report(
+    report_id: str,
+    knowledge_graph: KnowledgeGraph = Depends(get_knowledge_graph)
+):
+    """Retrieve a dream report by its ID.
+    
+    Returns the full report with all fragments and analysis.
+    """
+    try:
+        # Check if report exists in knowledge graph
+        if not knowledge_graph.has_node(report_id):
+            raise HTTPException(status_code=404, detail=f"Dream report {report_id} not found")
+        
+        # Get the report node
+        report_node = knowledge_graph.get_node(report_id)
+        if report_node["type"] != "dream_report":
+            raise HTTPException(status_code=400, detail=f"Node {report_id} is not a dream report")
+        
+        # Get the report data
+        report_data = report_node["attributes"]
+        
+        # Get all fragments
+        fragments = {}
+        fragment_ids = []
+        
+        # Collect all fragment IDs from the report
+        for fragment_type in ["insight_ids", "question_ids", "hypothesis_ids", "counterfactual_ids"]:
+            if fragment_type in report_data:
+                fragment_ids.extend(report_data[fragment_type])
+        
+        # Fetch all fragments
+        for fragment_id in fragment_ids:
+            if knowledge_graph.has_node(fragment_id):
+                fragment_node = knowledge_graph.get_node(fragment_id)
+                fragments[fragment_id] = fragment_node["attributes"]
+        
+        # Add fragments to the response
+        report_data["fragments"] = fragments
+        
+        # Get connected concepts
+        connected_concepts = knowledge_graph.get_connected_nodes(
+            report_id,
+            edge_types=["references"],
+            node_types=["concept", "entity"],
+            direction="outbound"
+        )
+        
+        concept_data = {}
+        for concept in connected_concepts:
+            if knowledge_graph.has_node(concept):
+                concept_node = knowledge_graph.get_node(concept)
+                concept_data[concept] = concept_node["attributes"]
+        
+        report_data["concepts"] = concept_data
+        
+        return {
+            "status": "success",
+            "report": report_data
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving dream report: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving dream report: {str(e)}")
+
+@router.post("/report/refine", response_model=Dict[str, Any])
+async def refine_dream_report(
+    request: DreamReportRefineRequest,
+    background_tasks: BackgroundTasks,
+    knowledge_graph: KnowledgeGraph = Depends(get_knowledge_graph),
+    reflection_engine: ReflectionEngine = Depends(get_reflection_engine)
+):
+    """Refine an existing dream report with new evidence or updated analysis.
+    
+    This endpoint updates a dream report by incorporating new memories or evidence
+    and potentially updating the analysis based on this new information.
+    """
+    try:
+        # Check if report exists
+        if not knowledge_graph.has_node(request.report_id):
+            raise HTTPException(status_code=404, detail=f"Dream report {request.report_id} not found")
+        
+        # Get the report from the knowledge graph
+        report_data = knowledge_graph.get_node(request.report_id)
+        if report_data["type"] != "dream_report":
+            raise HTTPException(status_code=400, detail=f"Node {request.report_id} is not a dream report")
+        
+        # Convert back to a DreamReport object
+        report = DreamReport.from_dict(report_data)
+        
+        # Start the refinement process in the background
+        background_tasks.add_task(
+            reflection_engine.refine_report,
+            report=report,
+            new_evidence_ids=request.new_evidence_ids,
+            update_analysis=request.update_analysis
+        )
+        
+        return {
+            "status": "processing",
+            "message": f"Refining dream report {request.report_id}",
+            "report_id": request.report_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error refining dream report: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error refining dream report: {str(e)}")
+
+@router.get("/reports", response_model=Dict[str, Any])
+async def list_dream_reports(
+    limit: int = Query(10, description="Maximum number of reports to return"),
+    skip: int = Query(0, description="Number of reports to skip"),
+    domain: Optional[str] = Query(None, description="Filter by domain"),
+    knowledge_graph: KnowledgeGraph = Depends(get_knowledge_graph)
+):
+    """List all dream reports, with optional filtering by domain.
+    
+    Returns a paginated list of dream reports with basic metadata.
+    """
+    try:
+        # Get all dream report nodes
+        report_nodes = knowledge_graph.get_nodes_by_type("dream_report")
+        
+        # Filter by domain if specified
+        if domain:
+            report_nodes = [node for node in report_nodes if node.get("domain") == domain]
+        
+        # Sort by creation time (newest first)
+        report_nodes.sort(key=lambda x: x["attributes"].get("created_at", ""), reverse=True)
+        
+        # Apply pagination
+        paginated_nodes = report_nodes[skip:skip+limit]
+        
+        # Format the response
+        reports = []
+        for node in paginated_nodes:
+            report_data = {
+                "report_id": node["id"],
+                "title": node["attributes"].get("title", "Untitled Report"),
+                "created_at": node["attributes"].get("created_at"),
+                "domain": node["attributes"].get("domain"),
+                "fragment_count": sum([
+                    len(node["attributes"].get("insight_ids", [])),
+                    len(node["attributes"].get("question_ids", [])),
+                    len(node["attributes"].get("hypothesis_ids", [])),
+                    len(node["attributes"].get("counterfactual_ids", []))
+                ])
+            }
+            reports.append(report_data)
+        
+        return {
+            "status": "success",
+            "reports": reports,
+            "total": len(report_nodes),
+            "limit": limit,
+            "skip": skip
+        }
+        
+    except Exception as e:
+        logger.error(f"Error listing dream reports: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error listing dream reports: {str(e)}")
+
+@router.post("/test/similarity_search")
+async def test_similarity_search(request: Request):
+    """Test endpoint for similarity search using HypersphereManager."""
+    try:
+        # Access app state directly
+        knowledge_graph = request.app.state.knowledge_graph
+        hypersphere_manager = request.app.state.hypersphere_manager
+        embedding_comparator = request.app.state.embedding_comparator
+        
+        # Parse the request body as JSON
+        data = await request.json()
+        query = data.get("query", "")
+        top_k = data.get("top_k", 3)
+        use_hypersphere = data.get("use_hypersphere", True)
+        
+        if not query:
+            raise HTTPException(status_code=400, detail="No query provided")
+        
+        # Generate embedding for the query
+        if use_hypersphere and hypersphere_manager:
+            logger.info(f"Using HypersphereManager for query embedding")
+            query_embedding_data = await hypersphere_manager.get_embedding(text=query)
+            query_embedding = query_embedding_data.get("embedding", [])
+        else:
+            # Fallback to direct embedding
+            logger.info(f"Using process_embedding for query embedding")
+            embedding_data = await process_embedding(query)
+            query_embedding = embedding_data.get("embedding", [])
+            
+        if not query_embedding:
+            raise HTTPException(
+                status_code=500, 
+                detail="Failed to generate embedding for query"
+            )
+            
+        # Retrieve all memory nodes from knowledge graph
+        memories = await knowledge_graph.get_nodes_by_type("memory")
+        if not memories:
+            return {"status": "success", "results": []}
+            
+        # Prepare results list
+        results = []
+        
+        # Compare query embedding with each memory
+        for memory_id, memory_data in memories.items():
+            # Extract memory content and embedding
+            content = memory_data.get("content", "")
+            embedding = memory_data.get("embedding", [])
+            
+            if not embedding:
+                continue
+                
+            # Calculate similarity score
+            score = embedding_comparator.calculate_similarity(query_embedding, embedding)
+            
+            results.append({
+                "memory_id": memory_id,
+                "content": content,
+                "score": score
+            })
+            
+        # Sort by similarity score (descending)
+        results.sort(key=lambda x: x["score"], reverse=True)
+        
+        # Return top-k results
+        top_results = results[:top_k] if top_k > 0 else results
+        
+        return {"status": "success", "results": top_results}
+    except Exception as e:
+        logger.error(f"Error in similarity search: {e}")
+        raise HTTPException(status_code=500, detail=f"Error performing similarity search: {str(e)}")
+
+@router.post("/test/create_test_report")
+async def create_test_report(request: Request):
+    """Create a test dream report with specified fragments for testing convergence mechanisms."""
+    try:
+        # Access app state directly
+        knowledge_graph = request.app.state.knowledge_graph
+        
+        # Parse the request body as JSON
+        data = await request.json()
+        title = data.get("title", "")
+        fragments = data.get("fragments", [])
+        
+        if not title or not fragments:
+            raise HTTPException(status_code=400, detail="Title and fragments are required")
+        
+        # Create fragment objects first
+        insight_ids = []
+        question_ids = []
+        hypothesis_ids = []
+        counterfactual_ids = []
+        
+        for fragment_data in fragments:
+            content = fragment_data.get("content")
+            fragment_type = fragment_data.get("type")
+            confidence = fragment_data.get("confidence", 0.5)
+            
+            if not content or not fragment_type:
+                continue
+                
+            # Create a fragment
+            fragment = DreamFragment(
+                content=content,
+                fragment_type=fragment_type,
+                confidence=confidence,
+                source_memory_ids=[]
+            )
+            
+            # Add fragment to knowledge graph
+            await knowledge_graph.add_node(fragment.id, 'dream_fragment', fragment.to_dict())
+            
+            # Add to appropriate ID list based on fragment type
+            if fragment_type == "insight":
+                insight_ids.append(fragment.id)
+            elif fragment_type == "question":
+                question_ids.append(fragment.id)
+            elif fragment_type == "hypothesis":
+                hypothesis_ids.append(fragment.id)
+            elif fragment_type == "counterfactual":
+                counterfactual_ids.append(fragment.id)
+        
+        # Create the report
+        report = DreamReport(
+            title=title,
+            participating_memory_ids=[],
+            insight_ids=insight_ids,
+            question_ids=question_ids,
+            hypothesis_ids=hypothesis_ids,
+            counterfactual_ids=counterfactual_ids
+        )
+        
+        # Add report to knowledge graph
+        await knowledge_graph.add_node(report.report_id, 'dream_report', report.to_dict())
+        
+        return {
+            "status": "success",
+            "report_id": report.report_id,
+            "fragment_count": report.get_fragment_count()
+        }
+    except Exception as e:
+        logger.error(f"Error creating test report: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating test report: {str(e)}")
+```
+
 # hpc_server.py
 
 ```py
@@ -122,8 +2369,8 @@ import json
 import logging
 import torch
 
-# Example HPC manager (you'll see the real code below in hpc_sig_flow_manager.py)
-from hpc_sig_flow_manager import HPCSIGFlowManager
+# Import the HPCSIGFlowManager from the memory system
+from memory.lucidia_memory_system.core.integration.hpc_sig_flow_manager import HPCSIGFlowManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -209,9 +2456,576 @@ class HPCServer:
             logger.info(f"HPC Server running on ws://{self.host}:{self.port}")
             await asyncio.Future()  # keep running
 
+class HPCClient:
+    """Client for the HPCServer to handle hyperdimensional computing operations via WebSocket."""
+    
+    def __init__(self, url: str = 'ws://localhost:5005', ping_interval: int = 20, ping_timeout: int = 20):
+        self.url = url
+        self.ping_interval = ping_interval
+        self.ping_timeout = ping_timeout
+        self.websocket = None
+        self.connected = False
+        logger.info(f"Initializing HPCClient, will connect to {url}")
+    
+    async def connect(self):
+        """Connect to the HPCServer."""
+        try:
+            self.websocket = await websockets.connect(
+                self.url,
+                ping_interval=self.ping_interval,
+                ping_timeout=self.ping_timeout
+            )
+            self.connected = True
+            logger.info(f"Connected to HPCServer at {self.url}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to HPCServer: {str(e)}")
+            self.connected = False
+            return False
+    
+    async def disconnect(self):
+        """Disconnect from the HPCServer."""
+        if self.websocket:
+            await self.websocket.close()
+            self.connected = False
+            logger.info("Disconnected from HPCServer")
+    
+    async def process_embeddings(self, embeddings):
+        """Process embeddings through the HPC system."""
+        if not self.connected:
+            await self.connect()
+        
+        request = {
+            'type': 'process',
+            'embeddings': embeddings if isinstance(embeddings, list) else embeddings.tolist()
+        }
+        
+        try:
+            await self.websocket.send(json.dumps(request))
+            response = await self.websocket.recv()
+            return json.loads(response)
+        except Exception as e:
+            logger.error(f"Error processing embeddings: {str(e)}")
+            return {'type': 'error', 'error': str(e)}
+    
+    async def get_stats(self):
+        """Get server statistics."""
+        if not self.connected:
+            await self.connect()
+        
+        request = {
+            'type': 'stats'
+        }
+        
+        try:
+            await self.websocket.send(json.dumps(request))
+            response = await self.websocket.recv()
+            return json.loads(response)
+        except Exception as e:
+            logger.error(f"Error getting stats: {str(e)}")
+            return {'type': 'error', 'error': str(e)}
+
 if __name__ == '__main__':
     server = HPCServer()
     asyncio.run(server.start())
+
+```
+
+# hypersphere_manager.py
+
+```py
+# server/hypersphere_manager.py
+import asyncio
+import logging
+import json
+from typing import Dict, List, Any, Optional, Union
+
+from memory.lucidia_memory_system.core.hypersphere_dispatcher import HypersphereDispatcher
+from memory.lucidia_memory_system.core.manifold_geometry import ManifoldGeometryRegistry
+from memory.lucidia_memory_system.core.memory_entry import MemoryEntry
+
+class HypersphereManager:
+    """
+    Manager for integrating the HypersphereDispatcher with the Lucidia memory system.
+    
+    This manager initializes and provides access to the HypersphereDispatcher,
+    ensuring proper geometric compatibility and batch optimization for embedding operations.
+    """
+    
+    def __init__(self, memory_client=None, config: Dict[str, Any] = None):
+        """
+        Initialize the HypersphereManager.
+        
+        Args:
+            memory_client: Reference to the EnhancedMemoryClient for tensor/HPC operations
+            config: Configuration dictionary
+        """
+        self.logger = logging.getLogger("HypersphereManager")
+        self.config = config or {}
+        self.memory_client = memory_client
+        
+        # Initialize geometry registry
+        self.geometry_registry = ManifoldGeometryRegistry()
+        
+        # Configure dispatcher settings
+        dispatcher_config = {
+            "max_connections": self.config.get("max_connections", 5),
+            "min_batch_size": self.config.get("min_batch_size", 1),
+            "max_batch_size": self.config.get("max_batch_size", 32),
+            "target_latency": self.config.get("target_latency", 100),  # ms
+            "default_model_version": self.config.get("default_model_version", "latest"),
+            "batch_timeout": self.config.get("batch_timeout", 0.1),  # seconds
+            "retry_limit": self.config.get("retry_limit", 3),
+            "error_cache_time": self.config.get("error_cache_time", 60),  # seconds
+            "use_circuit_breaker": self.config.get("use_circuit_breaker", True),
+        }
+        
+        # Initialize the hypersphere dispatcher
+        tensor_server_uri = self.config.get("tensor_server_uri", "ws://nemo_sig_v3:5001")
+        hpc_server_uri = self.config.get("hpc_server_uri", "ws://nemo_sig_v3:5005")
+        
+        self.dispatcher = HypersphereDispatcher(
+            tensor_server_uri=tensor_server_uri,
+            hpc_server_uri=hpc_server_uri,
+            max_connections=dispatcher_config.get("max_connections", 5),
+            min_batch_size=dispatcher_config.get("min_batch_size", 4),
+            max_batch_size=dispatcher_config.get("max_batch_size", 32),
+            target_latency=dispatcher_config.get("target_latency", 0.5),
+            reconnect_backoff_min=0.1,
+            reconnect_backoff_max=30.0,
+            reconnect_backoff_factor=2.0,
+            health_check_interval=60.0
+        )
+        
+        self.logger.info("HypersphereManager initialized")
+    
+    async def initialize(self):
+        """
+        Complete async initialization tasks.
+        
+        This method registers the WebSocket interface with the dispatcher
+        and performs any needed asynchronous setup.
+        """
+        try:
+            # Register the tensor and HPC WebSocket connection handlers if memory_client is available
+            if self.memory_client is not None:
+                self.dispatcher.register_tensor_client(self.memory_client)
+                self.dispatcher.register_hpc_client(self.memory_client)
+                
+                # Register supported model versions from config or defaults
+                model_versions = self.config.get("supported_model_versions", ["latest", "v1", "v2"])
+                for version in model_versions:
+                    await self.register_model_version(version)
+                
+                self.logger.info(f"HypersphereManager registered tensor and HPC clients successfully")
+            else:
+                self.logger.warning("Memory client not available for HypersphereManager")
+                
+        except Exception as e:
+            self.logger.error(f"Error during HypersphereManager initialization: {e}")
+    
+    async def register_model_version(self, version: str, dimensions: int = 768):
+        """
+        Register a model version with the geometry registry.
+        
+        Args:
+            version: Model version identifier
+            dimensions: Embedding dimensions for this model version
+        """
+        try:
+            # Create geometric profile for the model version
+            model_profile = {
+                "dimensions": dimensions,
+                "normalization": "unit_hypersphere",
+                "distance_metric": "cosine",
+                "compatible_versions": [version]  # Initially compatible only with itself
+            }
+            
+            # Register with geometry registry
+            self.geometry_registry.register_model_geometry(version, model_profile)
+            self.logger.info(f"Registered model version {version} with {dimensions} dimensions")
+            
+            return {"status": "success", "version": version, "dimensions": dimensions}
+        
+        except Exception as e:
+            self.logger.error(f"Error registering model version {version}: {e}")
+            return {"status": "error", "message": str(e)}
+    
+    async def get_embedding(self, text: str, model_version: str = "latest"):
+        """
+        Get embedding for text using the HypersphereDispatcher.
+        
+        Args:
+            text: The text to embed
+            model_version: The model version to use
+            
+        Returns:
+            Dict containing the embedding and metadata
+        """
+        try:
+            # Use the dispatcher to get the embedding
+            embedding_result = await self.dispatcher.get_embedding(text=text, model_version=model_version)
+            return embedding_result
+        except Exception as e:
+            self.logger.error(f"Error getting embedding: {e}")
+            return {"status": "error", "message": str(e)}
+    
+    async def batch_similarity_search(self, query_embedding, memory_embeddings, memory_ids, model_version="latest", top_k=10):
+        """
+        Perform similarity search using the HypersphereDispatcher.
+        
+        Args:
+            query_embedding: The query embedding
+            memory_embeddings: List of memory embeddings to search against
+            memory_ids: List of memory IDs corresponding to the embeddings
+            model_version: The model version to use
+            top_k: Number of top results to return
+            
+        Returns:
+            List of dicts containing memory_id and similarity score
+        """
+        try:
+            # Use the dispatcher to perform batch similarity search
+            results = await self.dispatcher.batch_similarity_search(
+                query_embedding=query_embedding,
+                memory_embeddings=memory_embeddings,
+                memory_ids=memory_ids,
+                model_version=model_version,
+                top_k=top_k
+            )
+            return results
+        except Exception as e:
+            self.logger.error(f"Error in batch similarity search: {e}")
+            return []
+    
+    async def batch_process_embeddings(self, texts: List[str], model_version: str = "latest") -> Dict[str, Any]:
+        """
+        Process multiple texts into embeddings in a single batch operation.
+        
+        Args:
+            texts: List of texts to embed
+            model_version: The model version to use
+            
+        Returns:
+            Dictionary containing all embeddings and metadata
+        """
+        try:
+            self.logger.info(f"Processing batch of {len(texts)} embeddings using model {model_version}")
+            
+            # Check if dispatcher is properly initialized
+            if not self.dispatcher or not hasattr(self.dispatcher, 'batch_get_embeddings'):
+                raise ValueError("HypersphereDispatcher not properly initialized")
+            
+            # Process the batch of texts
+            batch_results = await self.dispatcher.batch_get_embeddings(
+                texts=texts,
+                model_version=model_version
+            )
+            
+            # Format the response
+            embeddings = []
+            
+            # Check if the batch_results is properly structured
+            if batch_results["status"] == "success" and "embeddings" in batch_results:
+                # Get the embeddings array from the results
+                result_embeddings = batch_results["embeddings"]
+                
+                for i, text in enumerate(texts):
+                    # Make sure we have corresponding embedding result
+                    if i < len(result_embeddings):
+                        result = result_embeddings[i]
+                        if result["status"] == "success":
+                            embeddings.append({
+                                "index": i,
+                                "embedding": result["embedding"],
+                                "dimensions": len(result["embedding"]),
+                                "model_version": result.get("model_version", model_version),
+                                "status": "success"
+                            })
+                        else:
+                            embeddings.append({
+                                "index": i,
+                                "text": text[:50] + "..." if len(text) > 50 else text,
+                                "status": "error",
+                                "error": result.get("error", "Unknown error")
+                            })
+                    else:
+                        # Handle case where result is missing
+                        embeddings.append({
+                            "index": i,
+                            "text": text[:50] + "..." if len(text) > 50 else text,
+                            "status": "error",
+                            "error": "No embedding generated"
+                        })
+            else:
+                # Handle error case
+                error_msg = batch_results.get("message", "Unknown error in batch processing")
+                for i, text in enumerate(texts):
+                    embeddings.append({
+                        "index": i,
+                        "text": text[:50] + "..." if len(text) > 50 else text,
+                        "status": "error",
+                        "error": error_msg
+                    })
+            
+            return {
+                "status": "success",
+                "model_version": model_version,
+                "count": len(texts),
+                "successful": sum(1 for e in embeddings if e["status"] == "success"),
+                "embeddings": embeddings
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error processing batch embeddings: {e}")
+            return {
+                "status": "error",
+                "model_version": model_version,
+                "count": len(texts),
+                "successful": 0,
+                "message": str(e),
+                "embeddings": []
+            }
+    
+    async def shutdown(self):
+        """
+        Properly shutdown the HypersphereManager and its components.
+        """
+        try:
+            if hasattr(self.dispatcher, "shutdown") and callable(self.dispatcher.shutdown):
+                await self.dispatcher.shutdown()
+            self.logger.info("HypersphereManager shutdown complete")
+        except Exception as e:
+            self.logger.error(f"Error during HypersphereManager shutdown: {e}")
+
+```
+
+# llm_pipeline.py
+
+```py
+"""LLM Pipeline for Lucidia Dream Processing
+
+This module provides a minimal implementation of the LLM pipeline interface
+used by the dream processing system to generate text and process prompts.
+"""
+
+import logging
+import os
+import time
+from typing import Dict, Any, Optional, List, Union
+
+logger = logging.getLogger("LocalLLMPipeline")
+
+class LocalLLMPipeline:
+    """Enhanced LLM pipeline with memory integration and robust error handling."""
+
+    def __init__(self, api_endpoint: str = None, model: str = "auto", config: Optional[Any] = None):
+        """Initialize the LLM pipeline with the provided configuration.
+        
+        Args:
+            api_endpoint: API endpoint for LLM service
+            model: Model identifier to use for generation
+            config: LLMConfig object with configuration parameters
+        """
+        self.config = config
+        self.session = None
+        
+        # Access LLMConfig attributes directly instead of using .get()
+        if self.config:
+            self.base_url = self.config.api_endpoint
+            self.model = self.config.model
+            self.completion_tokens_limit = self.config.max_tokens
+            self.temperature = self.config.temperature
+        else:
+            self.base_url = api_endpoint or os.environ.get("LLM_API_ENDPOINT") or "http://127.0.0.1:1234/v1"
+            self.model = model
+            self.completion_tokens_limit = 1000
+            self.temperature = 0.7
+            
+        self.memory_client = None
+        self.logger = logging.getLogger("LocalLLMPipeline")
+        self._response_cache = {}
+        self._max_cache_size = 100
+        
+        self._last_connection_check = 0
+        self._connection_check_interval = 60  # seconds
+        
+        self.logger.info(f"Initialized LLM Pipeline with model={model} endpoint={self.base_url}")
+
+    def set_memory_client(self, memory_client):
+        """Set memory client for memory system integration."""
+        self.memory_client = memory_client
+        self.logger.info("Memory client attached to LLM pipeline")
+
+    async def initialize(self):
+        """Initialize aiohttp session and test API connectivity."""
+        if not self.session or self.session.closed:
+            import aiohttp
+            self.session = aiohttp.ClientSession()
+        
+        try:
+            async with self.session.get(f"{self.base_url}/models", timeout=5) as resp:
+                if resp.status == 200:
+                    self.logger.info("Successfully connected to LLM API.")
+            self._last_connection_check = time.time()
+            return True
+        except Exception as e:
+            self.logger.warning(f"LLM API connectivity test failed: {e}")
+            return False
+
+    async def generate(self, prompt: str, max_tokens: int = None, temperature: float = None) -> str:
+        """Generate text from a prompt.
+        
+        Args:
+            prompt: Input prompt
+            max_tokens: Maximum tokens to generate (overrides default)
+            temperature: Temperature parameter (overrides default)
+            
+        Returns:
+            Generated text
+        """
+        await self._ensure_connection()
+        
+        effective_max_tokens = max_tokens or self.completion_tokens_limit
+        effective_temperature = temperature or self.temperature
+        
+        # Use the OpenAI-compatible API format
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": "You are Lucidia, an advanced AI assistant with strong reasoning abilities."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": effective_temperature,
+            "max_tokens": effective_max_tokens,
+            "stream": False
+        }
+        
+        response = await self._execute_llm_request(payload)
+        return response or "I'm not sure how to respond to that."
+
+    async def _execute_llm_request(self, payload: Dict[str, Any]) -> Optional[str]:
+        """Execute LLM request with retries and error handling."""
+        max_attempts = 2
+        for attempt in range(max_attempts):
+            try:
+                async with self.session.post(f"{self.base_url}/chat/completions", json=payload, timeout=30) as resp:
+                    if resp.status != 200:
+                        self.logger.error(f"LLM API error: {await resp.text()}")
+                        continue
+                    data = await resp.json()
+                    response = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                    return response if response else "I'm not sure how to answer that."
+            except Exception as e:
+                self.logger.error(f"Error in LLM request: {e}")
+                if attempt < max_attempts - 1:
+                    import asyncio
+                    await asyncio.sleep(1)  # Brief pause before retry
+                    
+        return None
+
+    async def _ensure_connection(self) -> bool:
+        """Ensure a valid connection to the LLM API."""
+        # Check if we need to initialize or if it's been a while since our last check
+        import time
+        current_time = time.time()
+        if not self.session or self.session.closed or current_time - self._last_connection_check > self._connection_check_interval:
+            return await self.initialize()
+        return True
+
+    async def get_embedding(self, text: str) -> List[float]:
+        """Get embedding for text using the API or tensor service.
+        
+        Args:
+            text: Input text
+            
+        Returns:
+            Embedding vector
+        """
+        await self._ensure_connection()
+        
+        try:
+            # Use the OpenAI-compatible embeddings endpoint
+            payload = {
+                "input": text,
+                "model": "text-embedding-ada-002"  # Model name for compatibility
+            }
+            
+            async with self.session.post(f"{self.base_url}/embeddings", json=payload, timeout=10) as resp:
+                if resp.status != 200:
+                    self.logger.error(f"Embedding API error: {await resp.text()}")
+                    return [0.0] * 384  # Default embedding dimension
+                
+                data = await resp.json()
+                embedding = data.get("data", [{}])[0].get("embedding", [])
+                return embedding
+                
+        except Exception as e:
+            self.logger.error(f"Error getting embedding: {e}")
+            return [0.0] * 384  # Default embedding dimension
+
+    async def analyze(self, text: str) -> Dict[str, Any]:
+        """Analyze text for sentiment, topics, and entities.
+        
+        Args:
+            text: Input text
+            
+        Returns:
+            Analysis results
+        """
+        results = {
+            "sentiment": "neutral",
+            "topics": [],
+            "entities": []
+        }
+        
+        # Use the LLM to analyze the text
+        prompt = (
+            "Analyze the following text and extract:\n"
+            "1. Overall sentiment (positive, negative, or neutral)\n"
+            "2. Key topics (up to 3)\n"
+            "3. Named entities (people, places, organizations)\n\n"
+            "Format your response as JSON with keys 'sentiment', 'topics', and 'entities'.\n\n"
+            "Text to analyze: " + text
+        )
+        
+        try:
+            response = await self.generate(prompt)
+            # Try to extract JSON from the response
+            import re
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                import json
+                try:
+                    analysis = json.loads(json_match.group(0))
+                    # Update results with extracted analysis
+                    results.update(analysis)
+                except json.JSONDecodeError:
+                    self.logger.warning("Failed to parse analysis JSON")
+        except Exception as e:
+            self.logger.error(f"Error analyzing text: {e}")
+            
+        return results
+
+    async def get_status(self) -> Dict[str, Any]:
+        """Get status of the LLM service.
+        
+        Returns:
+            Status information
+        """
+        is_connected = await self._ensure_connection()
+        
+        return {
+            "status": "operational" if is_connected else "disconnected",
+            "model": self.model,
+            "api_endpoint": self.base_url,
+            "initialized": is_connected
+        }
+        
+    async def close(self):
+        """Close the aiohttp session."""
+        if self.session and not self.session.closed:
+            await self.session.close()
 
 ```
 
@@ -925,6 +3739,697 @@ class SignificanceAdapter:
             }
         else:
             return self.unified.get_stats()
+```
+
+# memory_client.py
+
+```py
+# server/memory_client.py
+import aiohttp
+import asyncio
+import logging
+import json
+import time
+import websockets
+from typing import Dict, List, Any, Optional, Union
+from datetime import datetime
+
+from memory.lucidia_memory_system.core.memory_entry import MemoryEntry
+
+class EnhancedMemoryClient:
+    """
+    Enhanced client for interacting with the memory system.
+    
+    This client provides a unified interface for memory operations,
+    handling communication with the tensor and HPC servers.
+    """
+    
+    def __init__(self, config: Dict[str, Any] = None):
+        """
+        Initialize the enhanced memory client.
+        
+        Args:
+            config: Configuration dictionary
+        """
+        self.logger = logging.getLogger("EnhancedMemoryClient")
+        self.config = config or {}
+        
+        # Server URLs
+        self.tensor_server_url = self.config.get("tensor_server_url", "ws://localhost:5001")
+        self.hpc_server_url = self.config.get("hpc_server_url", "ws://localhost:5005")
+        
+        # WebSocket connection parameters
+        self.ping_interval = self.config.get("ping_interval", 30.0)
+        self.max_retries = self.config.get("max_retries", 5)
+        self.retry_delay = self.config.get("retry_delay", 2.0)
+        
+        # Connection objects
+        self.tensor_connection = None
+        self.hpc_connection = None
+        
+        # Locks for thread safety
+        self.tensor_lock = asyncio.Lock()
+        self.hpc_lock = asyncio.Lock()
+        
+        # Memory cache for frequently accessed memories
+        self.memory_cache = {}
+        self.cache_size = self.config.get("cache_size", 100)
+        
+        # Operations statistics
+        self.stats = {
+            "total_requests": 0,
+            "successful_requests": 0,
+            "failed_requests": 0,
+            "embedding_requests": 0,
+            "retrieval_requests": 0,
+            "search_requests": 0,
+            "cache_hits": 0,
+            "cache_misses": 0
+        }
+        
+        self.logger.info("Enhanced memory client initialized")
+    
+    async def initialize(self) -> None:
+        """Initialize the memory client connections."""
+        # Establish initial connections (but don't fail if they don't connect immediately)
+        try:
+            await self.get_tensor_connection()
+        except Exception as e:
+            self.logger.warning(f"Could not establish initial tensor connection: {e}")
+            
+        try:
+            await self.get_hpc_connection()
+        except Exception as e:
+            self.logger.warning(f"Could not establish initial HPC connection: {e}")
+    
+    async def close(self) -> None:
+        """Close all connections."""
+        try:
+            if self.tensor_connection and not self.tensor_connection.closed:
+                await self.tensor_connection.close()
+                self.tensor_connection = None
+                
+            if self.hpc_connection and not self.hpc_connection.closed:
+                await self.hpc_connection.close()
+                self.hpc_connection = None
+                
+            self.logger.info("All memory client connections closed")
+        except Exception as e:
+            self.logger.error(f"Error closing memory client connections: {e}")
+    
+    async def close_connections(self):
+        """
+        Properly close all WebSocket connections.
+        
+        This method should be called during system shutdown to ensure clean termination
+        of all connections to tensor and HPC servers.
+        """
+        try:
+            self.logger.info("Closing all WebSocket connections...")
+            
+            # Close tensor connection if it exists
+            if self.tensor_connection and not self.tensor_connection.closed:
+                try:
+                    await self.tensor_connection.close()
+                    self.logger.info("Tensor connection closed successfully")
+                except Exception as e:
+                    self.logger.error(f"Error closing tensor connection: {e}")
+            
+            # Close HPC connection if it exists
+            if self.hpc_connection and not self.hpc_connection.closed:
+                try:
+                    await self.hpc_connection.close()
+                    self.logger.info("HPC connection closed successfully")
+                except Exception as e:
+                    self.logger.error(f"Error closing HPC connection: {e}")
+            
+            # Reset connection objects
+            self.tensor_connection = None
+            self.hpc_connection = None
+            
+            self.logger.info("All connections closed")
+            
+        except Exception as e:
+            self.logger.error(f"Error during connection shutdown: {e}")
+    
+    async def get_tensor_connection(self) -> Any:
+        """Get or establish connection to tensor server."""
+        async with self.tensor_lock:
+            # Check if existing connection is still alive
+            if self.tensor_connection and not self.tensor_connection.closed:
+                try:
+                    # Test connection with ping
+                    pong_waiter = await self.tensor_connection.ping()
+                    await asyncio.wait_for(pong_waiter, timeout=5.0)
+                    return self.tensor_connection
+                except (asyncio.TimeoutError, websockets.ConnectionClosed):
+                    # Connection is dead, need to reconnect
+                    self.logger.info("Tensor connection closed or unresponsive, reconnecting")
+                    try:
+                        await self.tensor_connection.close()
+                    except:
+                        pass
+                    self.tensor_connection = None
+            
+            # Establish new connection with retry
+            for attempt in range(self.max_retries):
+                try:
+                    self.logger.info(f"Connecting to tensor server at {self.tensor_server_url} (attempt {attempt+1}/{self.max_retries})")
+                    self.tensor_connection = await websockets.connect(
+                        self.tensor_server_url,
+                        ping_interval=self.ping_interval
+                    )
+                    self.logger.info("Successfully connected to tensor server")
+                    return self.tensor_connection
+                except Exception as e:
+                    self.logger.warning(f"Failed to connect to tensor server: {e}")
+                    if attempt < self.max_retries - 1:
+                        await asyncio.sleep(self.retry_delay * (2 ** attempt))  # Exponential backoff
+                    else:
+                        self.logger.error(f"Failed to connect to tensor server after {self.max_retries} attempts")
+                        raise
+    
+    async def get_hpc_connection(self) -> Any:
+        """Get or establish connection to HPC server."""
+        async with self.hpc_lock:
+            # Check if existing connection is still alive
+            if self.hpc_connection and not self.hpc_connection.closed:
+                try:
+                    # Test connection with ping
+                    pong_waiter = await self.hpc_connection.ping()
+                    await asyncio.wait_for(pong_waiter, timeout=5.0)
+                    return self.hpc_connection
+                except (asyncio.TimeoutError, websockets.ConnectionClosed):
+                    # Connection is dead, need to reconnect
+                    self.logger.info("HPC connection closed or unresponsive, reconnecting")
+                    try:
+                        await self.hpc_connection.close()
+                    except:
+                        pass
+                    self.hpc_connection = None
+            
+            # Establish new connection with retry
+            for attempt in range(self.max_retries):
+                try:
+                    self.logger.info(f"Connecting to HPC server at {self.hpc_server_url} (attempt {attempt+1}/{self.max_retries})")
+                    self.hpc_connection = await websockets.connect(
+                        self.hpc_server_url,
+                        ping_interval=self.ping_interval
+                    )
+                    self.logger.info("Successfully connected to HPC server")
+                    return self.hpc_connection
+                except Exception as e:
+                    self.logger.warning(f"Failed to connect to HPC server: {e}")
+                    if attempt < self.max_retries - 1:
+                        await asyncio.sleep(self.retry_delay * (2 ** attempt))  # Exponential backoff
+                    else:
+                        self.logger.error(f"Failed to connect to HPC server after {self.max_retries} attempts")
+                        raise
+    
+    async def add_memory(self, content: str, memory_type: str = "general", metadata: Optional[Dict[str, Any]] = None) -> Optional[MemoryEntry]:
+        """
+        Add a new memory to the memory system.
+        
+        Args:
+            content: Memory content
+            memory_type: Type of memory
+            metadata: Optional additional metadata
+            
+        Returns:
+            Created memory entry or None if failed
+        """
+        try:
+            self.stats["total_requests"] += 1
+            self.stats["embedding_requests"] += 1
+            
+            # Get tensor connection
+            tensor_conn = await self.get_tensor_connection()
+            
+            # Prepare request
+            request = {
+                "type": "embed",
+                "text": content,
+                "client_id": "memory_client",
+                "message_id": f"mem_{int(time.time() * 1000)}",
+                "timestamp": time.time()
+            }
+            
+            # Send request and get response
+            await tensor_conn.send(json.dumps(request))
+            response = await tensor_conn.recv()
+            response_data = json.loads(response)
+            
+            if "type" in response_data and response_data["type"] == "error":
+                self.logger.error(f"Error embedding memory: {response_data.get('error')}")
+                self.stats["failed_requests"] += 1
+                return None
+            
+            # Extract memory data
+            memory_id = response_data.get("id", f"memory_{int(time.time())}")
+            timestamp = response_data.get("timestamp", time.time())
+            significance = response_data.get("significance", 0.5)
+            
+            # Create memory entry
+            memory = MemoryEntry(
+                id=memory_id,
+                content=content,
+                memory_type=memory_type,
+                created_at=timestamp,
+                significance=significance,
+                metadata=metadata or {}
+            )
+            
+            # Add to cache
+            self._add_to_cache(memory)
+            
+            self.stats["successful_requests"] += 1
+            return memory
+            
+        except Exception as e:
+            self.logger.error(f"Error adding memory: {e}")
+            self.stats["failed_requests"] += 1
+            return None
+    
+    async def get_memory(self, memory_id: str) -> Optional[MemoryEntry]:
+        """
+        Retrieve a memory by ID.
+        
+        Args:
+            memory_id: ID of the memory to retrieve
+            
+        Returns:
+            Memory entry or None if not found
+        """
+        try:
+            self.stats["total_requests"] += 1
+            self.stats["retrieval_requests"] += 1
+            
+            # Check cache first
+            if memory_id in self.memory_cache:
+                self.stats["cache_hits"] += 1
+                memory = self.memory_cache[memory_id]
+                
+                # Update access stats and move to front of cache
+                memory.record_access()
+                self._add_to_cache(memory)  # This will move it to the front
+                
+                return memory
+            
+            self.stats["cache_misses"] += 1
+            
+            # Get tensor connection
+            tensor_conn = await self.get_tensor_connection()
+            
+            # Prepare request
+            request = {
+                "type": "get_memory",
+                "memory_id": memory_id,
+                "client_id": "memory_client",
+                "message_id": f"get_{int(time.time() * 1000)}",
+                "timestamp": time.time()
+            }
+            
+            # Send request and get response
+            await tensor_conn.send(json.dumps(request))
+            response = await tensor_conn.recv()
+            response_data = json.loads(response)
+            
+            if "type" in response_data and response_data["type"] == "error":
+                self.logger.error(f"Error retrieving memory: {response_data.get('error')}")
+                self.stats["failed_requests"] += 1
+                return None
+            
+            if "memory" not in response_data:
+                self.logger.error("No memory in response")
+                self.stats["failed_requests"] += 1
+                return None
+            
+            # Create memory entry from response
+            memory_data = response_data["memory"]
+            memory = MemoryEntry(
+                id=memory_data.get("id", memory_id),
+                content=memory_data.get("content", ""),
+                memory_type=memory_data.get("type", "general"),
+                created_at=memory_data.get("timestamp", time.time()),
+                significance=memory_data.get("significance", 0.5),
+                metadata=memory_data.get("metadata", {})
+            )
+            
+            # Add to cache
+            self._add_to_cache(memory)
+            
+            self.stats["successful_requests"] += 1
+            return memory
+            
+        except Exception as e:
+            self.logger.error(f"Error retrieving memory {memory_id}: {e}")
+            self.stats["failed_requests"] += 1
+            return None
+    
+    async def get_memories_by_ids(self, memory_ids: List[str]) -> List[MemoryEntry]:
+        """
+        Retrieve multiple memories by their IDs.
+        
+        Args:
+            memory_ids: List of memory IDs to retrieve
+            
+        Returns:
+            List of memory entries (any that couldn't be found will be omitted)
+        """
+        if not memory_ids:
+            return []
+            
+        # Retrieve each memory
+        results = await asyncio.gather(
+            *[self.get_memory(memory_id) for memory_id in memory_ids],
+            return_exceptions=True
+        )
+        
+        # Filter out exceptions and None results
+        memories = []
+        for result in results:
+            if isinstance(result, MemoryEntry):
+                memories.append(result)
+            elif isinstance(result, Exception):
+                self.logger.error(f"Error retrieving memory: {result}")
+        
+        return memories
+    
+    async def search_similar(self, query: str, limit: int = 10, threshold: float = 0.0) -> List[Dict[str, Any]]:
+        """
+        Search for memories similar to the query.
+        
+        Args:
+            query: Search query
+            limit: Maximum number of results
+            threshold: Minimum similarity threshold
+            
+        Returns:
+            List of search results, each containing memory and similarity score
+        """
+        try:
+            self.stats["total_requests"] += 1
+            self.stats["search_requests"] += 1
+            
+            # Get tensor connection
+            tensor_conn = await self.get_tensor_connection()
+            
+            # Prepare request
+            request = {
+                "type": "search",
+                "text": query,
+                "limit": limit,
+                "threshold": threshold,
+                "client_id": "memory_client",
+                "message_id": f"search_{int(time.time() * 1000)}",
+                "timestamp": time.time()
+            }
+            
+            # Send request and get response
+            await tensor_conn.send(json.dumps(request))
+            response = await tensor_conn.recv()
+            response_data = json.loads(response)
+            
+            if "type" in response_data and response_data["type"] == "error":
+                self.logger.error(f"Error searching memories: {response_data.get('error')}")
+                self.stats["failed_requests"] += 1
+                return []
+            
+            # Extract results
+            results = []
+            for result in response_data.get("results", []):
+                memory_data = result.get("memory", {})
+                
+                memory = MemoryEntry(
+                    id=memory_data.get("id", f"unknown_{int(time.time())}"),
+                    content=memory_data.get("content", ""),
+                    memory_type=memory_data.get("type", "general"),
+                    created_at=memory_data.get("timestamp", time.time()),
+                    significance=memory_data.get("significance", 0.5),
+                    metadata=memory_data.get("metadata", {})
+                )
+                
+                # Add to cache
+                self._add_to_cache(memory)
+                
+                results.append({
+                    "memory": memory,
+                    "similarity": result.get("similarity", 0.0)
+                })
+            
+            self.stats["successful_requests"] += 1
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Error searching memories: {e}")
+            self.stats["failed_requests"] += 1
+            return []
+    
+    async def get_recent_memories(self, limit: int = 10) -> List[MemoryEntry]:
+        """
+        Get the most recent memories.
+        
+        Args:
+            limit: Maximum number of memories to retrieve
+            
+        Returns:
+            List of recent memory entries
+        """
+        try:
+            self.stats["total_requests"] += 1
+            
+            # Get tensor connection
+            tensor_conn = await self.get_tensor_connection()
+            
+            # Prepare request
+            request = {
+                "type": "get_recent",
+                "limit": limit,
+                "client_id": "memory_client",
+                "message_id": f"recent_{int(time.time() * 1000)}",
+                "timestamp": time.time()
+            }
+            
+            # Send request and get response
+            await tensor_conn.send(json.dumps(request))
+            response = await tensor_conn.recv()
+            response_data = json.loads(response)
+            
+            if "type" in response_data and response_data["type"] == "error":
+                self.logger.error(f"Error retrieving recent memories: {response_data.get('error')}")
+                self.stats["failed_requests"] += 1
+                return []
+            
+            # Extract memories
+            memories = []
+            for memory_data in response_data.get("memories", []):
+                memory = MemoryEntry(
+                    id=memory_data.get("id", f"unknown_{int(time.time())}"),
+                    content=memory_data.get("content", ""),
+                    memory_type=memory_data.get("type", "general"),
+                    created_at=memory_data.get("timestamp", time.time()),
+                    significance=memory_data.get("significance", 0.5),
+                    metadata=memory_data.get("metadata", {})
+                )
+                
+                # Add to cache
+                self._add_to_cache(memory)
+                
+                memories.append(memory)
+            
+            self.stats["successful_requests"] += 1
+            return memories
+            
+        except Exception as e:
+            self.logger.error(f"Error retrieving recent memories: {e}")
+            self.stats["failed_requests"] += 1
+            return []
+    
+    async def get_significant_memories(self, limit: int = 10, threshold: float = 0.7) -> List[MemoryEntry]:
+        """
+        Get the most significant memories.
+        
+        Args:
+            limit: Maximum number of memories to retrieve
+            threshold: Minimum significance threshold
+            
+        Returns:
+            List of significant memory entries
+        """
+        try:
+            self.stats["total_requests"] += 1
+            
+            # Get tensor connection
+            tensor_conn = await self.get_tensor_connection()
+            
+            # Prepare request
+            request = {
+                "type": "get_significant",
+                "limit": limit,
+                "threshold": threshold,
+                "client_id": "memory_client",
+                "message_id": f"significant_{int(time.time() * 1000)}",
+                "timestamp": time.time()
+            }
+            
+            # Send request and get response
+            await tensor_conn.send(json.dumps(request))
+            response = await tensor_conn.recv()
+            response_data = json.loads(response)
+            
+            if "type" in response_data and response_data["type"] == "error":
+                self.logger.error(f"Error retrieving significant memories: {response_data.get('error')}")
+                self.stats["failed_requests"] += 1
+                return []
+            
+            # Extract memories
+            memories = []
+            for memory_data in response_data.get("memories", []):
+                memory = MemoryEntry(
+                    id=memory_data.get("id", f"unknown_{int(time.time())}"),
+                    content=memory_data.get("content", ""),
+                    memory_type=memory_data.get("type", "general"),
+                    created_at=memory_data.get("timestamp", time.time()),
+                    significance=memory_data.get("significance", 0.5),
+                    metadata=memory_data.get("metadata", {})
+                )
+                
+                # Add to cache
+                self._add_to_cache(memory)
+                
+                memories.append(memory)
+            
+            self.stats["successful_requests"] += 1
+            return memories
+            
+        except Exception as e:
+            self.logger.error(f"Error retrieving significant memories: {e}")
+            self.stats["failed_requests"] += 1
+            return []
+    
+    async def get_memories_by_timeframe(
+        self, 
+        start_time: Union[float, datetime], 
+        end_time: Union[float, datetime],
+        limit: int = 100
+    ) -> List[MemoryEntry]:
+        """
+        Get memories within a specific timeframe.
+        
+        Args:
+            start_time: Start time (timestamp or datetime)
+            end_time: End time (timestamp or datetime)
+            limit: Maximum number of memories to retrieve
+            
+        Returns:
+            List of memory entries within the timeframe
+        """
+        try:
+            self.stats["total_requests"] += 1
+            
+            # Convert datetime to timestamp if needed
+            if isinstance(start_time, datetime):
+                start_time = start_time.timestamp()
+            if isinstance(end_time, datetime):
+                end_time = end_time.timestamp()
+            
+            # Get tensor connection
+            tensor_conn = await self.get_tensor_connection()
+            
+            # Prepare request
+            request = {
+                "type": "get_by_timeframe",
+                "start_time": start_time,
+                "end_time": end_time,
+                "limit": limit,
+                "client_id": "memory_client",
+                "message_id": f"timeframe_{int(time.time() * 1000)}",
+                "timestamp": time.time()
+            }
+            
+            # Send request and get response
+            await tensor_conn.send(json.dumps(request))
+            response = await tensor_conn.recv()
+            response_data = json.loads(response)
+            
+            if "type" in response_data and response_data["type"] == "error":
+                self.logger.error(f"Error retrieving memories by timeframe: {response_data.get('error')}")
+                self.stats["failed_requests"] += 1
+                return []
+            
+            # Extract memories
+            memories = []
+            for memory_data in response_data.get("memories", []):
+                memory = MemoryEntry(
+                    id=memory_data.get("id", f"unknown_{int(time.time())}"),
+                    content=memory_data.get("content", ""),
+                    memory_type=memory_data.get("type", "general"),
+                    created_at=memory_data.get("timestamp", time.time()),
+                    significance=memory_data.get("significance", 0.5),
+                    metadata=memory_data.get("metadata", {})
+                )
+                
+                # Add to cache
+                self._add_to_cache(memory)
+                
+                memories.append(memory)
+            
+            self.stats["successful_requests"] += 1
+            return memories
+            
+        except Exception as e:
+            self.logger.error(f"Error retrieving memories by timeframe: {e}")
+            self.stats["failed_requests"] += 1
+            return []
+    
+    def _add_to_cache(self, memory: MemoryEntry) -> None:
+        """
+        Add a memory to the cache, removing oldest entries if needed.
+        
+        Args:
+            memory: Memory entry to add to cache
+        """
+        # Add or move to front of cache
+        self.memory_cache[memory.id] = memory
+        
+        # Remove oldest entries if cache is too large
+        if len(self.memory_cache) > self.cache_size:
+            # Find oldest access time
+            oldest_id = None
+            oldest_time = float('inf')
+            
+            for mem_id, mem in self.memory_cache.items():
+                if mem.last_access < oldest_time:
+                    oldest_time = mem.last_access
+                    oldest_id = mem_id
+            
+            # Remove oldest
+            if oldest_id:
+                del self.memory_cache[oldest_id]
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get memory client statistics.
+        
+        Returns:
+            Dictionary of statistics
+        """
+        return {
+            "total_requests": self.stats["total_requests"],
+            "successful_requests": self.stats["successful_requests"],
+            "failed_requests": self.stats["failed_requests"],
+            "success_rate": self.stats["successful_requests"] / max(1, self.stats["total_requests"]),
+            "embedding_requests": self.stats["embedding_requests"],
+            "retrieval_requests": self.stats["retrieval_requests"],
+            "search_requests": self.stats["search_requests"],
+            "cache_size": len(self.memory_cache),
+            "cache_limit": self.cache_size,
+            "cache_hits": self.stats["cache_hits"],
+            "cache_misses": self.stats["cache_misses"],
+            "cache_hit_rate": self.stats["cache_hits"] / max(1, self.stats["cache_hits"] + self.stats["cache_misses"]),
+            "tensor_server_url": self.tensor_server_url,
+            "hpc_server_url": self.hpc_server_url
+        }
 ```
 
 # memory_core.py
@@ -2914,7 +6419,7 @@ import torch
 import time
 from sentence_transformers import SentenceTransformer
 from typing import Dict, Any, List
-from server.hpc_sig_flow_manager import HPCSIGFlowManager
+from memory.lucidia_memory_system.core.integration.hpc_sig_flow_manager import HPCSIGFlowManager
 from server.memory_system import MemorySystem
 
 logging.basicConfig(level=logging.INFO)
@@ -3077,6 +6582,94 @@ class TensorServer:
         async with websockets.serve(self.handle_websocket, self.host, self.port):
             logger.info(f"Server running on ws://{self.host}:{self.port}")
             await asyncio.Future()
+
+class TensorClient:
+    """Client for the TensorServer to handle embedding and memory operations via WebSocket."""
+    
+    def __init__(self, url: str = 'ws://localhost:5001', ping_interval: int = 20, ping_timeout: int = 20):
+        self.url = url
+        self.ping_interval = ping_interval
+        self.ping_timeout = ping_timeout
+        self.websocket = None
+        self.connected = False
+        logger.info(f"Initializing TensorClient, will connect to {url}")
+    
+    async def connect(self):
+        """Connect to the TensorServer."""
+        try:
+            self.websocket = await websockets.connect(
+                self.url,
+                ping_interval=self.ping_interval,
+                ping_timeout=self.ping_timeout
+            )
+            self.connected = True
+            logger.info(f"Connected to TensorServer at {self.url}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to TensorServer: {str(e)}")
+            self.connected = False
+            return False
+    
+    async def disconnect(self):
+        """Disconnect from the TensorServer."""
+        if self.websocket:
+            await self.websocket.close()
+            self.connected = False
+            logger.info("Disconnected from TensorServer")
+    
+    async def get_embedding(self, text: str) -> dict:
+        """Get embedding for a text."""
+        if not self.connected:
+            await self.connect()
+        
+        request = {
+            'type': 'embed',
+            'text': text
+        }
+        
+        try:
+            await self.websocket.send(json.dumps(request))
+            response = await self.websocket.recv()
+            return json.loads(response)
+        except Exception as e:
+            logger.error(f"Error getting embedding: {str(e)}")
+            return {'type': 'error', 'error': str(e)}
+    
+    async def search_memories(self, text: str, limit: int = 5) -> dict:
+        """Search for memories similar to the given text."""
+        if not self.connected:
+            await self.connect()
+        
+        request = {
+            'type': 'search',
+            'text': text,
+            'limit': limit
+        }
+        
+        try:
+            await self.websocket.send(json.dumps(request))
+            response = await self.websocket.recv()
+            return json.loads(response)
+        except Exception as e:
+            logger.error(f"Error searching memories: {str(e)}")
+            return {'type': 'error', 'error': str(e)}
+    
+    async def get_stats(self) -> dict:
+        """Get server statistics."""
+        if not self.connected:
+            await self.connect()
+        
+        request = {
+            'type': 'stats'
+        }
+        
+        try:
+            await self.websocket.send(json.dumps(request))
+            response = await self.websocket.recv()
+            return json.loads(response)
+        except Exception as e:
+            logger.error(f"Error getting stats: {str(e)}")
+            return {'type': 'error', 'error': str(e)}
 
 if __name__ == '__main__':
     server = TensorServer()

@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" width="900" height="700">
+  <!-- Background -->
+  <rect width="900" height="700" fill="#f8f9fa" />
+  
+  <!-- Main Components -->
+  <g id="memory-core" transform="translate(150, 200)">
+    <rect x="0" y="0" width="600" height="380" rx="15" fill="#e3f2fd" stroke="#2196f3" stroke-width="2" />
+    <text x="300" y="30" font-family="Arial" font-size="18" font-weight="bold" text-anchor="middle">Memory Core System</text>
+    
+    <!-- STM -->
+    <rect x="30" y="60" width="170" height="100" rx="10" fill="#bbdefb" stroke="#1976d2" stroke-width="2" />
+    <text x="115" y="90" font-family="Arial" font-size="16" font-weight="bold" text-anchor="middle">Short-Term Memory</text>
+    <text x="115" y="115" font-family="Arial" font-size="12" text-anchor="middle">Recent interactions</text>
+    <text x="115" y="135" font-family="Arial" font-size="12" text-anchor="middle">Fast access, temporary</text>
+    
+    <!-- LTM -->
+    <rect x="30" y="240" width="170" height="100" rx="10" fill="#bbdefb" stroke="#1976d2" stroke-width="2" />
+    <text x="115" y="270" font-family="Arial" font-size="16" font-weight="bold" text-anchor="middle">Long-Term Memory</text>
+    <text x="115" y="295" font-family="Arial" font-size="12" text-anchor="middle">Persistent storage</text>
+    <text x="115" y="315" font-family="Arial" font-size="12" text-anchor="middle">Significance-weighted</text>
+    
+    <!-- MPL -->
+    <rect x="400" y="150" width="170" height="100" rx="10" fill="#bbdefb" stroke="#1976d2" stroke-width="2" />
+    <text x="485" y="180" font-family="Arial" font-size="16" font-weight="bold" text-anchor="middle">Memory</text>
+    <text x="485" y="200" font-family="Arial" font-size="16" font-weight="bold" text-anchor="middle">Prioritization Layer</text>
+    <text x="485" y="225" font-family="Arial" font-size="12" text-anchor="middle">Routes queries to</text>
+    <text x="485" y="240" font-family="Arial" font-size="12" text-anchor="middle">optimal memory source</text>
+    
+    <!-- Embedding Comparator -->
+    <rect x="220" y="150" width="160" height="100" rx="10" fill="#bbdefb" stroke="#1976d2" stroke-width="2" />
+    <text x="300" y="180" font-family="Arial" font-size="16" font-weight="bold" text-anchor="middle">Embedding</text>
+    <text x="300" y="200" font-family="Arial" font-size="16" font-weight="bold" text-anchor="middle">Comparator</text>
+    <text x="300" y="225" font-family="Arial" font-size="12" text-anchor="middle">Semantic similarity</text>
+    <text x="300" y="240" font-family="Arial" font-size="12" text-anchor="middle">calculations</text>
+    
+    <!-- Arrows -->
+    <line x1="115" y1="160" x2="115" y2="240" stroke="#1976d2" stroke-width="2" marker-end="url(#arrowhead)" />
+    <line x1="220" y1="200" x2="200" y2="200" stroke="#1976d2" stroke-width="2" />
+    <line x1="200" y1="200" x2="200" y2="110" stroke="#1976d2" stroke-width="2" marker-end="url(#arrowhead)" />
+    <line x1="200" y1="200" x2="200" y2="290" stroke="#1976d2" stroke-width="2" marker-end="url(#arrowhead)" />
+    <line x1="380" y1="200" x2="400" y2="200" stroke="#1976d2" stroke-width="2" marker-end="url(#arrowhead)" />
+    
+    <path d="M 400,190 C 370,190 370,110 200,110" fill="none" stroke="#1976d2" stroke-width="2" />
+    <path d="M 400,210 C 370,210 370,290 200,290" fill="none" stroke="#1976d2" stroke-width="2" />
+  </g>
+  
+  <!-- High-level flow -->
+  <g id="flow" transform="translate(150, 50)">
+    <rect x="0" y="0" width="120" height="60" rx="10" fill="#e8f5e9" stroke="#43a047" stroke-width="2" />
+    <text x="60" y="35" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle">Input</text>
+    
+    <rect x="240" y="0" width="120" height="60" rx="10" fill="#fff3e0" stroke="#ff9800" stroke-width="2" />
+    <text x="300" y="35" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle">Processing</text>
+    
+    <rect x="480" y="0" width="120" height="60" rx="10" fill="#e8f5e9" stroke="#43a047" stroke-width="2" />
+    <text x="540" y="35" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle">Output</text>
+    
+    <!-- Arrows -->
+    <line x1="120" y1="30" x2="240" y2="30" stroke="#424242" stroke-width="2" marker-end="url(#arrowhead)" />
+    <line x1="360" y1="30" x2="480" y2="30" stroke="#424242" stroke-width="2" marker-end="url(#arrowhead)" />
+    
+    <!-- Connections to memory -->
+    <line x1="300" y1="60" x2="300" y2="150" stroke="#424242" stroke-width="2" marker-end="url(#arrowhead)" />
+    <line x1="450" y1="150" x2="450" y2="60" stroke="#424242" stroke-width="2" marker-end="url(#arrowhead)" />
+  </g>
+  
+  <!-- External Services -->
+  <g id="external" transform="translate(150, 600)">
+    <rect x="50" y="0" width="140" height="60" rx="10" fill="#f3e5f5" stroke="#9c27b0" stroke-width="2" />
+    <text x="120" y="25" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle">Tensor Server</text>
+    <text x="120" y="45" font-family="Arial" font-size="12" text-anchor="middle">Embedding Generation</text>
+    
+    <rect x="410" y="0" width="140" height="60" rx="10" fill="#f3e5f5" stroke="#9c27b0" stroke-width="2" />
+    <text x="480" y="25" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle">HPC Server</text>
+    <text x="480" y="45" font-family="Arial" font-size="12" text-anchor="middle">Significance Calculation</text>
+    
+    <!-- Connections to memory core -->
+    <line x1="120" y1="0" x2="120" y2="-40" stroke="#9c27b0" stroke-width="2" marker-end="url(#arrowhead)" />
+    <line x1="480" y1="0" x2="480" y2="-40" stroke="#9c27b0" stroke-width="2" marker-end="url(#arrowhead)" />
+  </g>
+  
+  <!-- Special memory features -->
+  <g id="features" transform="translate(780, 210)">
+    <rect x="0" y="0" width="120" height="40" rx="8" fill="#e1f5fe" stroke="#0288d1" stroke-width="2" />
+    <text x="60" y="25" font-family="Arial" font-size="12" font-weight="bold" text-anchor="middle">Emotion Tracking</text>
+    
+    <rect x="0" y="60" width="120" height="40" rx="8" fill="#e1f5fe" stroke="#0288d1" stroke-width="2" />
+    <text x="60" y="85" font-family="Arial" font-size="12" font-weight="bold" text-anchor="middle">Personal Details</text>
+    
+    <rect x="0" y="120" width="120" height="40" rx="8" fill="#e1f5fe" stroke="#0288d1" stroke-width="2" />
+    <text x="60" y="145" font-family="Arial" font-size="12" font-weight="bold" text-anchor="middle">Topic Tracking</text>
+    
+    <rect x="0" y="180" width="120" height="40" rx="8" fill="#e1f5fe" stroke="#0288d1" stroke-width="2" />
+    <text x="60" y="205" font-family="Arial" font-size="12" font-weight="bold" text-anchor="middle">Memory Decay</text>
+    
+    <!-- Connection to memory core -->
+    <line x1="0" y1="100" x2="-30" y2="100" stroke="#0288d1" stroke-width="2" marker-end="url(#arrowhead-reverse)" />
+  </g>
+  
+  <!-- Missing Components (faded) -->
+  <g id="missing" transform="translate(780, 400)" opacity="0.6">
+    <rect x="0" y="0" width="120" height="40" rx="8" fill="#ffebee" stroke="#e53935" stroke-width="2" />
+    <text x="60" y="25" font-family="Arial" font-size="12" font-weight="bold" text-anchor="middle">Self Model</text>
+    
+    <rect x="0" y="60" width="120" height="40" rx="8" fill="#ffebee" stroke="#e53935" stroke-width="2" />
+    <text x="60" y="85" font-family="Arial" font-size="12" font-weight="bold" text-anchor="middle">World Model</text>
+    
+    <rect x="0" y="120" width="120" height="40" rx="8" fill="#ffebee" stroke="#e53935" stroke-width="2" />
+    <text x="60" y="145" font-family="Arial" font-size="12" font-weight="bold" text-anchor="middle">Knowledge Graph</text>
+    
+    <rect x="0" y="180" width="120" height="40" rx="8" fill="#ffebee" stroke="#e53935" stroke-width="2" />
+    <text x="60" y="205" font-family="Arial" font-size="12" font-weight="bold" text-anchor="middle">Dream Processor</text>
+    
+    <!-- "Missing" label -->
+    <text x="60" y="-15" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle" fill="#e53935">Missing Components</text>
+  </g>
+  
+  <!-- Title -->
+  <text x="450" y="30" font-family="Arial" font-size="24" font-weight="bold" text-anchor="middle">Lucidia Memory Architecture</text>
+  
+  <!-- Markers -->
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1976d2" />
+    </marker>
+    <marker id="arrowhead-reverse" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
+      <polygon points="10 0, 0 3.5, 10 7" fill="#0288d1" />
+    </marker>
+  </defs>
+</svg>

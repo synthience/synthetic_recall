@@ -34,10 +34,11 @@ ENV CUDA_VISIBLE_DEVICES=all
 ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6+PTX"
 ENV TORCH_NVCC_FLAGS="-Xfatbin -compress-all"
 
-# Set up entry point
+# Set up entry point - Fix for line endings and permissions
 COPY docker-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-ENTRYPOINT ["docker-entrypoint.sh"]
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh && \
+    sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
 # Default command
 CMD ["/bin/bash"]

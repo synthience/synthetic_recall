@@ -1,0 +1,43 @@
+FROM python:3.11-slim
+
+WORKDIR /workspace/project
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PyTorch CPU version (smaller download size)
+RUN pip install --no-cache-dir torch==2.0.1 --extra-index-url https://download.pytorch.org/whl/cpu
+
+# Install Python dependencies
+COPY requirements.luciddream.txt /workspace/project/
+RUN pip install --no-cache-dir -r requirements.luciddream.txt
+
+# Create necessary directories
+RUN mkdir -p /workspace/data/self_model \
+    /workspace/data/world_model \
+    /workspace/data/knowledge_graph \
+    /workspace/data/dreams
+
+# Copy application code
+COPY memory /workspace/project/memory
+COPY server /workspace/project/server
+COPY voice_core /workspace/project/voice_core
+
+# Set environment variables
+ENV PYTHONPATH=/workspace/project
+ENV TENSOR_SERVER_URL=ws://nemo_sig_v3:5001
+ENV HPC_SERVER_URL=ws://nemo_sig_v3:5005
+ENV DREAM_API_PORT=8080
+ENV LOG_LEVEL=INFO
+ENV STORAGE_PATH=/workspace/data
+ENV LLM_API_ENDPOINT=http://host.docker.internal:1234/v1
+
+# Expose ports
+EXPOSE 8080
+EXPOSE 8081
+
+# Run the dream API server
+CMD ["python", "/workspace/project/server/dream_api_server.py"]

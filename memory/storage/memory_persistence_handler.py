@@ -15,7 +15,7 @@ import shutil
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Set, Tuple, Union
 from datetime import datetime
-from ..memory_types import MemoryEntry, MemoryTypes
+from ..lucidia_memory_system.core.memory_types import MemoryEntry, MemoryTypes
 
 logger = logging.getLogger(__name__)
 

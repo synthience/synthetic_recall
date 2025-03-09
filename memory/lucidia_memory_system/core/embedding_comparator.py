@@ -6,7 +6,14 @@ Provides standardized interfaces for generating embeddings
 and comparing their similarity across memory components.
 """
 
-import torch
+# Try to import torch, but create a fallback if it's not available
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    print("Warning: PyTorch not available. Using NumPy fallback for embedding operations.")
+
 import logging
 import asyncio
 from typing import Dict, Any, Optional, Union, List
@@ -46,7 +53,7 @@ class EmbeddingComparator:
         
         logger.info(f"Initialized EmbeddingComparator with dim={embedding_dim}")
     
-    async def get_embedding(self, text: str) -> Optional[torch.Tensor]:
+    async def get_embedding(self, text: str) -> Optional[Union[np.ndarray, 'torch.Tensor']]:
         """
         Generate embedding for text with caching.
         
@@ -90,7 +97,7 @@ class EmbeddingComparator:
             logger.error(f"Error generating embedding: {e}")
             return None
     
-    def _normalize_embedding(self, embedding: Union[torch.Tensor, np.ndarray, List[float]]) -> torch.Tensor:
+    def _normalize_embedding(self, embedding: Union[List[float], np.ndarray, 'torch.Tensor']) -> Union[np.ndarray, 'torch.Tensor']:
         """
         Normalize embedding to unit vector.
         
@@ -98,48 +105,35 @@ class EmbeddingComparator:
             embedding: Embedding to normalize
             
         Returns:
-            Normalized embedding tensor
+            Normalized embedding tensor or ndarray
         """
-        try:
-            # Convert to torch tensor if not already
+        self.stats['embeddings_normalized'] += 1
+        
+        # Convert to appropriate type based on torch availability
+        if TORCH_AVAILABLE:
             if not isinstance(embedding, torch.Tensor):
-                if isinstance(embedding, np.ndarray):
-                    embedding = torch.from_numpy(embedding).float()
-                elif isinstance(embedding, list):
+                if isinstance(embedding, list):
                     embedding = torch.tensor(embedding, dtype=torch.float32)
-                else:
-                    raise ValueError(f"Unsupported embedding type: {type(embedding)}")
-            
-            # Ensure correct shape
-            if len(embedding.shape) > 1 and embedding.shape[0] == 1:
-                embedding = embedding.squeeze(0)
-            
-            # Compute L2 norm
-            norm = torch.norm(embedding, p=2)
-            
-            # Normalize if norm is non-zero
+                elif isinstance(embedding, np.ndarray):
+                    embedding = torch.from_numpy(embedding).float()
+                    
+            # Normalize using PyTorch
+            norm = torch.norm(embedding)
             if norm > 0:
-                normalized = embedding / norm
-            else:
-                # If norm is zero, return original to avoid NaN
-                normalized = embedding
+                embedding = embedding / norm
+            return embedding
+        else:
+            # Fallback to NumPy implementation
+            if isinstance(embedding, list):
+                embedding = np.array(embedding, dtype=np.float32)
                 
-            self.stats['embeddings_normalized'] += 1
-            return normalized
-            
-        except Exception as e:
-            logger.error(f"Error normalizing embedding: {e}")
-            # Return original embedding as fallback
-            if isinstance(embedding, torch.Tensor):
-                return embedding
-            elif isinstance(embedding, np.ndarray):
-                return torch.from_numpy(embedding).float()
-            elif isinstance(embedding, list):
-                return torch.tensor(embedding, dtype=torch.float32)
-            else:
-                raise ValueError(f"Unsupported embedding type: {type(embedding)}")
+            # Normalize using NumPy
+            norm = np.linalg.norm(embedding)
+            if norm > 0:
+                embedding = embedding / norm
+            return embedding
     
-    async def compare(self, embedding1: torch.Tensor, embedding2: torch.Tensor) -> float:
+    async def compare(self, embedding1: Union[np.ndarray, 'torch.Tensor'], embedding2: Union[np.ndarray, 'torch.Tensor']) -> float:
         """
         Compare two embeddings and return similarity score.
         
@@ -162,7 +156,10 @@ class EmbeddingComparator:
                 embedding2 = embedding2.squeeze()
                 
             # Cosine similarity (dot product of normalized vectors)
-            similarity = torch.dot(embedding1, embedding2).item()
+            if TORCH_AVAILABLE:
+                similarity = torch.dot(embedding1, embedding2).item()
+            else:
+                similarity = np.dot(embedding1, embedding2)
             
             # Ensure result is in valid range
             similarity = max(0.0, min(1.0, similarity))
@@ -174,8 +171,8 @@ class EmbeddingComparator:
             logger.error(f"Error comparing embeddings: {e}")
             return 0.0
     
-    async def batch_compare(self, query_embedding: torch.Tensor, 
-                          embeddings: List[torch.Tensor]) -> List[float]:
+    async def batch_compare(self, query_embedding: Union[np.ndarray, 'torch.Tensor'], 
+                          embeddings: List[Union[np.ndarray, 'torch.Tensor']]) -> List[float]:
         """
         Compare query embedding against multiple embeddings.
         
@@ -187,20 +184,56 @@ class EmbeddingComparator:
             List of similarity scores (0.0-1.0)
         """
         try:
-            # Normalize query embedding
-            query_embedding = self._normalize_embedding(query_embedding)
+            results = []
             
-            # Calculate similarities for each embedding
-            similarities = []
-            for emb in embeddings:
-                similarity = await self.compare(query_embedding, emb)
-                similarities.append(similarity)
+            # Optimize batch computation based on available library
+            if TORCH_AVAILABLE and isinstance(query_embedding, torch.Tensor):
+                # Ensure all embeddings are torch tensors
+                tensor_embeddings = []
+                for emb in embeddings:
+                    if isinstance(emb, np.ndarray):
+                        tensor_embeddings.append(torch.from_numpy(emb).float())
+                    elif isinstance(emb, list):
+                        tensor_embeddings.append(torch.tensor(emb, dtype=torch.float32))
+                    else:  # already a torch tensor
+                        tensor_embeddings.append(emb)
                 
-            self.stats['comparisons_made'] += len(embeddings)
-            return similarities
+                # Stack embeddings for batch operation
+                if tensor_embeddings:
+                    stacked = torch.stack(tensor_embeddings)
+                    # Compute dot product for all embeddings at once
+                    similarities = torch.matmul(stacked, query_embedding).tolist()
+                    
+                    # Ensure results are in valid range [0, 1]
+                    results = [max(0.0, min(1.0, sim)) for sim in similarities]
+                
+            else:  # NumPy fallback
+                # Ensure query_embedding is numpy array
+                if TORCH_AVAILABLE and isinstance(query_embedding, torch.Tensor):
+                    query_np = query_embedding.cpu().numpy()
+                else:
+                    query_np = query_embedding if isinstance(query_embedding, np.ndarray) else np.array(query_embedding)
+                
+                # Process each embedding individually
+                for emb in embeddings:
+                    if TORCH_AVAILABLE and isinstance(emb, torch.Tensor):
+                        emb_np = emb.cpu().numpy()
+                    elif isinstance(emb, list):
+                        emb_np = np.array(emb)
+                    else:  # already numpy
+                        emb_np = emb
+                    
+                    similarity = np.dot(query_np, emb_np)
+                    # Ensure result is in valid range
+                    similarity = max(0.0, min(1.0, similarity))
+                    results.append(similarity)
+            
+            self.stats['comparisons_made'] += len(results)
+            return results
             
         except Exception as e:
-            logger.error(f"Error in batch comparison: {e}")
+            logger.error(f"Error in batch compare: {e}")
+            # Return zeros as fallback
             return [0.0] * len(embeddings)
     
     async def clear_cache(self) -> None:

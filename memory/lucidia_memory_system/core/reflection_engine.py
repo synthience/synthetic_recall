@@ -20,6 +20,7 @@ from memory.lucidia_memory_system.core.dream_structures import DreamReport, Drea
 from memory.lucidia_memory_system.core.knowledge_graph import LucidiaKnowledgeGraph
 from memory.lucidia_memory_system.core.memory_entry import MemoryEntry
 from memory.lucidia_memory_system.core.integration import MemoryIntegration
+from memory.lucidia_memory_system.core.hypersphere_dispatcher import HypersphereDispatcher
 
 # Define prompt templates for the reflection engine
 REFLECTION_PROMPT = """
@@ -96,6 +97,7 @@ Report statistics:
 - Supporting evidence items: {num_supporting_evidence}
 - Contradicting evidence items: {num_contradicting_evidence}
 - Action items: {num_action_items}
+- Refinement count: {refinement_count}/{max_refinements}
 
 In 2-3 sentences, summarize the quality and reliability of this report based on these metrics.
 Focus on the report's strengths, limitations, and areas for improvement.
@@ -116,7 +118,8 @@ class ReflectionEngine:
         memory_integration: Optional[MemoryIntegration] = None,
         llm_service = None,
         review_interval: int = 3600,
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None,
+        hypersphere_dispatcher: Optional[HypersphereDispatcher] = None
     ):
         """
         Initialize the Reflection Engine.
@@ -127,6 +130,7 @@ class ReflectionEngine:
             llm_service: Service for language model operations
             review_interval: Interval in seconds between review cycles
             config: Optional configuration dictionary
+            hypersphere_dispatcher: Optional dispatcher for efficient embedding operations
         """
         self.logger = logging.getLogger("ReflectionEngine")
         self.logger.info("Initializing Lucidia Reflection Engine")
@@ -135,6 +139,7 @@ class ReflectionEngine:
         self.knowledge_graph = knowledge_graph
         self.memory_integration = memory_integration
         self.llm_service = llm_service
+        self.hypersphere_dispatcher = hypersphere_dispatcher
         
         # Configuration
         self.config = config or {}
@@ -155,6 +160,9 @@ class ReflectionEngine:
             "last_review_cycle": None,
             "reports_in_system": 0
         }
+        
+        # Current model version used for embeddings
+        self.default_model_version = self.config.get("default_model_version", "latest")
         
         self.logger.info(f"Reflection Engine initialized with review interval: {review_interval}s")
     
@@ -353,30 +361,108 @@ class ReflectionEngine:
             # Get memory IDs for existing participating memories
             known_memory_ids = set(report.participating_memory_ids)
             
-            # Use the knowledge graph to find related memories for each fragment
+            # Get fragment content to use for similarity search
+            fragment_contents = []
+            fragment_ids = []
+            
             for fragment_id in all_fragment_ids:
-                # Get fragment content to use for semantic search
                 fragment_node = await self.knowledge_graph.get_node(fragment_id)
                 if not fragment_node:
                     continue
                 
                 fragment_content = fragment_node.get("attributes", {}).get("content", "")
-                
-                # Use memory integration to find related memories
-                if self.memory_integration and fragment_content:
-                    # Find memories semantically similar to the fragment content
-                    similar_memories = await self.memory_integration.find_similar_memories(
-                        text=fragment_content,
-                        limit=10,
-                        threshold=0.7,
-                        created_after=time_threshold
-                    )
+                if fragment_content:
+                    fragment_contents.append(fragment_content)
+                    fragment_ids.append(fragment_id)
+            
+            # Use the hypersphere dispatcher for efficient batch embedding if available
+            if self.hypersphere_dispatcher and fragment_contents:
+                try:
+                    # Get embeddings for all fragments in a single batch
+                    fragment_embeddings = []
+                    for content in fragment_contents:
+                        embedding_result = await self.hypersphere_dispatcher.get_embedding(
+                            text=content,
+                            model_version=self.default_model_version
+                        )
+                        if "embedding" in embedding_result:
+                            fragment_embeddings.append(embedding_result["embedding"])
                     
-                    # Add memories that aren't already part of the report
-                    for memory in similar_memories:
-                        if memory.id not in known_memory_ids:
-                            relevant_memories.append(memory)
-                            known_memory_ids.add(memory.id)
+                    # Get candidate memories (use memory integration for initial candidates)
+                    candidate_memories = []
+                    if self.memory_integration:
+                        # Find memories created after the time threshold
+                        recent_memories = await self.memory_integration.get_memories_by_timerange(
+                            start_time=time_threshold,
+                            end_time=None,  # up to now
+                            limit=100
+                        )
+                        candidate_memories.extend(recent_memories)
+                    
+                    # If we have both fragment embeddings and candidate memories
+                    if fragment_embeddings and candidate_memories:
+                        # Extract memory embeddings and IDs
+                        memory_embeddings = []
+                        memory_ids = []
+                        memory_objects = []
+                        
+                        for memory in candidate_memories:
+                            if hasattr(memory, "embedding") and memory.embedding and memory.id not in known_memory_ids:
+                                memory_embeddings.append(memory.embedding)
+                                memory_ids.append(memory.id)
+                                memory_objects.append(memory)
+                        
+                        # Perform batch similarity search for each fragment embedding
+                        for i, fragment_embedding in enumerate(fragment_embeddings):
+                            if not memory_embeddings:  # Skip if no memory embeddings
+                                break
+                                
+                            similarity_results = await self.hypersphere_dispatcher.batch_similarity_search(
+                                query_embedding=fragment_embedding,
+                                memory_embeddings=memory_embeddings,
+                                memory_ids=memory_ids,
+                                model_version=self.default_model_version,
+                                top_k=10
+                            )
+                            
+                            # Add similar memories to the relevant set
+                            for result in similarity_results:
+                                if result.get("score", 0) >= 0.7:  # Similarity threshold
+                                    memory_idx = memory_ids.index(result.get("memory_id"))
+                                    memory = memory_objects[memory_idx]
+                                    if memory.id not in known_memory_ids:
+                                        relevant_memories.append(memory)
+                                        known_memory_ids.add(memory.id)
+                                        
+                        self.logger.info(f"Found {len(relevant_memories)} relevant memories using hypersphere batch search")
+                except Exception as e:
+                    self.logger.warning(f"Error in hypersphere batch search: {e}. Falling back to standard search.")
+            
+            # Fallback to traditional search if hypersphere search failed or isn't available
+            if not relevant_memories and self.memory_integration:
+                for fragment_id in all_fragment_ids:
+                    # Get fragment content to use for semantic search
+                    fragment_node = await self.knowledge_graph.get_node(fragment_id)
+                    if not fragment_node:
+                        continue
+                    
+                    fragment_content = fragment_node.get("attributes", {}).get("content", "")
+                    
+                    # Use memory integration to find related memories
+                    if fragment_content:
+                        # Find memories semantically similar to the fragment content
+                        similar_memories = await self.memory_integration.find_similar_memories(
+                            text=fragment_content,
+                            limit=10,
+                            threshold=0.7,
+                            created_after=time_threshold
+                        )
+                        
+                        # Add memories that aren't already part of the report
+                        for memory in similar_memories:
+                            if memory.id not in known_memory_ids:
+                                relevant_memories.append(memory)
+                                known_memory_ids.add(memory.id)
             
             # Also look for memories directly connected to concepts in the report
             # Get concepts mentioned in the report fragments
@@ -523,6 +609,11 @@ class ReflectionEngine:
             Updated dream report
         """
         try:
+            # Check if we've reached the maximum number of refinements
+            if report.is_at_convergence_limit():
+                self.logger.info(f"Report {report.report_id} has reached maximum refinement limit ({report.max_refinements}). Skipping further refinement.")
+                return report
+            
             # Get all fragments referenced by the report
             all_fragments = []
             all_fragments.extend(await self._get_fragments_by_ids(report.insight_ids))
@@ -537,8 +628,38 @@ class ReflectionEngine:
             total_confidence = sum(fragment.confidence for fragment in all_fragments)
             avg_confidence = total_confidence / len(all_fragments) if all_fragments else 0.5
             
+            # Apply diminishing returns to confidence updates based on refinement count
+            # The impact of new evidence decreases as refinement count increases
+            if report.refinement_count > 0:
+                # Calculate diminishing impact factor (gets smaller with more refinements)
+                diminishing_factor = 1.0 / (1.0 + (report.refinement_count * 0.2))
+                
+                # Apply diminishing factor to confidence delta
+                old_confidence = report.analysis.get("confidence_level", 0.5)
+                confidence_delta = (avg_confidence - old_confidence) * diminishing_factor
+                new_confidence = old_confidence + confidence_delta
+            else:
+                new_confidence = avg_confidence
+            
+            # Check if confidence is oscillating (alternating up and down)
+            if report.is_confidence_oscillating():
+                self.logger.info(f"Detected oscillating confidence pattern in report {report.report_id}. Stabilizing confidence value.")
+                # Stabilize by using average of last few values
+                recent_confidences = report.confidence_history[-4:] + [new_confidence]
+                new_confidence = sum(recent_confidences) / len(recent_confidences)
+            
+            # Check if the confidence change is significant enough to warrant an update
+            if not report.is_confidence_change_significant(new_confidence):
+                self.logger.info(f"Confidence change in report {report.report_id} is below threshold. No significant update needed.")
+                # Still increment the refinement count and record confidence
+                report.record_confidence(new_confidence)
+                return report
+                
             # Update report confidence
-            report.analysis["confidence_level"] = avg_confidence
+            report.analysis["confidence_level"] = new_confidence
+            
+            # Record this confidence value and increment refinement count
+            report.record_confidence(new_confidence)
             
             # Generate action items based on low-confidence fragments
             low_confidence_fragments = [f for f in all_fragments if f.confidence < 0.6]
@@ -599,11 +720,12 @@ class ReflectionEngine:
             recency_factor = max(0.2, min(1.0, 1.0 - (age_days / 365)))  # Decay over a year
             
             # Combine factors for final relevance score
-            relevance_score = (0.4 * avg_confidence) + (0.4 * connection_factor) + (0.2 * recency_factor)
+            relevance_score = (0.4 * new_confidence) + (0.4 * connection_factor) + (0.2 * recency_factor)
             report.analysis["relevance_score"] = relevance_score
             
             # Generate a self-assessment using the LLM
             if self.llm_service:
+                # Add refinement information to the prompt
                 self_assessment_prompt = SELF_ASSESSMENT_PROMPT.format(
                     report_title=report.title,
                     confidence=report.analysis["confidence_level"],
@@ -611,10 +733,18 @@ class ReflectionEngine:
                     num_fragments=len(all_fragments),
                     num_supporting_evidence=len(report.analysis["supporting_evidence"]),
                     num_contradicting_evidence=len(report.analysis["contradicting_evidence"]),
-                    num_action_items=len(report.analysis["action_items"])
+                    num_action_items=len(report.analysis["action_items"]),
+                    refinement_count=report.refinement_count,
+                    max_refinements=report.max_refinements
                 )
                 
                 report.analysis["self_assessment"] = await self.llm_service.generate_text(self_assessment_prompt)
+            
+            # Log convergence information
+            self.logger.info(
+                f"Reassessed report {report.report_id} (refinement {report.refinement_count}/{report.max_refinements}): "
+                f"confidence={new_confidence:.2f}, relevance={relevance_score:.2f}"
+            )
             
             return report
             
@@ -690,17 +820,52 @@ class ReflectionEngine:
         self.logger.info(f"Refining report: {report.title} (ID: {report.report_id})")
         
         try:
+            # Check if this report has already reached its refinement limit
+            if report.is_at_convergence_limit():
+                self.logger.info(f"Report {report.report_id} has reached maximum refinement limit ({report.max_refinements}). Skipping refinement.")
+                return {
+                    "status": "skipped",
+                    "report_id": report.report_id,
+                    "updated": False,
+                    "reason": f"Maximum refinement limit reached ({report.refinement_count}/{report.max_refinements})",
+                    "confidence": report.analysis["confidence_level"],
+                    "relevance": report.analysis["relevance_score"]
+                }
+            
             # 1. Retrieve new relevant memories added since last review
             new_memories = await self.get_new_relevant_memories(report)
             self.logger.info(f"Found {len(new_memories)} new relevant memories for report {report.report_id}")
+            
+            # Skip refinement if there are no new memories and confidence is already high
+            if not new_memories and report.analysis.get("confidence_level", 0) > 0.8:
+                self.logger.info(f"No new memories found and confidence is already high for report {report.report_id}. Skipping refinement.")
+                return {
+                    "status": "skipped",
+                    "report_id": report.report_id,
+                    "updated": False,
+                    "reason": "No new memories and high confidence",
+                    "confidence": report.analysis["confidence_level"],
+                    "relevance": report.analysis["relevance_score"]
+                }
             
             # 2. Analyze new memories in relation to report
             if new_memories:
                 report = await self.update_report_with_new_evidence(report, new_memories)
                 self.logger.info(f"Updated report {report.report_id} with new evidence")
             
+            # Check if confidence is oscillating before reassessment
+            if report.is_confidence_oscillating():
+                self.logger.warning(f"Detected oscillating confidence pattern in report {report.report_id}. Proceeding with caution.")
+            
             # 3. Reassess the report's overall analysis
+            old_confidence = report.analysis.get("confidence_level", 0)
             report = await self.reassess_report(report)
+            new_confidence = report.analysis.get("confidence_level", 0)
+            
+            # Check if the confidence actually changed significantly
+            confidence_change = abs(new_confidence - old_confidence)
+            if confidence_change < report.significant_update_threshold:
+                self.logger.info(f"Minimal confidence change ({confidence_change:.4f}) for report {report.report_id}")
             
             # 4. Update the last_reviewed timestamp
             report.last_reviewed = time.time()
@@ -710,7 +875,10 @@ class ReflectionEngine:
             
             if success:
                 self.review_stats["total_refinements"] += 1
-                self.logger.info(f"Successfully refined report {report.report_id}")
+                self.logger.info(
+                    f"Successfully refined report {report.report_id} "
+                    f"(refinement {report.refinement_count}/{report.max_refinements})"
+                )
                 
                 return {
                     "status": "success",
@@ -718,7 +886,10 @@ class ReflectionEngine:
                     "updated": True,
                     "new_memories_count": len(new_memories),
                     "confidence": report.analysis["confidence_level"],
-                    "relevance": report.analysis["relevance_score"]
+                    "relevance": report.analysis["relevance_score"],
+                    "refinement_count": report.refinement_count,
+                    "max_refinements": report.max_refinements,
+                    "confidence_change": confidence_change
                 }
             else:
                 self.logger.error(f"Failed to save refined report {report.report_id} to knowledge graph")

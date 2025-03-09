@@ -173,55 +173,22 @@ The following models are available through the LM Studio server:
 | Reflective | User AFK (10+ min) | deepseek-r1-distill-qwen-7b | 0.8 | Better reflection capabilities |
 | Dreaming | User sleeping/long AFK | qwen_qwq-32b | 1.2 | Advanced reasoning with increased creativity |
 
-### HPC Server Integration
+### Dream Testing
 
-The HPC Server manages computationally intensive operations, particularly for embedding processing and significance calculation.
+#### Overview
 
-#### Key Processing Workflow
+The Dream Testing component is responsible for testing the dreaming workflow, ensuring that Lucidia can process memories, generate insights, and create structured reports.
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant S as HPCServer
-    participant M as HPCSIGFlowManager
-    
-    C->>S: WebSocket Connect
-    C->>S: Process Embedding Request
-    S->>M: process_embedding()
-    M->>M: _preprocess_embedding()
-    M->>M: _compute_surprise()
-    M->>S: Return Results
-    S->>C: Send Results
-```
+#### Test Script
 
-### Tensor Server Integration
+The `test_dream_reflection.py` script is used to test the dreaming workflow. It simulates user interactions, adds test memories, and verifies the generation of insights and reports.
 
-The Tensor Server manages embedding generation and memory operations, providing vector representations for semantic understanding and retrieval.
+#### Test Cases
 
-#### Features
-
-- WebSocket server on port 5001
-- SentenceTransformer with GPU acceleration
-- Integration with HPCSIGFlowManager
-- Embedding generation and storage
-- Similarity search capabilities
-
-#### Embedding Workflow
-
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant T as TensorServer
-    participant E as Embedding Model
-    participant D as Database
-    
-    C->>T: WebSocket Connect
-    C->>T: Embedding Request
-    T->>E: Generate Embedding
-    E->>T: Return Embedding
-    T->>D: Store Embedding
-    T->>C: Send Confirmation
-```
+1. **Memory Processing**: Test that memories are correctly processed and stored.
+2. **Dream Generation**: Verify that dreams are generated based on memories and that insights are extracted.
+3. **Report Creation**: Test that reports are created and refined correctly.
+4. **Fragment Categorization**: Verify that fragments are correctly categorized as insights, questions, hypotheses, or counterfactuals.
 
 ## API Documentation
 
@@ -313,15 +280,15 @@ Standard OpenAI-compatible API:
 
 ### Phase 1: Core Infrastructure 
 
-| is completed | Task | Description | Priority |
+ is completed | Task | Description | Priority |
 |------|------|-------------|----------|
-| ❌| Docker Container Setup | Configure and build the Lucid dreaming Docker container | HIGH |
-| ✅ | Basic LM Studio Integration | Connect to local LLM server with model selection | HIGH |
-| ❌ | Self Model Implementation | Develop core Self Model with basic reflection | HIGH |
-| ❌| World Model Implementation | Develop core World Model with knowledge domains | HIGH |
-|❌| Knowledge Graph Implementation | Implement basic semantic network | HIGH |
+| ✅| Docker Container Setup | Configure and build the Lucid dreaming Docker container | HIGH |
+| |✅ | Basic LM Studio Integration | Connect to local LLM server with model selection | HIGH |
+| ✅ | Self Model Implementation | Develop core Self Model with basic reflection | HIGH |
+| ✅| World Model Implementation | Develop core World Model with knowledge domains | HIGH |
+|✅| Knowledge Graph Implementation | Implement basic semantic network | HIGH |
 |❌| Memory System Integration | Connect to persistent storage and implement memory workflows | HIGH |
-|❌| Basic API Implementation | Implement core API endpoints | HIGH |
+|✅| Basic API Implementation | Implement core API endpoints | HIGH |
 
 ### Phase 2: Distributed Processing
 
@@ -331,14 +298,14 @@ Standard OpenAI-compatible API:
 | ✅ | HPC Server Implementation | Develop high-performance processing service | HIGH |
 | ✅ | Async Processing Framework | Implement background task scheduling | MEDIUM |
 | ❌| Model Switching Logic | Develop dynamic model selection based on system state | MEDIUM |
-| ❌ | Resource Monitoring | Implement system resource tracking and optimization | MEDIUM |
+| ❌| Resource Monitoring | Implement system resource tracking and optimization | MEDIUM |
 | ❌| Basic Dreaming Implementation | Add simple reflection during idle periods | MEDIUM |
 
 ### Phase 3: Reflective Capabilities 
 
 | is implemented? ✅or❌ | Task | Description | Priority |
 |------|------|-------------|----------|
-| ❌ | Advanced Dreaming | Implement full dreaming state with temperature variation | MEDIUM |
+| ✅ | Advanced Dreaming | Implemented dreaming flow with memory processing, insight generation, and report refinement. Successfully tested integration with LM Studio using test_dream_reflection.py. | MEDIUM |
 | ❌| Dream Integration | Connect dream insights to knowledge graph | MEDIUM |
 | ✅ | Significance Calculation | Implement memory significance and prioritization | MEDIUM |
 | ❌| State Management | Develop comprehensive state transitions | MEDIUM |
@@ -526,6 +493,32 @@ curl -X POST http://localhost:8081/api/dream/test/refine_report \
 curl http://localhost:8081/api/dream/health
 ```
 
+### Test Scripts
+
+Lucidia includes several test scripts to validate functionality:
+
+| Script | Purpose | Status |
+|--------|---------|--------|
+| `test_dream_api.py` | Tests basic Dream API connectivity and endpoints | ✅ Complete |
+| `test_dream_reflection.py` | Tests end-to-end dreaming flow with LM Studio integration | ✅ Complete |
+| `docker_test_dream_api.py` | Tests Dream API inside Docker containers | ✅ Complete |
+| `test_memory_integration.py` | Tests memory system components | ⚠️ In Progress |
+| `test_tensor_connectivity.py` | Tests tensor server connections | ✅ Complete |
+
+### Dream Flow Testing
+
+The `test_dream_reflection.py` script validates the complete dreaming flow with the following components:
+
+1. **LM Studio Connection**: Verifies connectivity to LM Studio and model availability
+2. **Dream API Connection**: Confirms Dream API server is operational
+3. **Memory Processing**: Adds test memories for dream generation
+4. **Dream Generation**: Uses LM Studio to process memories and generate dreams
+5. **Report Creation**: Creates structured reports from dream content
+6. **Report Refinement**: Tests the refinement process to improve report quality
+7. **Fragment Categorization**: Validates correct categorization of fragments as insights, questions, hypotheses, or counterfactuals
+
+This script provides colorized output for better readability and includes comprehensive error handling for API timeouts and connection issues.
+
 ---
 
 ## Implementation Details
@@ -686,6 +679,86 @@ class TensorServer:
             'surprise': hpc_result['surprise'],
             'id': memory_id
         }))
+```
+
+### Dreaming Workflow
+
+The dreaming workflow enables Lucidia to process memories during inactive periods, generating insights, questions, hypotheses, and counterfactuals.
+
+#### Components
+
+- **Memory Retrieval**: Fetches relevant memories for reflection
+- **Dream Generation**: Uses LLM to generate dreams based on memories
+- **Insight Extraction**: Identifies key insights from dream content
+- **Report Creation**: Organizes insights into structured reports
+- **Report Refinement**: Improves reports through iterative processing
+
+#### Dream Processing Workflow
+
+```mermaid
+sequenceDiagram
+    participant MS as Memory System
+    participant DG as Dream Generator
+    participant IR as Insight Recognizer
+    participant RC as Report Creator
+    participant RR as Report Refiner
+    
+    MS->>DG: Retrieve Memories
+    DG->>IR: Generate Dream Content
+    IR->>IR: Extract Fragments
+    IR->>RC: Create Initial Report
+    RC->>RR: Refine Report
+    RR->>MS: Store Insights
+```
+
+### HPC Server Integration
+
+The HPC Server manages computationally intensive operations, particularly for embedding processing and significance calculation.
+
+#### Key Processing Workflow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as HPCServer
+    participant M as HPCSIGFlowManager
+    
+    C->>S: WebSocket Connect
+    C->>S: Process Embedding Request
+    S->>M: process_embedding()
+    M->>M: _preprocess_embedding()
+    M->>M: _compute_surprise()
+    M->>S: Return Results
+    S->>C: Send Results
+```
+
+### Tensor Server Integration
+
+The Tensor Server manages embedding generation and memory operations, providing vector representations for semantic understanding and retrieval.
+
+#### Features
+
+- WebSocket server on port 5001
+- SentenceTransformer with GPU acceleration
+- Integration with HPCSIGFlowManager
+- Embedding generation and storage
+- Similarity search capabilities
+
+#### Embedding Workflow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant T as TensorServer
+    participant E as Embedding Model
+    participant D as Database
+    
+    C->>T: WebSocket Connect
+    C->>T: Embedding Request
+    T->>E: Generate Embedding
+    E->>T: Return Embedding
+    T->>D: Store Embedding
+    T->>C: Send Confirmation
 ```
 
 ### Docker Container Service

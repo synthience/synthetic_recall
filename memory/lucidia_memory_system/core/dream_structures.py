@@ -139,6 +139,12 @@ class DreamReport:
         self.created_at = time.time()
         self.last_reviewed = None
         
+        # Add convergence tracking features
+        self.refinement_count = 0
+        self.confidence_history = []  # Track confidence changes over time
+        self.significant_update_threshold = 0.05  # Minimum change required to consider a significant update
+        self.max_refinements = 10  # Maximum number of refinements to prevent infinite loops
+        
     def to_dict(self) -> Dict[str, Any]:
         """Convert the report to a dictionary for storage or serialization."""
         return {
@@ -152,7 +158,9 @@ class DreamReport:
             "analysis": self.analysis,
             "domain": self.domain,
             "created_at": self.created_at,
-            "last_reviewed": self.last_reviewed
+            "last_reviewed": self.last_reviewed,
+            "refinement_count": self.refinement_count,
+            "confidence_history": self.confidence_history
         }
     
     @classmethod
@@ -174,13 +182,46 @@ class DreamReport:
         report.created_at = data.get("created_at", time.time())
         report.last_reviewed = data.get("last_reviewed")
         
+        # Load convergence tracking features
+        report.refinement_count = data.get("refinement_count", 0)
+        report.confidence_history = data.get("confidence_history", [])
+        report.significant_update_threshold = data.get("significant_update_threshold", 0.05) 
+        report.max_refinements = data.get("max_refinements", 10)
+        
         return report
     
     def get_fragment_count(self) -> int:
         """Get the total number of fragments in this report."""
         return (len(self.insight_ids) + len(self.question_ids) + 
                 len(self.hypothesis_ids) + len(self.counterfactual_ids))
+                
+    def is_at_convergence_limit(self) -> bool:
+        """Determine if the report has reached its refinement limit."""
+        return self.refinement_count >= self.max_refinements
+    
+    def record_confidence(self, new_confidence: float) -> None:
+        """Add a new confidence value to the history and increment refinement count."""
+        if self.analysis.get("confidence_level") is not None:
+            self.confidence_history.append(self.analysis["confidence_level"])
+        self.refinement_count += 1
+    
+    def is_confidence_oscillating(self) -> bool:
+        """Detect if confidence values are oscillating rather than converging."""
+        # Need at least 4 data points to detect oscillation
+        if len(self.confidence_history) < 4:
+            return False
+            
+        # Check last 4 values for alternating pattern
+        recent = self.confidence_history[-4:]
+        return ((recent[0] < recent[1] and recent[1] > recent[2] and recent[2] < recent[3]) or
+                (recent[0] > recent[1] and recent[1] < recent[2] and recent[2] > recent[3]))
+    
+    def is_confidence_change_significant(self, new_confidence: float) -> bool:
+        """Determine if the confidence change is significant enough to warrant an update."""
+        if self.analysis.get("confidence_level") is None:
+            return True
+        return abs(new_confidence - self.analysis["confidence_level"]) >= self.significant_update_threshold
                
     def __str__(self) -> str:
         """Return a string representation of the dream report."""
-        return f"DreamReport(id={self.report_id}, title='{self.title}', fragments={self.get_fragment_count()})"
+        return f"DreamReport(id={self.report_id}, title='{self.title}', fragments={self.get_fragment_count()}, refinements={self.refinement_count})"

@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  luciddream:
+    image: python:3.9-slim
+    container_name: luciddream
+    volumes:
+      - ./:/workspace/project
+      - ./data:/workspace/data
+    environment:
+      - PYTHONPATH=/workspace/project
+      - TENSOR_SERVER_URL=ws://nemo_sig_v3:5001
+      - HPC_SERVER_URL=ws://nemo_sig_v3:5005
+      - DREAM_API_PORT=8080
+      - LOG_LEVEL=INFO
+    ports:
+      - "8080:8080"  # Dream API
+      - "8081:8081"  # HTTP API
+    networks:
+      - lucid-net
+    command: >
+      bash -c "pip install fastapi uvicorn websockets networkx matplotlib asyncio aiohttp pydantic python-dotenv &&
+      python /workspace/project/memory/lucidia_memory_system/dream_api_server.py"
+    depends_on:
+      - nemo_sig_v3
+    restart: unless-stopped
+
+networks:
+  lucid-net:
+    external: true
