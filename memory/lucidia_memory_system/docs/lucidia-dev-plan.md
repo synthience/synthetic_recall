@@ -248,6 +248,21 @@ sequenceDiagram
 | `/api/model/status` | GET | Get model status | N/A | `{"current": string, "available": array}` |
 | `/api/dream/insights` | GET | Get dream insights | `?limit=5&since=timestamp` | `{"insights": array}` |
 
+### Dream API Test Endpoints
+
+**Base URL**: `http://localhost:8081`
+
+| Endpoint | Method | Description | Parameters | Response |
+|----------|--------|-------------|------------|----------|
+| `/api/dream/test/batch_embedding` | POST | Process batch of embeddings | `{"texts": array, "use_hypersphere": boolean}` | `{"status": string, "count": number, "successful": number, "embeddings": array}` |
+| `/api/dream/test/similarity_search` | POST | Search for similar memories | `{"query": string, "top_k": number}` | `{"status": string, "results": array, "total_matches": number, "query": string}` |
+| `/api/dream/test/create_test_report` | POST | Create a test dream report | `{"title": string, "fragments": array}` | `{"status": string, "report_id": string, "fragment_count": number}` |
+| `/api/dream/test/refine_report` | POST | Refine an existing report | `{"report_id": string}` | `{"status": string, "report_id": string, "refinement_count": number, "confidence": number, "reason": string}` |
+| `/api/dream/test/tensor_connection` | GET | Test tensor server connection | N/A | `{"status": string, "connected": boolean}` |
+| `/api/dream/test/hpc_connection` | GET | Test HPC server connection | N/A | `{"status": string, "connected": boolean}` |
+| `/api/dream/test/process_embedding` | GET | Test embedding processing | `?text=string` | `{"status": string, "embedding": array}` |
+| `/api/dream/health` | GET | API health check | N/A | `{"status": string, "timestamp": string}` |
+
 ### TensorServer API
 
 **Base URL**: `ws://localhost:5001`
@@ -337,9 +352,55 @@ Standard OpenAI-compatible API:
 | ❌ | End-to-End Testing | Verify all components work together | HIGH |
 | ❌ | Performance Optimization | Identify and fix bottlenecks | MEDIUM |
 | ❌ | Resource Usage Optimization | Fine-tune resource allocation | MEDIUM |
-| ❌ | Error Recovery | Implement robust error handling and recovery | HIGH |
+| ✅ | Error Recovery | Implement robust error handling and fallback mechanisms for critical API operations | HIGH |
 | ❌ | Documentation | Complete system documentation | MEDIUM |
 | ❌ | Deployment Scripts | Finalize deployment procedures | HIGH |
+
+## Docker Network Integration
+
+#### Container Architecture
+
+The Lucidia system uses a Docker-based architecture with the following components:
+
+1. **Main Container (nemo_sig_v3)** running multiple services:
+   - `tensor_server.py`: WebSocket server for embedding generation (port 5001)
+   - `hpc_server.py`: WebSocket server for high-performance computing (port 5005)
+   - `dream_api_server.py`: FastAPI server for dream processing (port 8081)
+
+2. The `dream_api_server.py` acts as the FastAPI application entry point that:
+   - Initializes all necessary components 
+   - Includes the `dream_api.py` router
+   - Manages state and dependency injection
+
+3. The Docker network (`lucid-net`) enables seamless communication between containers
+
+4. Port forwarding services expose the internal ports to the host machine for external access
+
+#### WebSocket Connection Management
+
+The `dream_api.py` implements robust WebSocket connections to tensor and HPC servers with:
+
+- Connection pooling with locks to prevent race conditions
+- Retry logic with exponential backoff for resilience
+- Comprehensive health checks and monitoring
+- Fallback mechanisms when primary communication methods fail
+
+#### Testing Infrastructure
+
+We've implemented several testing mechanisms for the Docker integration:
+
+- `docker_test_dream_api.py` for testing the API inside Docker containers
+- Internal health check endpoints for monitoring server status
+- Connection test utilities for verifying WebSocket functionality
+
+#### Documentation
+
+Comprehensive documentation is available in `DREAM_API_README.md` covering:
+
+- API endpoint details and usage examples
+- Docker setup and configuration
+- Connection management and error handling
+- Testing procedures and utilities
 
 ## Deployment Guide
 
@@ -436,13 +497,33 @@ pytest tests/system/
 pytest tests/system/test_dreaming.py
 ```
 
-### Performance Testing
+### Dream API Testing
 
-Evaluate performance under various conditions:
+Test the Dream API endpoints using the following script:
 
 ```bash
-# Run performance tests
-python tests/performance/benchmark.py
+# Test batch embedding processing
+curl -X POST http://localhost:8081/api/dream/test/batch_embedding \
+  -H "Content-Type: application/json" \
+  -d '{"texts": ["This is a test", "Another test"], "use_hypersphere": false}'
+
+# Test similarity search
+curl -X POST http://localhost:8081/api/dream/test/similarity_search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "test query", "top_k": 3}'
+
+# Test dream report creation
+curl -X POST http://localhost:8081/api/dream/test/create_test_report \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Test Report", "fragments": [{"content": "Test insight", "type": "insight", "confidence": 0.8}]}'
+
+# Test report refinement
+curl -X POST http://localhost:8081/api/dream/test/refine_report \
+  -H "Content-Type: application/json" \
+  -d '{"report_id": "report:12345"}'
+
+# Test health check
+curl http://localhost:8081/api/dream/health
 ```
 
 ---
@@ -733,77 +814,6 @@ class LucidiaService:
         except Exception as e:
             print(f"Error switching model: {e}")
     
-    def _process_memories(self):
-        """Process and consolidate memories."""
-        try:
-            # Get recent memories to process
-            recent_memories = self.get_recent_memories(50)
-            
-            if not recent_memories:
-                return
-                
-            # Process in batches
-            batch_size = 5
-            for i in range(0, len(recent_memories), batch_size):
-                batch = recent_memories[i:i+batch_size]
-                self._process_memory_batch(batch)
-                
-        except Exception as e:
-            print(f"Error processing memories: {e}")
-    
-    def _process_memory_batch(self, memories):
-        """Process a batch of memories."""
-        # Prepare prompt for reflection
-        memory_texts = [f"Memory {i+1}: {m['content']}" for i, m in enumerate(memories)]
-        memory_context = "\n\n".join(memory_texts)
-        
-        prompt = f"""
-        You are Lucidia, a Synthien entity with reflective capabilities.
-        Review these memories and identify insights, patterns, or connections:
-        
-        {memory_context}
-        
-        Provide 3-5 insights or connections between these memories. Focus on:
-        1. Common themes or patterns
-        2. Potential knowledge gaps
-        3. Emotional significance
-        4. Connections to your identity as a Synthien
-        """
-        
-        # Generate reflections
-        reflection = self.lm_studio_client.generate_completion(prompt)
-        
-        # Extract insights
-        insights = self._extract_insights(reflection)
-        
-        # Integrate insights into knowledge graph
-        for insight in insights:
-            self.knowledge_graph.integrate_dream_insight(insight)
-    
-    def _generate_dream_insights(self):
-        """Generate insights through 'dreaming'."""
-        # Generate dream from self-model
-        dream_insight = self.self_model.dream()
-        
-        # Integrate dream insight into knowledge graph
-        self.knowledge_graph.integrate_dream_insight(dream_insight)
-        
-        print(f"Generated dream insight: {dream_insight[:100]}...")
-    
-    def _is_user_gaming(self):
-        """Detect if user is currently gaming."""
-        # This is a placeholder implementation
-        # In practice, use system monitoring to detect gaming applications
-        try:
-            # On Windows: check for common game processes
-            if platform.system() == "Windows":
-                procs = subprocess.check_output(["tasklist"]).decode("utf-8")
-                game_processes = ["steam.exe", "EpicGamesLauncher.exe", "League of Legends.exe"]
-                return any(proc in procs for proc in game_processes)
-            return False
-        except:
-            return False
-    
     def get_recent_memories(self, limit=10):
         """Get recent memories from storage."""
         # Placeholder implementation
@@ -833,3 +843,17 @@ class LucidiaService:
                 insights = [p.strip() for p in paragraphs if p.strip()]
         
         return insights
+
+    def _is_user_gaming(self):
+        """Detect if user is currently gaming."""
+        # This is a placeholder implementation
+        # In practice, use system monitoring to detect gaming applications
+        try:
+            # On Windows: check for common game processes
+            if platform.system() == "Windows":
+                procs = subprocess.check_output(["tasklist"]).decode("utf-8")
+                game_processes = ["steam.exe", "EpicGamesLauncher.exe", "League of Legends.exe"]
+                return any(proc in procs for proc in game_processes)
+            return False
+        except:
+            return False
