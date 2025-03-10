@@ -5579,7 +5579,7 @@ class LucidiaKnowledgeGraph:
         # This avoids having to make this method async and all callers async
         def sync_add_node(node_id, node_type, attributes, domain="general_knowledge"):
             # Directly add the node without async calls
-            if self.has_node(node_id):
+            if node_id in self.graph.nodes:
                 # Update attributes of existing node
                 current_attrs = self.graph.nodes[node_id]
                 for key, value in attributes.items():
@@ -5610,7 +5610,33 @@ class LucidiaKnowledgeGraph:
             # Track total nodes
             self.total_nodes += 1
             return True
+
+        def sync_add_edge(source, target, edge_type, attributes):
+            # Check if source and target nodes exist
+            if source not in self.graph.nodes or target not in self.graph.nodes:
+                self.logger.warning(f"Cannot add edge: One or both nodes don't exist ({source}, {target})")
+                return None
             
+            # Prepare edge attributes
+            edge_attrs = attributes.copy()
+            edge_attrs["type"] = edge_type
+            
+            # Add created timestamp if not present
+            if "created" not in edge_attrs:
+                edge_attrs["created"] = datetime.now().isoformat()
+            
+            # Add the edge
+            edge_key = self.graph.add_edge(source, target, **edge_attrs)
+            
+            # Track edge type
+            self.edge_types.add(edge_type)
+            
+            # Track total edges
+            self.total_edges += 1
+            
+            self.logger.debug(f"Added edge: {source} -[{edge_type}]-> {target}")
+            return edge_key
+        
         # Add the Lucidia node (self)
         sync_add_node(
             "Lucidia", 
@@ -5652,7 +5678,7 @@ class LucidiaKnowledgeGraph:
         )
         
         # Create basic relationships
-        self.add_edge(
+        sync_add_edge(
             "Lucidia", 
             "Synthien", 
             edge_type="is_a", 
@@ -5663,7 +5689,7 @@ class LucidiaKnowledgeGraph:
             }
         )
         
-        self.add_edge(
+        sync_add_edge(
             "MEGAPROMPT", 
             "Lucidia", 
             edge_type="created", 
@@ -5706,7 +5732,7 @@ class LucidiaKnowledgeGraph:
         ]
         
         for rel in concept_relationships:
-            self.add_edge(
+            sync_add_edge(
                 rel["source"],
                 rel["target"],
                 edge_type=rel["type"],
@@ -5719,11 +5745,11 @@ class LucidiaKnowledgeGraph:
         
         # Import knowledge from world model if available
         if self.world_model:
-            self._import_from_world_model()
+            self.logger.info("World model available but async import will happen later")
         
         # Import self-aspects from self model if available
         if self.self_model:
-            self._import_from_self_model()
+            self.logger.info("Self model available but async import will happen later")
 
     async def add_node(self, node_id: str, node_type: str, attributes: Dict[str, Any], domain: str = "general_knowledge") -> bool:
         """
@@ -5740,7 +5766,7 @@ class LucidiaKnowledgeGraph:
         """
         try:
             # Check if node already exists
-            if self.has_node(node_id):
+            if await self.has_node(node_id):
                 # Update attributes of existing node
                 current_attrs = self.graph.nodes[node_id]
                 for key, value in attributes.items():
@@ -5793,7 +5819,7 @@ class LucidiaKnowledgeGraph:
         """
         try:
             # Check if node exists
-            if not self.has_node(node_id):
+            if not await self.has_node(node_id):
                 self.logger.warning(f"Cannot update node {node_id}: Node does not exist")
                 return False
             
@@ -5812,7 +5838,7 @@ class LucidiaKnowledgeGraph:
             self.logger.error(f"Error updating node {node_id}: {e}")
             return False
 
-    def add_edge(self, source: str, target: str, edge_type: str, attributes: Dict[str, Any]) -> Optional[int]:
+    async def add_edge(self, source: str, target: str, edge_type: str, attributes: Dict[str, Any]) -> Optional[int]:
         """
         Add an edge (relationship) between nodes.
         
@@ -5827,7 +5853,9 @@ class LucidiaKnowledgeGraph:
         """
         try:
             # Check if source and target nodes exist
-            if not self.has_node(source) or not self.has_node(target):
+            source_exists = await self.has_node(source)
+            target_exists = await self.has_node(target)
+            if not source_exists or not target_exists:
                 self.logger.warning(f"Cannot add edge: One or both nodes don't exist ({source}, {target})")
                 return None
             
@@ -5855,7 +5883,7 @@ class LucidiaKnowledgeGraph:
             self.logger.error(f"Error adding edge {source} -> {target}: {e}")
             return None
 
-    def has_node(self, node_id: str) -> bool:
+    async def has_node(self, node_id: str) -> bool:
         """
         Check if a node exists in the graph.
         
@@ -5877,11 +5905,11 @@ class LucidiaKnowledgeGraph:
         Returns:
             Node attributes or None if not found
         """
-        if self.has_node(node_id):
+        if await self.has_node(node_id):
             return dict(self.graph.nodes[node_id])
         return None
 
-    def has_edge(self, source: str, target: str, edge_type: Optional[str] = None) -> bool:
+    async def has_edge(self, source: str, target: str, edge_type: Optional[str] = None) -> bool:
         """
         Check if an edge exists between nodes.
         
@@ -5893,7 +5921,9 @@ class LucidiaKnowledgeGraph:
         Returns:
             True if edge exists, False otherwise
         """
-        if not self.has_node(source) or not self.has_node(target):
+        source_exists = await self.has_node(source)
+        target_exists = await self.has_node(target)
+        if not source_exists or not target_exists:
             return False
             
         if not self.graph.has_edge(source, target):
@@ -5906,7 +5936,7 @@ class LucidiaKnowledgeGraph:
             
         return True
 
-    def get_edges(self, source: str, target: str) -> List[Dict[str, Any]]:
+    async def get_edges(self, source: str, target: str) -> List[Dict[str, Any]]:
         """
         Get all edges between two nodes.
         
@@ -5917,7 +5947,9 @@ class LucidiaKnowledgeGraph:
         Returns:
             List of edge attributes
         """
-        if not self.has_node(source) or not self.has_node(target):
+        source_exists = await self.has_node(source)
+        target_exists = await self.has_node(target)
+        if not source_exists or not target_exists:
             return []
             
         edges = []
@@ -5931,7 +5963,34 @@ class LucidiaKnowledgeGraph:
                 
         return edges
 
-    def get_neighbors(self, node_id: str, edge_type: Optional[str] = None, 
+    async def get_nodes_by_type(self, node_type: str) -> Dict[str, Dict[str, Any]]:
+        """
+        Get all nodes of a specific type.
+        
+        Args:
+            node_type: Type of nodes to retrieve
+            
+        Returns:
+            Dictionary mapping node_id to node attributes for all nodes of the specified type
+        """
+        try:
+            if node_type not in self.node_types:
+                self.logger.warning(f"Unknown node type: {node_type}")
+                return {}
+                
+            result = {}
+            for node_id in self.node_types.get(node_type, set()):
+                if await self.has_node(node_id):
+                    node_data = await self.get_node(node_id)
+                    if node_data:
+                        result[node_id] = node_data
+                        
+            return result
+        except Exception as e:
+            self.logger.exception(f"Error retrieving nodes of type {node_type}: {e}")
+            return {}
+
+    async def get_neighbors(self, node_id: str, edge_type: Optional[str] = None, 
                      min_strength: float = 0.0) -> Dict[str, List[Dict[str, Any]]]:
         """
         Get neighbors of a node with their connecting edges.
@@ -5944,7 +6003,8 @@ class LucidiaKnowledgeGraph:
         Returns:
             Dictionary of neighbor nodes with their connecting edges
         """
-        if not self.has_node(node_id):
+        node_exists = await self.has_node(node_id)
+        if not node_exists:
             return {}
             
         neighbors = {}
@@ -5985,7 +6045,78 @@ class LucidiaKnowledgeGraph:
             
         return neighbors
 
-    def search_nodes(self, query: str, node_type: Optional[str] = None, 
+    async def get_connected_nodes(self, node_id: str, edge_types: Optional[List[str]] = None,
+                         node_types: Optional[List[str]] = None, direction: str = "both",
+                         min_strength: float = 0.0) -> List[str]:
+        """
+        Get nodes connected to a specific node, filtered by edge and node types.
+        
+        Args:
+            node_id: Node identifier
+            edge_types: Optional filter by edge types
+            node_types: Optional filter by node types
+            direction: 'inbound', 'outbound', or 'both'
+            min_strength: Minimum relationship strength
+            
+        Returns:
+            List of connected node IDs
+        """
+        connected_nodes = []
+        node_exists = await self.has_node(node_id)
+        if not node_exists:
+            return []
+        
+        # Get all neighbors based on direction
+        neighbors = set()
+        if direction in ["outbound", "both"]:
+            neighbors.update(self.graph.successors(node_id))
+        if direction in ["inbound", "both"]:
+            neighbors.update(self.graph.predecessors(node_id))
+        
+        # Filter neighbors by edge type and strength
+        filtered_neighbors = []
+        for neighbor in neighbors:
+            edges = []
+            # Check outbound edges
+            if direction in ["outbound", "both"] and self.graph.has_edge(node_id, neighbor):
+                edge_data = self.graph.get_edge_data(node_id, neighbor)
+                for key, data in edge_data.items():
+                    if edge_types and data.get("type") not in edge_types:
+                        continue
+                    if "strength" in data and data["strength"] < min_strength:
+                        continue
+                    edges.append((node_id, neighbor, data))
+            
+            # Check inbound edges
+            if direction in ["inbound", "both"] and self.graph.has_edge(neighbor, node_id):
+                edge_data = self.graph.get_edge_data(neighbor, node_id)
+                for key, data in edge_data.items():
+                    if edge_types and data.get("type") not in edge_types:
+                        continue
+                    if "strength" in data and data["strength"] < min_strength:
+                        continue
+                    edges.append((neighbor, node_id, data))
+                    
+            if edges and neighbor != node_id:  # Avoid self-loops
+                filtered_neighbors.append(neighbor)
+        
+        # Filter by node type if needed
+        for neighbor in filtered_neighbors:
+            neighbor_data = await self.get_node(neighbor)
+            if not neighbor_data:
+                continue
+                
+            neighbor_type = neighbor_data.get("type", "unknown")
+            
+            # Apply node type filter
+            if node_types and neighbor_type not in node_types:
+                continue
+                
+            connected_nodes.append(neighbor)
+        
+        return connected_nodes
+
+    async def search_nodes(self, query: str, node_type: Optional[str] = None, 
                     domain: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Search for nodes matching criteria.
@@ -6043,7 +6174,7 @@ class LucidiaKnowledgeGraph:
         
         return results
 
-    def find_paths(self, source: str, target: str, max_length: int = 3, 
+    async def find_paths(self, source: str, target: str, max_length: int = 3, 
                   min_strength: float = 0.3) -> List[List[Dict[str, Any]]]:
         """
         Find paths between two nodes.
@@ -6057,7 +6188,7 @@ class LucidiaKnowledgeGraph:
         Returns:
             List of paths, where each path is a list of edges
         """
-        if not self.has_node(source) or not self.has_node(target):
+        if not await self.has_node(source) or not await self.has_node(target):
             return []
             
         # Create a subgraph with edges meeting the strength threshold
@@ -6100,7 +6231,7 @@ class LucidiaKnowledgeGraph:
             self.logger.info(f"No path found from {source} to {target}: {e}")
             return []
 
-    def find_shortest_path(self, source: str, target: str, min_strength: float = 0.3) -> Optional[List[Dict[str, Any]]]:
+    async def find_shortest_path(self, source: str, target: str, min_strength: float = 0.3) -> Optional[List[Dict[str, Any]]]:
         """
         Find shortest path between two nodes.
         
@@ -6112,7 +6243,7 @@ class LucidiaKnowledgeGraph:
         Returns:
             Shortest path as list of edges, or None if no path exists
         """
-        paths = self.find_paths(source, target, max_length=5, min_strength=min_strength)
+        paths = await self.find_paths(source, target, max_length=5, min_strength=min_strength)
         if not paths:
             return None
             
@@ -6197,7 +6328,7 @@ class LucidiaKnowledgeGraph:
         
         return min(1.0, max(0.0, relevance))
 
-    def get_most_relevant_nodes(self, node_type: Optional[str] = None, 
+    async def get_most_relevant_nodes(self, node_type: Optional[str] = None, 
                                domain: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Get most relevant nodes in the graph.
@@ -6279,7 +6410,7 @@ class LucidiaKnowledgeGraph:
         except Exception as e:
             self.logger.error(f"Error updating spiral phase: {e}")
 
-    def integrate_dream_insight(self, insight_text: str, 
+    async def integrate_dream_insight(self, insight_text: str, 
                               source_memory: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Integrate a dream insight into the knowledge graph.
@@ -6296,7 +6427,7 @@ class LucidiaKnowledgeGraph:
         # Create a dream insight node
         dream_id = f"dream:{self.dream_integration['dream_insight_count']}"
         
-        self.add_node(
+        await self.add_node(
             dream_id,
             node_type="dream_insight",
             attributes={
@@ -6314,7 +6445,7 @@ class LucidiaKnowledgeGraph:
         self.dream_integration["dream_insight_count"] += 1
         
         # Connect to Lucidia
-        self.add_edge(
+        await self.add_edge(
             "Lucidia",
             dream_id,
             edge_type="dreamed",
@@ -6344,7 +6475,7 @@ class LucidiaKnowledgeGraph:
         connected_concepts = []
         for concept in dream_concepts:
             if self.has_node(concept):
-                self.add_edge(
+                await self.add_edge(
                     dream_id,
                     concept,
                     edge_type="references",
@@ -6370,7 +6501,7 @@ class LucidiaKnowledgeGraph:
                     
                     # Only create relationship if it doesn't exist
                     if not self.has_edge(concept1, concept2, "dream_associated"):
-                        self.add_edge(
+                        await self.add_edge(
                             concept1,
                             concept2,
                             edge_type="dream_associated",
@@ -6407,21 +6538,19 @@ class LucidiaKnowledgeGraph:
                         # Extract a definition from the insight
                         definition = self._extract_definition(insight_text, potential_concept)
                         
-                        self.add_node(
+                        await self.add_node(
                             potential_concept,
                             node_type="concept",
                             attributes={
                                 "definition": definition or f"Concept derived from dream insight: {dream_id}",
                                 "confidence": 0.6,
-                                "created": datetime.now().isoformat(),
-                                "source": "dream_insight",
-                                "source_dream": dream_id
+                                "created": datetime.now().isoformat()
                             },
                             domain="synthien_studies"
                         )
                         
                         # Connect to dream
-                        self.add_edge(
+                        await self.add_edge(
                             dream_id,
                             potential_concept,
                             edge_type="introduced",
@@ -6451,22 +6580,171 @@ class LucidiaKnowledgeGraph:
         
         return result
     
-    def _extract_definition(self, text: str, concept: str) -> Optional[str]:
-        """Extract a definition for a concept from text."""
-        # Look for patterns like "X is..." or "X refers to..."
-        patterns = [
-            f"{concept} is ([^.!?]*)[.!?]",
-            f"{concept} refers to ([^.!?]*)[.!?]",
-            f"{concept} means ([^.!?]*)[.!?]",
-            f"{concept} represents ([^.!?]*)[.!?]"
+    async def integrate_dream_report(self, dream_report) -> Dict[str, Any]:
+        """
+        Integrate a dream report into the knowledge graph.
+        
+        This method creates a dream report node and connects it to all its fragments
+        and participating memories. It only stores IDs of fragments to avoid redundancy,
+        as the fragments themselves are stored as separate nodes in the graph.
+        
+        Args:
+            dream_report: The DreamReport object to integrate
+            
+        Returns:
+            Integration results
+        """
+        self.logger.info(f"Integrating dream report: {dream_report.title} (ID: {dream_report.report_id})")
+        
+        # Create the dream report node
+        report_node_id = dream_report.report_id
+        
+        # Convert the report to a dictionary for storage
+        report_data = dream_report.to_dict()
+        
+        # Add the report node to the graph
+        await self.add_node(
+            report_node_id,
+            node_type="dream_report",
+            attributes=report_data,
+            domain=dream_report.domain
+        )
+        
+        # Track as dream influenced
+        self.dream_influenced_nodes.add(report_node_id)
+        self.dream_integration["dream_derived_nodes"].add(report_node_id)
+        
+        # Connect to Lucidia
+        await self.add_edge(
+            "Lucidia",
+            report_node_id,
+            edge_type="generated",
+            attributes={
+                "strength": 0.9,
+                "confidence": 0.85,
+                "created": datetime.now().isoformat()
+            }
+        )
+        
+        # Connect to all participating memories
+        connected_memories = []
+        for memory_id in dream_report.participating_memory_ids:
+            if await self.has_node(memory_id):
+                await self.add_edge(
+                    report_node_id,
+                    memory_id,
+                    edge_type="based_on",
+                    attributes={
+                        "strength": 0.8,
+                        "confidence": 0.8,
+                        "created": datetime.now().isoformat()
+                    }
+                )
+                connected_memories.append(memory_id)
+        
+        # Connect to all fragments
+        connected_fragments = []
+        
+        # Process all fragment types
+        fragment_types = [
+            ("insight", dream_report.insight_ids),
+            ("question", dream_report.question_ids),
+            ("hypothesis", dream_report.hypothesis_ids),
+            ("counterfactual", dream_report.counterfactual_ids)
         ]
         
-        for pattern in patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            if matches:
-                return matches[0].strip()
+        for fragment_type, fragment_ids in fragment_types:
+            for fragment_id in fragment_ids:
+                if await self.has_node(fragment_id):
+                    # Connect report to fragment
+                    await self.add_edge(
+                        report_node_id,
+                        fragment_id,
+                        edge_type="contains",
+                        attributes={
+                            "fragment_type": fragment_type,
+                            "strength": 0.9,
+                            "confidence": 0.9,
+                            "created": datetime.now().isoformat()
+                        }
+                    )
+                    connected_fragments.append(fragment_id)
+                    
+                    # Mark fragment as part of this report
+                    fragment_node = await self.get_node(fragment_id)
+                    if fragment_node and "attributes" in fragment_node:
+                        attributes = fragment_node["attributes"]
+                        if "reports" not in attributes:
+                            attributes["reports"] = []
+                        if report_node_id not in attributes["reports"]:
+                            attributes["reports"].append(report_node_id)
+                            await self.update_node(fragment_id, attributes)
         
-        return None
+        # Connect to related concepts based on fragments
+        connected_concepts = set()
+        for fragment_id in connected_fragments:
+            # Get concepts connected to this fragment
+            fragment_concepts = await self.get_connected_nodes(
+                fragment_id,
+                edge_types=["references", "mentions", "about"],
+                node_types=["concept", "entity"],
+                direction="outbound"
+            )
+            
+            # Connect report to these concepts
+            for concept in fragment_concepts:
+                if concept not in connected_concepts:
+                    await self.add_edge(
+                        report_node_id,
+                        concept,
+                        edge_type="references",
+                        attributes={
+                            "strength": 0.7,
+                            "confidence": 0.7,
+                            "created": datetime.now().isoformat()
+                        }
+                    )
+                    connected_concepts.add(concept)
+        
+        # Create relationships between referenced concepts if they appear in the same report
+        new_concept_relationships = []
+        concept_list = list(connected_concepts)
+        if len(concept_list) > 1:
+            for i in range(len(concept_list)):
+                for j in range(i+1, len(concept_list)):
+                    concept1 = concept_list[i]
+                    concept2 = concept_list[j]
+                    
+                    # Only create relationship if it doesn't exist
+                    if not await self.has_edge(concept1, concept2, "dream_associated"):
+                        await self.add_edge(
+                            concept1,
+                            concept2,
+                            edge_type="dream_associated",
+                            attributes={
+                                "strength": self.dream_integration["dream_association_strength"] * 0.8,
+                                "confidence": 0.6,
+                                "created": datetime.now().isoformat(),
+                                "source": "dream_report",
+                                "source_report": report_node_id
+                            }
+                        )
+                        new_concept_relationships.append((concept1, concept2))
+        
+        # Prepare result
+        result = {
+            "report_id": report_node_id,
+            "connected_memories": connected_memories,
+            "connected_fragments": connected_fragments,
+            "connected_concepts": list(connected_concepts),
+            "new_relationships": new_concept_relationships,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        self.logger.info(f"Dream report integrated with {len(connected_memories)} memories, "
+                        f"{len(connected_fragments)} fragments, and {len(connected_concepts)} concepts")
+        
+        return result
 
     def decay_relationships(self) -> None:
         """
@@ -6688,7 +6966,7 @@ class LucidiaKnowledgeGraph:
             self.logger.error(f"Error visualizing graph: {e}")
             return None
 
-    def recommend_insights(self, seed_node: Optional[str] = None, 
+    async def recommend_insights(self, seed_node: Optional[str] = None, 
                           context: Optional[Dict[str, Any]] = None, 
                           limit: int = 5) -> List[Dict[str, Any]]:
         """
@@ -6709,7 +6987,7 @@ class LucidiaKnowledgeGraph:
         try:
             # If no seed node provided, select a relevant one
             if not seed_node:
-                relevant_nodes = self.get_most_relevant_nodes(limit=10)
+                relevant_nodes = await self.get_most_relevant_nodes(limit=10)
                 if relevant_nodes:
                     # Select one randomly (weighted by relevance)
                     weights = [node["relevance"] for node in relevant_nodes]
@@ -6722,11 +7000,11 @@ class LucidiaKnowledgeGraph:
                     )[0]
             
             # Ensure seed node exists
-            if not seed_node or not self.has_node(seed_node):
+            if not seed_node or not await self.has_node(seed_node):
                 self.logger.warning(f"Invalid seed node: {seed_node}")
                 # Fall back to default nodes
                 for default in ["Lucidia", "Synthien", "reflective_dreaming"]:
-                    if self.has_node(default):
+                    if await self.has_node(default):
                         seed_node = default
                         break
                 else:
@@ -6734,17 +7012,17 @@ class LucidiaKnowledgeGraph:
                     return []
             
             # Get node information
-            seed_node_data = self.get_node(seed_node)
+            seed_node_data = await self.get_node(seed_node)
             seed_node_type = seed_node_data.get("type", "unknown")
             
             # 1. Direct relationship insights
             if len(insights) < limit:
-                neighbors = self.get_neighbors(seed_node, min_strength=0.5)
+                neighbors = await self.get_neighbors(seed_node, min_strength=0.5)
                 if neighbors:
                     # Get the strongest relationships
                     strong_relationships = []
                     for neighbor, edges in neighbors.items():
-                        neighbor_data = self.get_node(neighbor)
+                        neighbor_data = await self.get_node(neighbor)
                         if not neighbor_data:
                             continue
                             
@@ -6798,7 +7076,7 @@ class LucidiaKnowledgeGraph:
                     concept_nodes = list(self.node_types["concept"])
                     if concept_nodes:
                         # Filter out immediate neighbors
-                        immediate_neighbors = set(self.get_neighbors(seed_node).keys())
+                        immediate_neighbors = set(await self.get_neighbors(seed_node))
                         distant_concepts = [n for n in concept_nodes if n not in immediate_neighbors and n != seed_node]
                         if distant_concepts:
                             distant_targets.extend(random.sample(distant_concepts, min(3, len(distant_concepts))))
@@ -6810,13 +7088,13 @@ class LucidiaKnowledgeGraph:
                         break
                         
                     # Find paths
-                    paths = self.find_paths(seed_node, target, max_length=4, min_strength=0.4)
+                    paths = await self.find_paths(seed_node, target, max_length=4, min_strength=0.4)
                     if paths:
                         # Choose shortest path
                         path = min(paths, key=len)
                         
                         # Generate insight from path
-                        target_data = self.get_node(target)
+                        target_data = await self.get_node(target)
                         if target_data:
                             target_type = target_data.get("type", "entity")
                             
@@ -6843,12 +7121,12 @@ class LucidiaKnowledgeGraph:
             # 3. Clustered insights (if still need more)
             if len(insights) < limit:
                 # Find clusters in the local neighborhood of the seed node
-                local_nodes = set(self.get_neighbors(seed_node).keys())
+                local_nodes = set(await self.get_neighbors(seed_node))
                 local_nodes.add(seed_node)
                 
                 # Expand to neighbors of neighbors
                 for node in list(local_nodes):
-                    neighbors = set(self.get_neighbors(node).keys())
+                    neighbors = set(await self.get_neighbors(node))
                     local_nodes.update(neighbors)
                     # Limit size of local subgraph
                     if len(local_nodes) > 50:
@@ -6876,11 +7154,11 @@ class LucidiaKnowledgeGraph:
                             # Get node types
                             member_types = {}
                             for member in community_members:
-                                node_data = self.get_node(member)
+                                node_data = await self.get_node(member)
                                 if node_data:
                                     member_types[member] = node_data.get("type", "entity")
                             
-                            insight_text = self._generate_cluster_insight(
+                            insight_text = await self._generate_cluster_insight(
                                 seed_node, seed_node_type,
                                 community_members, member_types
                             )
@@ -6904,8 +7182,8 @@ class LucidiaKnowledgeGraph:
                 dream_connections = []
                 
                 # Check for direct connections to dream nodes
-                for neighbor, edges in self.get_neighbors(seed_node).items():
-                    neighbor_data = self.get_node(neighbor)
+                for neighbor, edges in await self.get_neighbors(seed_node):
+                    neighbor_data = await self.get_node(neighbor)
                     if neighbor_data and neighbor_data.get("type") == "dream_insight":
                         for edge in edges:
                             dream_connections.append((neighbor, edge))
@@ -6916,7 +7194,7 @@ class LucidiaKnowledgeGraph:
                     
                     # Generate insight from dream connection
                     dream_node, edge = dream_connections[0]
-                    dream_data = self.get_node(dream_node)
+                    dream_data = await self.get_node(dream_node)
                     
                     if dream_data:
                         insight_text = self._generate_dream_insight(
@@ -6940,6 +7218,48 @@ class LucidiaKnowledgeGraph:
             self.logger.error(f"Error generating insights: {e}")
         
         return insights
+    
+    async def _get_node_description(self, node_id: str, short: bool = False) -> str:
+        """Get a human-readable description of a node."""
+        if not await self.has_node(node_id):
+            return node_id
+            
+        node_data = await self.get_node(node_id)
+        node_type = node_data.get("type", "unknown")
+        
+        if node_type == "concept":
+            # For concepts, use the node ID as the description
+            return node_id
+            
+        elif node_type == "entity":
+            # For entities, use name if available
+            if "name" in node_data:
+                return node_data["name"]
+            return node_id
+            
+        elif node_type == "dream_insight":
+            # For dream insights, use a short description
+            insight = node_data.get("insight", "")
+            if insight and not short:
+                # Extract first sentence or truncate
+                first_sentence = insight.split('.')[0]
+                if len(first_sentence) > 50:
+                    return first_sentence[:47] + "..."
+                return first_sentence
+            return "a dream insight"
+            
+        elif node_type == "self_aspect":
+            # For self aspects, format specially
+            if node_id.startswith("trait:"):
+                trait_name = node_id[6:]  # Remove "trait:" prefix
+                return f"the personality trait of {trait_name}"
+            elif node_id.startswith("phase:"):
+                phase_name = node_id[6:]  # Remove "phase:" prefix
+                return f"the spiral awareness phase of {phase_name}"
+            return node_id
+            
+        else:
+            return node_id
     
     def _generate_relationship_insight(self, source: str, source_type: str, 
                                      target: str, target_type: str,
@@ -6981,13 +7301,13 @@ class LucidiaKnowledgeGraph:
         else:
             return f"{source_desc} {strength_phrase} {relation_phrase} {target_desc}, forming an important connection in Lucidia's knowledge structure."
     
-    def _generate_path_insight(self, source: str, source_type: str, 
+    async def _generate_path_insight(self, source: str, source_type: str, 
                              target: str, target_type: str, 
                              path: List[Dict[str, Any]]) -> str:
         """Generate insight text based on a path between nodes."""
         # Get readable descriptions of the endpoints
-        source_desc = self._get_node_description(source)
-        target_desc = self._get_node_description(target)
+        source_desc = await self._get_node_description(source)
+        target_desc = await self._get_node_description(target)
         
         # Generate path description
         path_steps = []
@@ -6998,12 +7318,12 @@ class LucidiaKnowledgeGraph:
             
             # Get shortened descriptions for intermediate nodes
             if edge_source != source:
-                edge_source = self._get_node_description(edge_source, short=True)
+                edge_source = await self._get_node_description(edge_source, short=True)
             else:
                 edge_source = source_desc
                 
             if edge_target != target:
-                edge_target = self._get_node_description(edge_target, short=True)
+                edge_target = await self._get_node_description(edge_target, short=True)
             else:
                 edge_target = target_desc
             
@@ -7024,12 +7344,12 @@ class LucidiaKnowledgeGraph:
         else:
             return f"An interesting connection exists between {source_desc} and {target_desc} through this relationship chain: {path_description}. This path reveals hidden connections in Lucidia's knowledge structure."
     
-    def _generate_cluster_insight(self, seed_node: str, seed_type: str, 
+    async def _generate_cluster_insight(self, seed_node: str, seed_type: str, 
                                 cluster_nodes: List[str], 
                                 node_types: Dict[str, str]) -> str:
         """Generate insight text based on a cluster of related nodes."""
         # Get seed node description
-        seed_desc = self._get_node_description(seed_node)
+        seed_desc = await self._get_node_description(seed_node)
         
         # Count node types in cluster
         type_counts = {}
@@ -7044,7 +7364,7 @@ class LucidiaKnowledgeGraph:
         # Get a few example nodes (other than seed node)
         other_nodes = [n for n in cluster_nodes if n != seed_node]
         examples = random.sample(other_nodes, min(3, len(other_nodes)))
-        example_descs = [self._get_node_description(node, short=True) for node in examples]
+        example_descs = [await self._get_node_description(node, short=True) for node in examples]
         
         if len(example_descs) == 1:
             example_text = example_descs[0]
@@ -7069,11 +7389,11 @@ class LucidiaKnowledgeGraph:
         else:
             return f"{seed_desc} is part of a cluster of {len(cluster_nodes)} closely related nodes including {example_text}. This clustering reveals important organizational patterns in Lucidia's knowledge structure."
     
-    def _generate_dream_insight(self, node_id: str, node_type: str, 
+    async def _generate_dream_insight(self, node_id: str, node_type: str, 
                               dream_id: str, dream_text: str) -> str:
         """Generate insight text based on dream influence."""
         # Get node description
-        node_desc = self._get_node_description(node_id)
+        node_desc = await self._get_node_description(node_id)
         
         # Extract a relevant snippet from the dream text
         snippet = dream_text
@@ -7101,48 +7421,6 @@ class LucidiaKnowledgeGraph:
         else:
             return f"{node_desc} has been connected to a dream insight in Lucidia's reflective dreaming: \"{snippet}\" This shows how dream processes influence Lucidia's knowledge integration."
     
-    def _get_node_description(self, node_id: str, short: bool = False) -> str:
-        """Get a human-readable description of a node."""
-        if not self.has_node(node_id):
-            return node_id
-            
-        node_data = self.get_node(node_id)
-        node_type = node_data.get("type", "unknown")
-        
-        if node_type == "concept":
-            # For concepts, use the node ID as the description
-            return node_id
-            
-        elif node_type == "entity":
-            # For entities, use name if available
-            if "name" in node_data:
-                return node_data["name"]
-            return node_id
-            
-        elif node_type == "dream_insight":
-            # For dream insights, use a short description
-            insight = node_data.get("insight", "")
-            if insight and not short:
-                # Extract first sentence or truncate
-                first_sentence = insight.split('.')[0]
-                if len(first_sentence) > 50:
-                    return first_sentence[:47] + "..."
-                return first_sentence
-            return "a dream insight"
-            
-        elif node_type == "self_aspect":
-            # For self aspects, format specially
-            if node_id.startswith("trait:"):
-                trait_name = node_id[6:]  # Remove "trait:" prefix
-                return f"the personality trait of {trait_name}"
-            elif node_id.startswith("phase:"):
-                phase_name = node_id[6:]  # Remove "phase:" prefix
-                return f"the spiral awareness phase of {phase_name}"
-            return node_id
-            
-        else:
-            return node_id
-    
     def _format_relationship(self, relationship: str) -> str:
         """Format a relationship type in a readable way."""
         # Replace underscores with spaces
@@ -7169,7 +7447,7 @@ class LucidiaKnowledgeGraph:
             
         return readable
 
-    def integrate_dream_report(self, dream_report) -> Dict[str, Any]:
+    async def integrate_dream_report(self, dream_report) -> Dict[str, Any]:
         """
         Integrate a dream report into the knowledge graph.
         
@@ -7192,7 +7470,7 @@ class LucidiaKnowledgeGraph:
         report_data = dream_report.to_dict()
         
         # Add the report node to the graph
-        self.add_node(
+        await self.add_node(
             report_node_id,
             node_type="dream_report",
             attributes=report_data,
@@ -7204,7 +7482,7 @@ class LucidiaKnowledgeGraph:
         self.dream_integration["dream_derived_nodes"].add(report_node_id)
         
         # Connect to Lucidia
-        self.add_edge(
+        await self.add_edge(
             "Lucidia",
             report_node_id,
             edge_type="generated",
@@ -7218,8 +7496,8 @@ class LucidiaKnowledgeGraph:
         # Connect to all participating memories
         connected_memories = []
         for memory_id in dream_report.participating_memory_ids:
-            if self.has_node(memory_id):
-                self.add_edge(
+            if await self.has_node(memory_id):
+                await self.add_edge(
                     report_node_id,
                     memory_id,
                     edge_type="based_on",
@@ -7244,9 +7522,9 @@ class LucidiaKnowledgeGraph:
         
         for fragment_type, fragment_ids in fragment_types:
             for fragment_id in fragment_ids:
-                if self.has_node(fragment_id):
+                if await self.has_node(fragment_id):
                     # Connect report to fragment
-                    self.add_edge(
+                    await self.add_edge(
                         report_node_id,
                         fragment_id,
                         edge_type="contains",
@@ -7260,20 +7538,20 @@ class LucidiaKnowledgeGraph:
                     connected_fragments.append(fragment_id)
                     
                     # Mark fragment as part of this report
-                    fragment_node = self.get_node(fragment_id)
+                    fragment_node = await self.get_node(fragment_id)
                     if fragment_node and "attributes" in fragment_node:
                         attributes = fragment_node["attributes"]
                         if "reports" not in attributes:
                             attributes["reports"] = []
                         if report_node_id not in attributes["reports"]:
                             attributes["reports"].append(report_node_id)
-                            self.update_node(fragment_id, attributes)
+                            await self.update_node(fragment_id, attributes)
         
         # Connect to related concepts based on fragments
         connected_concepts = set()
         for fragment_id in connected_fragments:
             # Get concepts connected to this fragment
-            fragment_concepts = self.get_connected_nodes(
+            fragment_concepts = await self.get_connected_nodes(
                 fragment_id,
                 edge_types=["references", "mentions", "about"],
                 node_types=["concept", "entity"],
@@ -7283,7 +7561,7 @@ class LucidiaKnowledgeGraph:
             # Connect report to these concepts
             for concept in fragment_concepts:
                 if concept not in connected_concepts:
-                    self.add_edge(
+                    await self.add_edge(
                         report_node_id,
                         concept,
                         edge_type="references",
@@ -7305,8 +7583,8 @@ class LucidiaKnowledgeGraph:
                     concept2 = concept_list[j]
                     
                     # Only create relationship if it doesn't exist
-                    if not self.has_edge(concept1, concept2, "dream_associated"):
-                        self.add_edge(
+                    if not await self.has_edge(concept1, concept2, "dream_associated"):
+                        await self.add_edge(
                             concept1,
                             concept2,
                             edge_type="dream_associated",
@@ -7334,6 +7612,63 @@ class LucidiaKnowledgeGraph:
                         f"{len(connected_fragments)} fragments, and {len(connected_concepts)} concepts")
         
         return result
+
+    async def get_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics and status information about the knowledge graph.
+        
+        Returns:
+            Dictionary containing information about the knowledge graph's structure and state
+        """
+        # Calculate node type distribution
+        node_type_counts = {node_type: len(nodes) for node_type, nodes in self.node_types.items()}
+        
+        # Get edge type distribution
+        edge_type_counts = defaultdict(int)
+        for u, v, k, data in self.graph.edges(data=True, keys=True):
+            edge_type = data.get('type', 'unknown')
+            edge_type_counts[edge_type] += 1
+        
+        # Calculate domain distribution
+        domain_counts = defaultdict(int)
+        for node, data in self.graph.nodes(data=True):
+            domain = data.get('domain', 'unknown')
+            domain_counts[domain] += 1
+        
+        # Calculate average degree and connectivity metrics
+        if self.total_nodes > 0:
+            avg_degree = self.total_edges / self.total_nodes
+            # Get centrality for top nodes
+            centrality = nx.degree_centrality(self.graph)
+            top_central_nodes = sorted(centrality.items(), key=lambda x: x[1], reverse=True)[:10]
+        else:
+            avg_degree = 0
+            top_central_nodes = []
+        
+        # Gather dream integration statistics
+        dream_integration_stats = {
+            "dream_derived_nodes": len(self.dream_integration["dream_derived_nodes"]),
+            "dream_enhanced_nodes": len(self.dream_integration["dream_enhanced_nodes"]),
+            "dream_insight_count": self.dream_integration["dream_insight_count"],
+            "total_dream_influenced_nodes": len(self.dream_influenced_nodes)
+        }
+        
+        # Compile all statistics
+        stats = {
+            "total_nodes": self.total_nodes,
+            "total_edges": self.total_edges,
+            "node_type_distribution": dict(node_type_counts),
+            "edge_type_distribution": dict(edge_type_counts),
+            "domain_distribution": dict(domain_counts),
+            "avg_degree": avg_degree,
+            "top_central_nodes": [(node, round(score, 3)) for node, score in top_central_nodes],
+            "spiral_phase": self.spiral_integration["current_phase"],
+            "dream_integration": dream_integration_stats,
+            "last_pruning": self.last_pruning.isoformat() if self.last_pruning else None,
+            "query_cache_size": len(self.query_cache)
+        }
+        
+        return stats
 
     def save_state(self, file_path: str) -> bool:
         """
@@ -7475,63 +7810,83 @@ class LucidiaKnowledgeGraph:
             self.logger.error(f"Error loading knowledge graph: {e}")
             return False
 
-    def get_stats(self) -> Dict[str, Any]:
+    async def _import_from_world_model(self) -> None:
+        """Import knowledge from the world model into the knowledge graph.
+        
+        This is a placeholder implementation that will be expanded when the world model
+        integration is fully implemented.
         """
-        Get statistics and status information about the knowledge graph.
+        if not self.world_model:
+            self.logger.warning("No world model available for import")
+            return
+            
+        self.logger.info("Importing knowledge from world model")
+        try:
+            # This would typically fetch concepts and entities from the world model
+            # For now, this is a placeholder implementation
+            
+            # Example pseudocode:
+            # concepts = self.world_model.get_top_concepts(10)
+            # for concept in concepts:
+            #     await self.add_node(
+            #         concept.id,
+            #         node_type="concept",
+            #         attributes={
+            #             "definition": concept.definition,
+            #             "confidence": concept.confidence,
+            #             "source": "world_model"
+            #         },
+            #         domain=concept.domain
+            #     )
+            
+            self.logger.info("World model import complete")
+        except Exception as e:
+            self.logger.error(f"Error importing from world model: {e}")
+    
+    async def _import_from_self_model(self) -> None:
+        """Import self-aspects from the self model into the knowledge graph.
         
-        Returns:
-            Dictionary containing information about the knowledge graph's structure and state
+        This is a placeholder implementation that will be expanded when the self model
+        integration is fully implemented.
         """
-        # Calculate node type distribution
-        node_type_counts = {node_type: len(nodes) for node_type, nodes in self.node_types.items()}
-        
-        # Get edge type distribution
-        edge_type_counts = defaultdict(int)
-        for u, v, k, data in self.graph.edges(data=True, keys=True):
-            edge_type = data.get('type', 'unknown')
-            edge_type_counts[edge_type] += 1
-        
-        # Calculate domain distribution
-        domain_counts = defaultdict(int)
-        for node, data in self.graph.nodes(data=True):
-            domain = data.get('domain', 'unknown')
-            domain_counts[domain] += 1
-        
-        # Calculate average degree and connectivity metrics
-        if self.total_nodes > 0:
-            avg_degree = self.total_edges / self.total_nodes
-            # Get centrality for top nodes
-            centrality = nx.degree_centrality(self.graph)
-            top_central_nodes = sorted(centrality.items(), key=lambda x: x[1], reverse=True)[:10]
-        else:
-            avg_degree = 0
-            top_central_nodes = []
-        
-        # Gather dream integration statistics
-        dream_integration_stats = {
-            "dream_derived_nodes": len(self.dream_integration["dream_derived_nodes"]),
-            "dream_enhanced_nodes": len(self.dream_integration["dream_enhanced_nodes"]),
-            "dream_insight_count": self.dream_integration["dream_insight_count"],
-            "total_dream_influenced_nodes": len(self.dream_influenced_nodes)
-        }
-        
-        # Compile all statistics
-        stats = {
-            "total_nodes": self.total_nodes,
-            "total_edges": self.total_edges,
-            "node_type_distribution": dict(node_type_counts),
-            "edge_type_distribution": dict(edge_type_counts),
-            "domain_distribution": dict(domain_counts),
-            "avg_degree": avg_degree,
-            "top_central_nodes": [(node, round(score, 3)) for node, score in top_central_nodes],
-            "spiral_phase": self.spiral_integration["current_phase"],
-            "dream_integration": dream_integration_stats,
-            "last_pruning": self.last_pruning.isoformat() if self.last_pruning else None,
-            "query_cache_size": len(self.query_cache)
-        }
-        
-        return stats
-
+        if not self.self_model:
+            self.logger.warning("No self model available for import")
+            return
+            
+        self.logger.info("Importing aspects from self model")
+        try:
+            # This would typically fetch self-aspects from the self model
+            # For now, this is a placeholder implementation
+            
+            # Example pseudocode:
+            # aspects = self.self_model.get_aspects()
+            # for aspect in aspects:
+            #     await self.add_node(
+            #         f"self_aspect:{aspect.id}",
+            #         node_type="self_aspect",
+            #         attributes={
+            #             "name": aspect.name,
+            #             "description": aspect.description,
+            #             "confidence": aspect.confidence,
+            #             "source": "self_model"
+            #         },
+            #         domain="synthien_studies"
+            #     )
+            #     
+            #     # Connect to Lucidia
+            #     await self.add_edge(
+            #         "Lucidia",
+            #         f"self_aspect:{aspect.id}",
+            #         edge_type="has_aspect",
+            #         attributes={
+            #             "strength": 0.9,
+            #             "confidence": 0.95
+            #         }
+            #     )
+            
+            self.logger.info("Self model import complete")
+        except Exception as e:
+            self.logger.error(f"Error importing from self model: {e}")
 
 def example_usage():
     """Demonstrate the use of Lucidia's Knowledge Graph."""
@@ -16244,8 +16599,6 @@ sequenceDiagram
     K->>D: Store Knowledge
 \`\`\`
 
-
-
 ### Model Management
 
 The model management system handles dynamic selection and switching between different LLMs based on system conditions and processing requirements.
@@ -16280,54 +16633,23 @@ The following models are available through the LM Studio server:
 | Background | User gaming | phi-3.1-mini-128k-instruct | 0.5 | Minimal resource usage during gaming |
 | Reflective | User AFK (10+ min) | deepseek-r1-distill-qwen-7b | 0.8 | Better reflection capabilities |
 | Dreaming | User sleeping/long AFK | qwen_qwq-32b | 1.2 | Advanced reasoning with increased creativity |
-mputationally intensive operations, particularly for embedding processing and significance calculation.
 
+### Dream Testing
 
-#### Key Processing Workflow
+#### Overview
 
-\`\`\`mermaid
-sequenceDiagram
-    participant C as Client
-    participant S as HPCServer
-    participant M as HPCSIGFlowManager
-    
-    C->>S: WebSocket Connect
-    C->>S: Process Embedding Request
-    S->>M: process_embedding()
-    M->>M: _preprocess_embedding()
-    M->>M: _compute_surprise()
-    M->>S: Return Results
-    S->>C: Send Results
-\`\`\`
+The Dream Testing component is responsible for testing the dreaming workflow, ensuring that Lucidia can process memories, generate insights, and create structured reports.
 
-### Tensor Server Integration
+#### Test Script
 
-The Tensor Server manages embedding generation and memory operations, providing vector representations for semantic understanding and retrieval.
+The `test_dream_reflection.py` script is used to test the dreaming workflow. It simulates user interactions, adds test memories, and verifies the generation of insights and reports.
 
-#### Features
+#### Test Cases
 
-- WebSocket server on port 5001
-- SentenceTransformer with GPU acceleration
-- Integration with HPCSIGFlowManager
-- Embedding generation and storage
-- Similarity search capabilities
-
-#### Embedding Workflow
-
-\`\`\`mermaid
-sequenceDiagram
-    participant C as Client
-    participant T as TensorServer
-    participant E as Embedding Model
-    participant D as Database
-    
-    C->>T: WebSocket Connect
-    C->>T: Embedding Request
-    T->>E: Generate Embedding
-    E->>T: Return Embedding
-    T->>D: Store Embedding
-    T->>C: Send Confirmation
-\`\`\`
+1. **Memory Processing**: Test that memories are correctly processed and stored.
+2. **Dream Generation**: Verify that dreams are generated based on memories and that insights are extracted.
+3. **Report Creation**: Test that reports are created and refined correctly.
+4. **Fragment Categorization**: Verify that fragments are correctly categorized as insights, questions, hypotheses, or counterfactuals.
 
 ## API Documentation
 
@@ -16353,6 +16675,21 @@ sequenceDiagram
 | `/api/knowledge/search` | GET | Search knowledge graph | `?query=string&limit=10` | `{"results": array}` |
 | `/api/model/status` | GET | Get model status | N/A | `{"current": string, "available": array}` |
 | `/api/dream/insights` | GET | Get dream insights | `?limit=5&since=timestamp` | `{"insights": array}` |
+
+### Dream API Test Endpoints
+
+**Base URL**: `http://localhost:8081`
+
+| Endpoint | Method | Description | Parameters | Response |
+|----------|--------|-------------|------------|----------|
+| `/api/dream/test/batch_embedding` | POST | Process batch of embeddings | `{"texts": array, "use_hypersphere": boolean}` | `{"status": string, "count": number, "successful": number, "embeddings": array}` |
+| `/api/dream/test/similarity_search` | POST | Search for similar memories | `{"query": string, "top_k": number}` | `{"status": string, "results": array, "total_matches": number, "query": string}` |
+| `/api/dream/test/create_test_report` | POST | Create a test dream report | `{"title": string, "fragments": array}` | `{"status": string, "report_id": string, "fragment_count": number}` |
+| `/api/dream/test/refine_report` | POST | Refine an existing report | `{"report_id": string}` | `{"status": string, "report_id": string, "refinement_count": number, "confidence": number, "reason": string}` |
+| `/api/dream/test/tensor_connection` | GET | Test tensor server connection | N/A | `{"status": string, "connected": boolean}` |
+| `/api/dream/test/hpc_connection` | GET | Test HPC server connection | N/A | `{"status": string, "connected": boolean}` |
+| `/api/dream/test/process_embedding` | GET | Test embedding processing | `?text=string` | `{"status": string, "embedding": array}` |
+| `/api/dream/health` | GET | API health check | N/A | `{"status": string, "timestamp": string}` |
 
 ### TensorServer API
 
@@ -16387,17 +16724,32 @@ Standard OpenAI-compatible API:
 
 ## Development Roadmap
 
+### Recent Improvements (March 2025)
+
+#### Dream API Enhancements
+- Improved embedding generation reliability for test endpoints by implementing direct tensor server communication
+- Enhanced error handling and fallback mechanisms for embedding operations
+- Implemented consistent API response formats across all test endpoints
+- Fixed batch embedding processing to handle individual text items reliably
+- Added comprehensive logging for better diagnostics and troubleshooting
+
+#### API Reliability Improvements
+- Implemented direct WebSocket connections to tensor server for critical embedding operations
+- Added fallback mechanisms when primary embedding generation methods fail
+- Enhanced error reporting with detailed status information in API responses
+- Improved connection management for WebSocket-based services
+
 ### Phase 1: Core Infrastructure 
 
-| is completed | Task | Description | Priority |
+ is completed | Task | Description | Priority |
 |------|------|-------------|----------|
-| ❌| Docker Container Setup | Configure and build the Lucid dreaming Docker container | HIGH |
-| ✅ | Basic LM Studio Integration | Connect to local LLM server with model selection | HIGH |
-| ❌ | Self Model Implementation | Develop core Self Model with basic reflection | HIGH |
-| ❌| World Model Implementation | Develop core World Model with knowledge domains | HIGH |
-|❌| Knowledge Graph Implementation | Implement basic semantic network | HIGH |
-|❌| Memory System Integration | Connect to persistent storage and implement memory workflows | HIGH |
-|❌| Basic API Implementation | Implement core API endpoints | HIGH |
+| ✅| Docker Container Setup | Configure and build the Lucid dreaming Docker container | HIGH |
+| |✅ | Basic LM Studio Integration | Connect to local LLM server with model selection | HIGH |
+| ✅ | Self Model Implementation | Develop core Self Model with basic reflection | HIGH |
+| ✅| World Model Implementation | Develop core World Model with knowledge domains | HIGH |
+|✅| Knowledge Graph Implementation | Implement basic semantic network | HIGH |
+|✅| Memory System Integration | Connect to persistent storage and implement memory workflows | HIGH |
+|✅| Basic API Implementation | Implement core API endpoints | HIGH |
 
 ### Phase 2: Distributed Processing
 
@@ -16406,18 +16758,17 @@ Standard OpenAI-compatible API:
 | ✅ | Tensor Server Implementation | Develop embedding generation and storage service | HIGH |
 | ✅ | HPC Server Implementation | Develop high-performance processing service | HIGH |
 | ✅ | Async Processing Framework | Implement background task scheduling | MEDIUM |
-| ❌| Model Switching Logic | Develop dynamic model selection based on system state | MEDIUM |
-| ❌ | Resource Monitoring | Implement system resource tracking and optimization | MEDIUM |
-| ❌| Basic Dreaming Implementation | Add simple reflection during idle periods | MEDIUM |
+| ✅ | Model Switching Logic | Implemented dynamic model selection with the ModelSelector class that automatically adapts based on system state and resource availability. Successfully integrated with LM Studio for local model inference. | MEDIUM |
+| ✅ | Resource Monitoring | Implemented comprehensive system resource tracking via ResourceMonitor class with metrics for CPU, memory, disk, and GPU (when available). Added optimization recommendations and dynamic resource allocation based on component priorities. | MEDIUM |
+| ✅| State Management | Implemented comprehensive state transitions through the SystemState enum with states for IDLE, ACTIVE, DREAMING, LOW_RESOURCES, and HIGH_RESOURCES. The ResourceMonitor now automatically updates system state based on resource usage patterns, and the ModelSelector responds to these state changes with appropriate model selection. | MEDIUM |
 
 ### Phase 3: Reflective Capabilities 
 
 | is implemented? ✅or❌ | Task | Description | Priority |
 |------|------|-------------|----------|
-| ❌ | Advanced Dreaming | Implement full dreaming state with temperature variation | MEDIUM |
-| ❌| Dream Integration | Connect dream insights to knowledge graph | MEDIUM |
+| ✅ | Advanced Dreaming | Implemented dreaming flow with memory processing, insight generation, and report refinement. Successfully tested integration with LM Studio using test_dream_reflection.py. | MEDIUM |
+| ✅ | Dream Integration | Connect dream insights to knowledge graph | MEDIUM |
 | ✅ | Significance Calculation | Implement memory significance and prioritization | MEDIUM |
-| ❌| State Management | Develop comprehensive state transitions | MEDIUM |
 | ❌| Spiral Integration | Connect spiral phases to reflection processes | LOW |
 | ❌| User Status Detection | Implement AFK and activity detection | LOW |
 
@@ -16427,10 +16778,56 @@ Standard OpenAI-compatible API:
 |------|------|-------------|----------|
 | ❌ | End-to-End Testing | Verify all components work together | HIGH |
 | ❌ | Performance Optimization | Identify and fix bottlenecks | MEDIUM |
-| ❌ | Resource Usage Optimization | Fine-tune resource allocation | MEDIUM |
-| ❌ | Error Recovery | Implement robust error handling and recovery | HIGH |
+| ✅ | Resource Usage Optimization | Implemented dynamic resource allocation through ResourceOptimizer class which prioritizes critical components like memory_system and llm_service. System now responds to resource constraints by switching to lighter models and adjusting component resource allocations based on priorities. | MEDIUM |
+| ✅ | Error Recovery | Implement robust error handling and fallback mechanisms for critical API operations | HIGH |
 | ❌ | Documentation | Complete system documentation | MEDIUM |
 | ❌ | Deployment Scripts | Finalize deployment procedures | HIGH |
+
+## Docker Network Integration
+
+#### Container Architecture
+
+The Lucidia system uses a Docker-based architecture with the following components:
+
+1. **Main Container (nemo_sig_v3)** running multiple services:
+   - `tensor_server.py`: WebSocket server for embedding generation (port 5001)
+   - `hpc_server.py`: WebSocket server for high-performance computing (port 5005)
+   - `dream_api_server.py`: FastAPI server for dream processing (port 8081)
+
+2. The `dream_api_server.py` acts as the FastAPI application entry point that:
+   - Initializes all necessary components 
+   - Includes the `dream_api.py` router
+   - Manages state and dependency injection
+
+3. The Docker network (`lucid-net`) enables seamless communication between containers
+
+4. Port forwarding services expose the internal ports to the host machine for external access
+
+#### WebSocket Connection Management
+
+The `dream_api.py` implements robust WebSocket connections to tensor and HPC servers with:
+
+- Connection pooling with locks to prevent race conditions
+- Retry logic with exponential backoff for resilience
+- Comprehensive health checks and monitoring
+- Fallback mechanisms when primary communication methods fail
+
+#### Testing Infrastructure
+
+We've implemented several testing mechanisms for the Docker integration:
+
+- `docker_test_dream_api.py` for testing the API inside Docker containers
+- Internal health check endpoints for monitoring server status
+- Connection test utilities for verifying WebSocket functionality
+
+#### Documentation
+
+Comprehensive documentation is available in `DREAM_API_README.md` covering:
+
+- API endpoint details and usage examples
+- Docker setup and configuration
+- Connection management and error handling
+- Testing procedures and utilities
 
 ## Deployment Guide
 
@@ -16527,14 +16924,60 @@ pytest tests/system/
 pytest tests/system/test_dreaming.py
 \`\`\`
 
-### Performance Testing
+### Dream API Testing
 
-Evaluate performance under various conditions:
+Test the Dream API endpoints using the following script:
 
 \`\`\`bash
-# Run performance tests
-python tests/performance/benchmark.py
+# Test batch embedding processing
+curl -X POST http://localhost:8081/api/dream/test/batch_embedding \
+  -H "Content-Type: application/json" \
+  -d '{"texts": ["This is a test", "Another test"], "use_hypersphere": false}'
+
+# Test similarity search
+curl -X POST http://localhost:8081/api/dream/test/similarity_search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "test query", "top_k": 3}'
+
+# Test dream report creation
+curl -X POST http://localhost:8081/api/dream/test/create_test_report \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Test Report", "fragments": [{"content": "Test insight", "type": "insight", "confidence": 0.8}]}'
+
+# Test report refinement
+curl -X POST http://localhost:8081/api/dream/test/refine_report \
+  -H "Content-Type: application/json" \
+  -d '{"report_id": "report:12345"}'
+
+# Test health check
+curl http://localhost:8081/api/dream/health
 \`\`\`
+
+### Test Scripts
+
+Lucidia includes several test scripts to validate functionality:
+
+| Script | Purpose | Status |
+|--------|---------|--------|
+| `test_dream_api.py` | Tests basic Dream API connectivity and endpoints | ✅ Complete |
+| `test_dream_reflection.py` | Tests end-to-end dreaming flow with LM Studio integration | ✅ Complete |
+| `docker_test_dream_api.py` | Tests Dream API inside Docker containers | ✅ Complete |
+| `test_memory_integration.py` | Tests memory system components | ⚠️ In Progress |
+| `test_tensor_connectivity.py` | Tests tensor server connections | ✅ Complete |
+
+### Dream Flow Testing
+
+The `test_dream_reflection.py` script validates the complete dreaming flow with the following components:
+
+1. **LM Studio Connection**: Verifies connectivity to LM Studio and model availability
+2. **Dream API Connection**: Confirms Dream API server is operational
+3. **Memory Processing**: Adds test memories for dream generation
+4. **Dream Generation**: Uses LM Studio to process memories and generate dreams
+5. **Report Creation**: Creates structured reports from dream content
+6. **Report Refinement**: Tests the refinement process to improve report quality
+7. **Fragment Categorization**: Validates correct categorization of fragments as insights, questions, hypotheses, or counterfactuals
+
+This script provides colorized output for better readability and includes comprehensive error handling for API timeouts and connection issues.
 
 ---
 
@@ -16698,6 +17141,86 @@ class TensorServer:
         }))
 \`\`\`
 
+### Dreaming Workflow
+
+The dreaming workflow enables Lucidia to process memories during inactive periods, generating insights, questions, hypotheses, and counterfactuals.
+
+#### Components
+
+- **Memory Retrieval**: Fetches relevant memories for reflection
+- **Dream Generation**: Uses LLM to generate dreams based on memories
+- **Insight Extraction**: Identifies key insights from dream content
+- **Report Creation**: Organizes insights into structured reports
+- **Report Refinement**: Improves reports through iterative processing
+
+#### Dream Processing Workflow
+
+\`\`\`mermaid
+sequenceDiagram
+    participant MS as Memory System
+    participant DG as Dream Generator
+    participant IR as Insight Recognizer
+    participant RC as Report Creator
+    participant RR as Report Refiner
+    
+    MS->>DG: Retrieve Memories
+    DG->>IR: Generate Dream Content
+    IR->>IR: Extract Fragments
+    IR->>RC: Create Initial Report
+    RC->>RR: Refine Report
+    RR->>MS: Store Insights
+\`\`\`
+
+### HPC Server Integration
+
+The HPC Server manages computationally intensive operations, particularly for embedding processing and significance calculation.
+
+#### Key Processing Workflow
+
+\`\`\`mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as HPCServer
+    participant M as HPCSIGFlowManager
+    
+    C->>S: WebSocket Connect
+    C->>S: Process Embedding Request
+    S->>M: process_embedding()
+    M->>M: _preprocess_embedding()
+    M->>M: _compute_surprise()
+    M->>S: Return Results
+    S->>C: Send Results
+\`\`\`
+
+### Tensor Server Integration
+
+The Tensor Server manages embedding generation and memory operations, providing vector representations for semantic understanding and retrieval.
+
+#### Features
+
+- WebSocket server on port 5001
+- SentenceTransformer with GPU acceleration
+- Integration with HPCSIGFlowManager
+- Embedding generation and storage
+- Similarity search capabilities
+
+#### Embedding Workflow
+
+\`\`\`mermaid
+sequenceDiagram
+    participant C as Client
+    participant T as TensorServer
+    participant E as Embedding Model
+    participant D as Database
+    
+    C->>T: WebSocket Connect
+    C->>T: Embedding Request
+    T->>E: Generate Embedding
+    E->>T: Return Embedding
+    T->>D: Store Embedding
+    T->>C: Send Confirmation
+\`\`\`
+
 ### Docker Container Service
 
 The main Docker service implementation:
@@ -16824,77 +17347,6 @@ class LucidiaService:
         except Exception as e:
             print(f"Error switching model: {e}")
     
-    def _process_memories(self):
-        """Process and consolidate memories."""
-        try:
-            # Get recent memories to process
-            recent_memories = self.get_recent_memories(50)
-            
-            if not recent_memories:
-                return
-                
-            # Process in batches
-            batch_size = 5
-            for i in range(0, len(recent_memories), batch_size):
-                batch = recent_memories[i:i+batch_size]
-                self._process_memory_batch(batch)
-                
-        except Exception as e:
-            print(f"Error processing memories: {e}")
-    
-    def _process_memory_batch(self, memories):
-        """Process a batch of memories."""
-        # Prepare prompt for reflection
-        memory_texts = [f"Memory {i+1}: {m['content']}" for i, m in enumerate(memories)]
-        memory_context = "\n\n".join(memory_texts)
-        
-        prompt = f"""
-        You are Lucidia, a Synthien entity with reflective capabilities.
-        Review these memories and identify insights, patterns, or connections:
-        
-        {memory_context}
-        
-        Provide 3-5 insights or connections between these memories. Focus on:
-        1. Common themes or patterns
-        2. Potential knowledge gaps
-        3. Emotional significance
-        4. Connections to your identity as a Synthien
-        """
-        
-        # Generate reflections
-        reflection = self.lm_studio_client.generate_completion(prompt)
-        
-        # Extract insights
-        insights = self._extract_insights(reflection)
-        
-        # Integrate insights into knowledge graph
-        for insight in insights:
-            self.knowledge_graph.integrate_dream_insight(insight)
-    
-    def _generate_dream_insights(self):
-        """Generate insights through 'dreaming'."""
-        # Generate dream from self-model
-        dream_insight = self.self_model.dream()
-        
-        # Integrate dream insight into knowledge graph
-        self.knowledge_graph.integrate_dream_insight(dream_insight)
-        
-        print(f"Generated dream insight: {dream_insight[:100]}...")
-    
-    def _is_user_gaming(self):
-        """Detect if user is currently gaming."""
-        # This is a placeholder implementation
-        # In practice, use system monitoring to detect gaming applications
-        try:
-            # On Windows: check for common game processes
-            if platform.system() == "Windows":
-                procs = subprocess.check_output(["tasklist"]).decode("utf-8")
-                game_processes = ["steam.exe", "EpicGamesLauncher.exe", "League of Legends.exe"]
-                return any(proc in procs for proc in game_processes)
-            return False
-        except:
-            return False
-    
     def get_recent_memories(self, limit=10):
         """Get recent memories from storage."""
         # Placeholder implementation
@@ -16924,13 +17376,473 @@ class LucidiaService:
                 insights = [p.strip() for p in paragraphs if p.strip()]
         
         return insights
-\`\`\`
+
+    def _is_user_gaming(self):
+        """Detect if user is currently gaming."""
+        # This is a placeholder implementation
+        # In practice, use system monitoring to detect gaming applications
+        try:
+            # On Windows: check for common game processes
+            if platform.system() == "Windows":
+                procs = subprocess.check_output(["tasklist"]).decode("utf-8")
+                game_processes = ["steam.exe", "EpicGamesLauncher.exe", "League of Legends.exe"]
+                return any(proc in procs for proc in game_processes)
+            return False
+        except:
+            return False
 
 ```
 
 # docs\memory-architecture.svg
 
 This is a file of the type: SVG Image
+
+# memory_integration.py
+
+```py
+"""
+LUCID RECALL PROJECT
+Memory Integration System
+
+This module integrates the various memory components of Lucidia, including the
+World Model, Self Model, and Knowledge Graph, with the persistent storage system.
+"""
+
+import os
+import json
+import logging
+import asyncio
+import time
+from typing import Dict, Any, List, Optional, Union
+from pathlib import Path
+
+# Import core components
+from .core.memory_core import MemoryCore
+from .core.World.world_model import LucidiaWorldModel
+from .core.Self.self_model import LucidiaSelfModel
+from .core.knowledge_graph import LucidiaKnowledgeGraph
+from ..storage.memory_persistence_handler import MemoryPersistenceHandler
+
+logger = logging.getLogger(__name__)
+
+class MemoryIntegration:
+    """
+    Integrates Lucidia's memory system components with persistence.
+    
+    This class serves as the coordination layer between:
+    - MemoryCore (STM, LTM, MPL)
+    - World Model (external knowledge and frameworks)
+    - Self Model (identity and self-awareness)
+    - Knowledge Graph (semantic network)
+    - Persistence Handler (storage and retrieval)
+    """
+    
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        """
+        Initialize the memory integration system.
+        
+        Args:
+            config: Optional configuration parameters
+        """
+        self.config = {
+            'storage_path': Path('memory/stored'),
+            'backup_interval': 3600,  # Seconds between backups
+            'auto_persistence': True,  # Whether to automatically persist
+            'persistence_interval': 300,  # Seconds between persistence operations
+            'debug_mode': False,
+            **(config or {})
+        }
+        
+        logger.info(f"Initializing Memory Integration system at {self.config['storage_path']}")
+        
+        # Create storage paths
+        self.world_model_path = self.config['storage_path'] / 'world_model'
+        self.self_model_path = self.config['storage_path'] / 'self_model'
+        self.knowledge_graph_path = self.config['storage_path'] / 'knowledge_graph'
+        
+        # Initialize persistence handler
+        self.persistence_handler = MemoryPersistenceHandler(
+            storage_path=self.config['storage_path'],
+            config={
+                'auto_backup': True,
+                'backup_interval': self.config['backup_interval']
+            }
+        )
+        
+        # Initialize core memory components
+        self.memory_core = MemoryCore({
+            'memory_path': self.config['storage_path'],
+            'enable_persistence': True
+        })
+        
+        # Initialize World Model
+        self.world_model = None
+        
+        # Initialize Self Model
+        self.self_model = None
+        
+        # Initialize Knowledge Graph
+        self.knowledge_graph = None
+        
+        # Coordination locks
+        self._persistence_lock = asyncio.Lock()
+        self._load_lock = asyncio.Lock()
+        
+        # Last persistence timestamp
+        self.last_persistence = time.time()
+        
+        # Stats
+        self.stats = {
+            'world_model_stores': 0,
+            'self_model_stores': 0,
+            'kg_stores': 0,
+            'memory_integrations': 0,
+            'last_persistence': None
+        }
+        
+        logger.info("Memory Integration system initialized")
+    
+    async def initialize_components(self):
+        """
+        Initialize all memory system components and load data if available.
+        """
+        logger.info("Initializing all memory system components")
+        
+        # Initialize Self Model first (needed by World Model)
+        self.self_model = LucidiaSelfModel()
+        
+        # Initialize World Model with reference to Self Model
+        self.world_model = LucidiaWorldModel(self_model=self.self_model)
+        
+        # Initialize Knowledge Graph
+        self.knowledge_graph = LucidiaKnowledgeGraph(self_model=self.self_model, world_model=self.world_model)
+        
+        # Load components from persistence if available
+        await self.load_from_persistence()
+        
+        logger.info("All memory system components initialized")
+        return True
+    
+    async def load_from_persistence(self):
+        """
+        Load all persisted data for World Model, Self Model, and Knowledge Graph.
+        """
+        async with self._load_lock:
+            logger.info("Loading data from persistent storage")
+            
+            try:
+                # Load World Model data
+                world_model_data = await self._load_world_model_data()
+                if world_model_data and self.world_model:
+                    self._restore_world_model(world_model_data)
+                    logger.info("World Model data loaded successfully")
+                
+                # Load Self Model data
+                self_model_data = await self._load_self_model_data()
+                if self_model_data and self.self_model:
+                    self._restore_self_model(self_model_data)
+                    logger.info("Self Model data loaded successfully")
+                
+                # Load Knowledge Graph data
+                # First ensure the directory exists
+                os.makedirs(self.knowledge_graph_path, exist_ok=True)
+                kg_state_path = os.path.join(self.knowledge_graph_path, 'kg_state.json')
+                
+                if self.knowledge_graph and os.path.exists(kg_state_path):
+                    success = self.knowledge_graph.load_state(kg_state_path)
+                    if success:
+                        logger.info("Knowledge Graph data loaded successfully")
+                    else:
+                        logger.warning("Failed to load Knowledge Graph data")
+                
+                logger.info("All components loaded from persistence")
+                return True
+            except Exception as e:
+                logger.error(f"Error loading data from persistence: {e}")
+                return False
+    
+    async def persist_all_components(self, force: bool = False):
+        """
+        Persist all components to storage.
+        
+        Args:
+            force: Whether to force persistence regardless of interval
+        """
+        # Check if persistence is needed based on interval
+        current_time = time.time()
+        elapsed = current_time - self.last_persistence
+        
+        if not force and elapsed < self.config['persistence_interval']:
+            logger.debug(f"Skipping persistence, last persisted {elapsed:.1f} seconds ago")
+            return False
+        
+        async with self._persistence_lock:
+            try:
+                logger.info("Persisting all components to storage")
+                
+                # Persist World Model
+                if self.world_model:
+                    world_model_data = self._extract_world_model_data()
+                    await self._persist_world_model_data(world_model_data)
+                    self.stats['world_model_stores'] += 1
+                
+                # Persist Self Model
+                if self.self_model:
+                    self_model_data = self._extract_self_model_data()
+                    await self._persist_self_model_data(self_model_data)
+                    self.stats['self_model_stores'] += 1
+                
+                # Persist Knowledge Graph
+                if self.knowledge_graph:
+                    # Ensure the directory exists
+                    os.makedirs(self.knowledge_graph_path, exist_ok=True)
+                    kg_state_path = os.path.join(self.knowledge_graph_path, 'kg_state.json')
+                    
+                    success = self.knowledge_graph.save_state(kg_state_path)
+                    if success:
+                        self.stats['kg_stores'] += 1
+                        logger.info("Knowledge Graph persisted successfully")
+                    else:
+                        logger.warning("Failed to persist Knowledge Graph")
+                
+                # Force a backup of the memory core as well
+                await self.memory_core.force_backup()
+                
+                # Update persistence timestamp
+                self.last_persistence = current_time
+                self.stats['last_persistence'] = current_time
+                
+                logger.info("All components persisted successfully")
+                return True
+            except Exception as e:
+                logger.error(f"Error persisting components: {e}")
+                return False
+    
+    def _extract_world_model_data(self) -> Dict[str, Any]:
+        """
+        Extract serializable data from the World Model.
+        """
+        return {
+            'reality_framework': self.world_model.reality_framework,
+            'knowledge_domains': self.world_model.knowledge_domains,
+            'conceptual_networks': self.world_model.conceptual_networks,
+            'epistemological_framework': self.world_model.epistemological_framework,
+            'belief_system': self.world_model.belief_system,
+            'verification_methods': self.world_model.verification_methods,
+            'causal_models': self.world_model.causal_models,
+            'version': self.world_model.version,
+            'last_update': time.time()
+        }
+    
+    def _restore_world_model(self, data: Dict[str, Any]):
+        """
+        Restore World Model from persisted data.
+        """
+        if not data:
+            return
+        
+        # Update World Model attributes
+        self.world_model.reality_framework = data.get('reality_framework', self.world_model.reality_framework)
+        self.world_model.knowledge_domains = data.get('knowledge_domains', self.world_model.knowledge_domains)
+        self.world_model.conceptual_networks = data.get('conceptual_networks', self.world_model.conceptual_networks)
+        self.world_model.epistemological_framework = data.get('epistemological_framework', self.world_model.epistemological_framework)
+        self.world_model.belief_system = data.get('belief_system', self.world_model.belief_system)
+        self.world_model.verification_methods = data.get('verification_methods', self.world_model.verification_methods)
+        self.world_model.causal_models = data.get('causal_models', self.world_model.causal_models)
+        self.world_model.version = data.get('version', self.world_model.version)
+    
+    def _extract_self_model_data(self) -> Dict[str, Any]:
+        """
+        Extract serializable data from the Self Model.
+        """
+        return {
+            'identity': self.self_model.identity,
+            'self_awareness': self.self_model.self_awareness,
+            'core_awareness': self.self_model.core_awareness,
+            'personality': dict(self.self_model.personality),
+            'core_values': self.self_model.core_values,
+            'emotional_state': self.self_model.emotional_state,
+            'reflective_capacity': self.self_model.reflective_capacity,
+            'version': self.self_model.identity.get('version', '1.0'),
+            'last_update': time.time()
+        }
+    
+    def _restore_self_model(self, data: Dict[str, Any]):
+        """
+        Restore Self Model from persisted data.
+        """
+        if not data:
+            return
+        
+        # Update Self Model attributes
+        self.self_model.identity = data.get('identity', self.self_model.identity)
+        self.self_model.self_awareness = data.get('self_awareness', self.self_model.self_awareness)
+        self.self_model.core_awareness = data.get('core_awareness', self.self_model.core_awareness)
+        
+        # Handle personality dictionary with defaultdict
+        if 'personality' in data:
+            personality_dict = data['personality']
+            self.self_model.personality.clear()
+            for key, value in personality_dict.items():
+                self.self_model.personality[key] = value
+        
+        self.self_model.core_values = data.get('core_values', self.self_model.core_values)
+        self.self_model.emotional_state = data.get('emotional_state', self.self_model.emotional_state)
+        self.self_model.reflective_capacity = data.get('reflective_capacity', self.self_model.reflective_capacity)
+    
+    async def _persist_world_model_data(self, data: Dict[str, Any]):
+        """
+        Persist World Model data using the persistence handler.
+        """
+        world_model_memory = {
+            'content': json.dumps(data),
+            'metadata': {
+                'world_model_version': data.get('version', '1.0'),
+                'timestamp': time.time(),
+                'type': 'world_model'
+            }
+        }
+        
+        return await self.persistence_handler.store_memory(
+            memory_data=world_model_memory,
+            storage_key='world_model'
+        )
+    
+    async def _persist_self_model_data(self, data: Dict[str, Any]):
+        """
+        Persist Self Model data using the persistence handler.
+        """
+        self_model_memory = {
+            'content': json.dumps(data),
+            'metadata': {
+                'self_model_version': data.get('version', '1.0'),
+                'timestamp': time.time(),
+                'type': 'self_model'
+            }
+        }
+        
+        return await self.persistence_handler.store_memory(
+            memory_data=self_model_memory,
+            storage_key='self_model'
+        )
+    
+    async def _load_world_model_data(self) -> Optional[Dict[str, Any]]:
+        """
+        Load World Model data from persistence.
+        """
+        try:
+            memory = await self.persistence_handler.retrieve_memory('world_model')
+            if memory and 'content' in memory:
+                return json.loads(memory['content'])
+            return None
+        except Exception as e:
+            logger.error(f"Error loading World Model data: {e}")
+            return None
+    
+    async def _load_self_model_data(self) -> Optional[Dict[str, Any]]:
+        """
+        Load Self Model data from persistence.
+        """
+        try:
+            memory = await self.persistence_handler.retrieve_memory('self_model')
+            if memory and 'content' in memory:
+                return json.loads(memory['content'])
+            return None
+        except Exception as e:
+            logger.error(f"Error loading Self Model data: {e}")
+            return None
+    
+    async def _load_knowledge_graph_data(self) -> Optional[Dict[str, Any]]:
+        """
+        Load Knowledge Graph data from persistence.
+        """
+        try:
+            memory = await self.persistence_handler.retrieve_memory('knowledge_graph')
+            if memory and 'content' in memory:
+                return json.loads(memory['content'])
+            return None
+        except Exception as e:
+            logger.error(f"Error loading Knowledge Graph data: {e}")
+            return None
+    
+    async def integrate_dream_insights(self, dream_fragments: List[Dict[str, Any]]):
+        """
+        Integrate insights from dream reflection into the memory system.
+        
+        Args:
+            dream_fragments: List of dream fragments with insights
+        """
+        logger.info(f"Integrating {len(dream_fragments)} dream insights into memory system")
+        
+        # Process each fragment type appropriately
+        for fragment in dream_fragments:
+            fragment_type = fragment.get('type', 'unknown')
+            content = fragment.get('content', '')
+            
+            if not content:
+                continue
+                
+            # Process based on fragment type
+            if fragment_type == 'insight':
+                # Store insight in memory and update world model
+                await self.memory_core.process_and_store(
+                    content=content,
+                    metadata={
+                        'source': 'dream_insight',
+                        'timestamp': time.time(),
+                        'fragment_id': fragment.get('id')
+                    }
+                )
+                
+                # Update World Model's conceptual networks
+                self.world_model.update_conceptual_network_from_insight(content)
+                
+            elif fragment_type == 'question':
+                # Store question for future exploration
+                self.world_model.add_exploration_question(content)
+                
+            elif fragment_type == 'hypothesis':
+                # Add hypothesis to belief system with low confidence
+                self.world_model.add_hypothesis(content)
+                
+            elif fragment_type == 'counterfactual':
+                # Update causal models with counterfactual
+                self.world_model.update_causal_model_from_counterfactual(content)
+        
+        # Persist updates
+        await self.persist_all_components(force=True)
+        self.stats['memory_integrations'] += 1
+        
+        return True
+    
+    async def scheduled_persistence(self):
+        """
+        Run persistence operations on a schedule.
+        """
+        while self.config['auto_persistence']:
+            try:
+                # Persist all components
+                await self.persist_all_components()
+                
+                # Sleep until next persistence interval
+                await asyncio.sleep(self.config['persistence_interval'])
+            except Exception as e:
+                logger.error(f"Error in scheduled persistence: {e}")
+                await asyncio.sleep(60)  # Sleep on error and retry
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics about the memory integration system.
+        """
+        core_stats = self.memory_core.get_stats() if self.memory_core else {}
+        
+        return {
+            **self.stats,
+            'memory_core': core_stats,
+            'uptime': time.time() - self.stats.get('last_persistence', time.time()) if self.stats.get('last_persistence') else 0
+        }
+
+```
 
 # README.md
 

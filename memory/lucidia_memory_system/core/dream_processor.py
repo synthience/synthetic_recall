@@ -294,6 +294,23 @@ class LucidiaDreamProcessor:
         
         self.logger.info("Dream Processor initialized")
 
+    @property
+    def is_dreaming(self):
+        """Property to check if dreaming is currently in progress."""
+        return self.dream_state["is_dreaming"]
+    
+    @is_dreaming.setter
+    def is_dreaming(self, value):
+        """Setter for the dreaming state."""
+        self.dream_state["is_dreaming"] = bool(value)
+        if value:
+            # Set dream start time if we're starting to dream
+            if not self.dream_state["dream_start_time"]:
+                self.dream_state["dream_start_time"] = datetime.now()
+        else:
+            # Reset dream start time when we stop dreaming
+            self.dream_state["dream_start_time"] = None
+            
     def check_idle_status(self) -> bool:
         """
         Check if system has been idle long enough to start dreaming.
@@ -305,7 +322,7 @@ class LucidiaDreamProcessor:
             return False
             
         # Check if already dreaming
-        if self.dream_state["is_dreaming"]:
+        if self.is_dreaming:
             return False
             
         # Calculate time since last interaction
@@ -420,7 +437,7 @@ class LucidiaDreamProcessor:
             Success status
         """
         # Check if already dreaming
-        if self.dream_state["is_dreaming"]:
+        if self.is_dreaming:
             self.logger.warning("Cannot start dreaming - already in dream state")
             return False
             
@@ -430,7 +447,7 @@ class LucidiaDreamProcessor:
             return False
             
         # Initialize dream state
-        self.dream_state["is_dreaming"] = True
+        self.is_dreaming = True
         self.dream_state["dream_start_time"] = datetime.now()
         
         # Determine dream parameters
@@ -2334,7 +2351,7 @@ class LucidiaDreamProcessor:
         """
         End the current dream and reset the dream state.
         """
-        self.dream_state["is_dreaming"] = False
+        self.is_dreaming = False
         self.dream_state["dream_start_time"] = None
         self.dream_state["current_dream_depth"] = 0.0
         self.dream_state["current_dream_creativity"] = 0.0
@@ -2360,7 +2377,7 @@ class LucidiaDreamProcessor:
         
         # Format the status response
         status = {
-            "is_dreaming": self.dream_state["is_dreaming"],
+            "is_dreaming": self.is_dreaming,
             "dream_stats": {
                 "total_dreams": self.dream_stats["total_dreams"],
                 "total_insights": self.dream_stats["total_insights"],
@@ -2373,7 +2390,7 @@ class LucidiaDreamProcessor:
         }
         
         # Add current dream information if actively dreaming
-        if self.dream_state["is_dreaming"]:
+        if self.is_dreaming:
             current_time = datetime.now()
             dream_start_time = self.dream_state["dream_start_time"]
             elapsed_time = (current_time - dream_start_time).total_seconds() if dream_start_time else 0
