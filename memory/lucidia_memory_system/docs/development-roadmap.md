@@ -45,8 +45,8 @@
 | ✅ | Advanced Dreaming | Implemented dreaming flow with memory processing, insight generation, and report refinement. Successfully tested integration with LM Studio using test_dream_reflection.py. | MEDIUM |
 | ✅ | Dream Integration | Connect dream insights to knowledge graph | MEDIUM |
 | ✅ | Significance Calculation | Implement memory significance and prioritization | MEDIUM |
-| ❌ | Spiral Integration | Connect spiral phases to reflection processes | LOW |
-| ❌ | User Status Detection | Implement AFK and activity detection | LOW |
+| ✅ | Spiral Integration | Connect spiral phases to reflection processes | LOW |
+| ✅ | User Status Detection | Implement AFK and activity detection | LOW |
 
 ## Spiral Phases in Reflection Processes
 

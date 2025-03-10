@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timedelta
 import websockets
 from websockets.exceptions import ConnectionClosed
+from server.user_activity_tracker import UserActivityTracker
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -80,6 +81,7 @@ reflection_engine = None
 hypersphere_manager = None
 parameter_manager = None
 dream_parameter_adapter = None
+user_activity_tracker = None
 
 # WebSocket connections and locks
 tensor_connection = None
@@ -212,10 +214,14 @@ def get_parameter_manager():
 def get_dream_parameter_adapter():
     return dream_parameter_adapter
 
+def get_user_activity_tracker():
+    return UserActivityTracker.get_instance()
+
 # Initialize components
 async def initialize_components():
     global dream_processor, knowledge_graph, memory_client, llm_service, self_model, world_model
-    global embedding_comparator, reflection_engine, hypersphere_manager, parameter_manager, dream_parameter_adapter
+    global embedding_comparator, hypersphere_manager, reflection_engine, parameter_manager, dream_parameter_adapter
+    global memory_integration, llm_pipeline, memory_client, user_activity_tracker
     
     try:
         logger.info(f"Using storage path: {STORAGE_PATH}")
@@ -341,6 +347,10 @@ async def initialize_components():
             }
         )
         
+        # Initialize user activity tracker
+        user_activity_tracker = UserActivityTracker.get_instance()
+        logger.info("Initialized UserActivityTracker")
+        
         # Store components in app state for dependency injection
         app.state.memory_client = memory_client
         app.state.dream_processor = dream_processor
@@ -353,6 +363,7 @@ async def initialize_components():
         app.state.hypersphere_manager = hypersphere_manager
         app.state.parameter_manager = parameter_manager
         app.state.dream_parameter_adapter = dream_parameter_adapter
+        app.state.user_activity_tracker = user_activity_tracker
         
         logger.info("All components initialized successfully")
         
@@ -363,8 +374,12 @@ async def initialize_components():
         logger.error(f"Error initializing components: {e}", exc_info=True)
         raise
 
-# Background task for continuous dream processing
+# Continuous background dream processing
 async def continuous_dream_processing():
+    """Continuous dream processing task that runs in the background
+    when the system is idle. Uses the UserActivityTracker to determine
+    when it's appropriate to run background processing tasks.
+    """
     global dream_processor, self_model, world_model
     
     # Wait for initial startup to complete
@@ -372,11 +387,23 @@ async def continuous_dream_processing():
     
     while True:
         try:
-            # Check if system is idle (no active voice sessions)
+            # Get the activity tracker
+            activity_tracker = UserActivityTracker.get_instance()
+            
+            # Check if system is idle (no active sessions, user AFK)
             is_idle = await check_system_idle()
             
             if is_idle and dream_processor and not dream_processor.is_dreaming:
                 logger.info("System is idle, starting dream session...")
+                
+                # Record system activity
+                activity_tracker.record_activity(
+                    activity_type="system_operation",
+                    details={
+                        "operation": "continuous_dream_processing",
+                        "state": "starting"
+                    }
+                )
                 
                 # Get tensor and HPC connections
                 try:
@@ -384,43 +411,147 @@ async def continuous_dream_processing():
                     hpc_conn = await get_hpc_connection()
                 except Exception as e:
                     logger.error(f"Error establishing connections for dream session: {e}")
+                    activity_tracker.record_activity(
+                        activity_type="system_operation",
+                        details={
+                            "operation": "continuous_dream_processing",
+                            "state": "connection_error",
+                            "error": str(e)
+                        }
+                    )
                     await asyncio.sleep(300)  # Wait 5 minutes before retrying
                     continue
                 
                 # Perform self-reflection before dream session
                 try:
                     logger.info("Performing self-model reflection...")
+                    # Record system activity
+                    activity_tracker.record_activity(
+                        activity_type="system_operation",
+                        details={
+                            "operation": "self_reflection",
+                            "state": "starting"
+                        }
+                    )
                     await self_model.reflect(["performance", "improvement"])
                 except Exception as e:
                     logger.error(f"Error during self-reflection: {e}")
+                    activity_tracker.record_activity(
+                        activity_type="system_operation",
+                        details={
+                            "operation": "self_reflection",
+                            "state": "error",
+                            "error": str(e)
+                        }
+                    )
+                
+                # Check if user has become active during processing
+                if activity_tracker.has_recent_activity(seconds=60) or not activity_tracker.is_afk():
+                    logger.info("User activity detected, pausing background processing")
+                    await asyncio.sleep(120)  # Wait 2 minutes before checking again
+                    continue
                 
                 # Analyze world model knowledge graph
                 try:
                     logger.info("Analyzing world model knowledge graph...")
+                    # Record system activity
+                    activity_tracker.record_activity(
+                        activity_type="system_operation",
+                        details={
+                            "operation": "world_model_analysis",
+                            "state": "starting"
+                        }
+                    )
                     await world_model.analyze_concept_network()
                 except Exception as e:
                     logger.error(f"Error analyzing world model: {e}")
+                    activity_tracker.record_activity(
+                        activity_type="system_operation",
+                        details={
+                            "operation": "world_model_analysis",
+                            "state": "error",
+                            "error": str(e)
+                        }
+                    )
+                
+                # Check again if user has become active during processing
+                if activity_tracker.has_recent_activity(seconds=60) or not activity_tracker.is_afk():
+                    logger.info("User activity detected, pausing background processing")
+                    await asyncio.sleep(120)  # Wait 2 minutes before checking again
+                    continue
                 
                 # Start a dream session with the connections
                 try:
+                    # Determine dream duration based on user AFK duration
+                    dream_duration = 15  # Default duration
+                    if activity_tracker.is_extended_afk():
+                        # If user is on extended AFK, we can run longer dream sessions
+                        dream_duration = 30  # Extend to 30 minutes
+                    
+                    # Record system activity
+                    activity_tracker.record_activity(
+                        activity_type="system_operation",
+                        details={
+                            "operation": "dream_session",
+                            "state": "starting",
+                            "duration": dream_duration
+                        }
+                    )
+                    
                     await dream_processor.schedule_dream_session(
-                        duration_minutes=15,
+                        duration_minutes=dream_duration,
                         tensor_connection=tensor_conn,
                         hpc_connection=hpc_conn,
                         priority="low"  # Use low priority for background processing
                     )
                 except Exception as e:
                     logger.error(f"Error starting dream session: {e}")
+                    activity_tracker.record_activity(
+                        activity_type="system_operation",
+                        details={
+                            "operation": "dream_session",
+                            "state": "error",
+                            "error": str(e)
+                        }
+                    )
                 
                 # Wait for dream session to complete
                 while dream_processor.is_dreaming:
+                    # Periodically check if user has become active during dream session
+                    if activity_tracker.has_recent_activity(seconds=60) or not activity_tracker.is_afk():
+                        # User has become active, consider stopping the dream session
+                        if dream_processor.dream_session_length() > 300:  # If already running > 5 minutes
+                            logger.info("User activity detected, stopping dream session")
+                            try:
+                                await dream_processor.stop_dream_session()
+                            except Exception as e:
+                                logger.error(f"Error stopping dream session: {e}")
+                            break
                     await asyncio.sleep(30)
                 
+                # Record completion of dream session
+                activity_tracker.record_activity(
+                    activity_type="system_operation",
+                    details={
+                        "operation": "dream_session",
+                        "state": "completed"
+                    }
+                )
+                
                 # Wait before checking again
-                await asyncio.sleep(300)  # 5 minutes
+                # Adjust wait time based on user activity level
+                if activity_tracker.is_extended_afk():
+                    wait_time = 300  # 5 minutes for extended AFK
+                else:
+                    wait_time = 600  # 10 minutes for regular AFK
+                
+                await asyncio.sleep(wait_time)
             else:
-                # Check again in 1 minute
-                await asyncio.sleep(60)
+                # If user is active, check more frequently
+                if activity_tracker.has_recent_activity(seconds=300):
+                    await asyncio.sleep(30)  # Check every 30 seconds during active use
+                else:
+                    await asyncio.sleep(60)  # Check every minute during inactive periods
                 
         except Exception as e:
             logger.error(f"Error in continuous dream processing: {e}")
@@ -428,8 +559,15 @@ async def continuous_dream_processing():
 
 # Check if the system is idle (no active voice sessions)
 async def check_system_idle():
-    # This is a placeholder - implement actual idle detection logic
+    """Check if the system is idle based on user activity and session status
+    
+    Returns:
+        bool: True if the system is idle and can perform background processing
+    """
     try:
+        # Get activity tracker
+        activity_tracker = UserActivityTracker.get_instance()
+        
         # Check if current time is within idle hours (1 AM to 5 AM by default)
         current_hour = datetime.now().hour
         idle_hours = os.getenv('IDLE_HOURS', '1-5')
@@ -440,16 +578,21 @@ async def check_system_idle():
         # Check if current hour is within idle range
         is_idle_time = start_hour <= current_hour <= end_hour
         
-        # Check for active sessions (placeholder)
-        has_active_sessions = False  # Replace with actual check
+        # Check for active sessions
+        has_active_sessions = activity_tracker.get_active_sessions_count() > 0
         
-        # Check for recent memory operations (placeholder)
-        last_memory_op_time = None  # Replace with actual check
-        recent_memory_activity = False  # Replace with actual check
+        # Check if user is AFK
+        is_user_afk = activity_tracker.is_afk()
         
-        # System is idle if it's idle time and there are no active sessions or recent activity
-        return is_idle_time and not has_active_sessions and not recent_memory_activity
+        # Check for recent memory operations (last 10 minutes)
+        recent_memory_activity = activity_tracker.has_recent_activity(seconds=600)
         
+        # System is idle if either:
+        # 1. It's within idle hours and there are no active sessions, or
+        # 2. The user has been AFK for an extended period
+        # Also, ensure no recent memory activity to avoid interrupting ongoing operations
+        return ((is_idle_time and not has_active_sessions) or activity_tracker.is_extended_afk()) \
+               and not recent_memory_activity
     except Exception as e:
         logger.error(f"Error checking system idle state: {e}")
         # Default to not idle if there's an error checking
@@ -459,6 +602,39 @@ async def check_system_idle():
 app.include_router(dream_router)
 app.include_router(parameter_router)
 app.include_router(general_parameter_router)
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    """Basic health check endpoint"""
+    try:
+        # Record API call activity
+        activity_tracker = UserActivityTracker.get_instance()
+        activity_tracker.record_activity(activity_type="api_call", details={"endpoint": "/health"})
+        
+        # Check component health
+        components_status = {
+            "dream_processor": dream_processor is not None,
+            "knowledge_graph": knowledge_graph is not None,
+            "self_model": self_model is not None,
+            "world_model": world_model is not None,
+            "tensor_connection": tensor_connection is not None,
+            "hpc_connection": hpc_connection is not None,
+            "parameter_manager": parameter_manager is not None
+        }
+        
+        # Add user activity stats
+        user_activity_stats = activity_tracker.get_activity_stats()
+        
+        return {
+            "status": "healthy",
+            "time": datetime.now().isoformat(),
+            "components": components_status,
+            "user_activity": user_activity_stats
+        }
+    except Exception as e:
+        logger.error(f"Health check error: {e}")
+        return {"status": "unhealthy", "error": str(e)}
 
 # Startup event
 @app.on_event("startup")
@@ -502,30 +678,6 @@ async def shutdown_event():
         logger.error(f"Error during shutdown: {e}")
         
     logger.info("Dream API server shutdown complete")
-
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    """Basic health check endpoint"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "service": "dream_api",
-        "components": {
-            "dream_processor": "initialized" if dream_processor else "not_initialized",
-            "parameter_manager": "initialized" if parameter_manager else "not_initialized",
-            "knowledge_graph": "initialized" if knowledge_graph else "not_initialized",
-            "self_model": "initialized" if self_model else "not_initialized",
-            "world_model": "initialized" if world_model else "not_initialized",
-            "embedding_comparator": "initialized" if embedding_comparator else "not_initialized"
-        },
-        "connections": {
-            "tensor_server": tensor_connection is not None and not tensor_connection.closed,
-            "hpc_server": hpc_connection is not None and not hpc_connection.closed,
-            "tensor_server_url": TENSOR_SERVER_URL,
-            "hpc_server_url": HPC_SERVER_URL
-        }
-    }
 
 # Make app_dependencies available for the router
 import sys

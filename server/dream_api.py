@@ -12,6 +12,9 @@ from datetime import datetime, timedelta
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+# Import activity tracker
+from server.user_activity_tracker import UserActivityTracker
+
 # Import the enhanced models from the correct paths
 from memory.lucidia_memory_system.core.Self.self_model import LucidiaSelfModel as SelfModel
 from memory.lucidia_memory_system.core.World.world_model import LucidiaWorldModel as WorldModel
@@ -169,6 +172,10 @@ def get_llm_service(request: Request):
 def get_reflection_engine(request: Request):
     return request.app.state.reflection_engine
 
+def get_activity_tracker(request: Request):
+    """Get user activity tracker instance"""
+    return UserActivityTracker.get_instance()
+
 
 # ========= Connection Functions =========
 
@@ -297,12 +304,28 @@ async def process_embedding(text: str) -> Dict[str, Any]:
 
 # ========= Dream Processing Endpoints =========
 
-@router.post("/start")
+@router.post("/start", response_model=Dict[str, Any])
 async def start_dream_session(
     background_tasks: BackgroundTasks,
     request: DreamRequest,
-    dream_processor: DreamProcessor = Depends(get_dream_processor)
-) -> Dict[str, Any]:
+    dream_processor: DreamProcessor = Depends(get_dream_processor),
+    activity_tracker: UserActivityTracker = Depends(get_activity_tracker)
+):
+    """Start a new dream processing session"""
+    session_id = str(uuid.uuid4())
+    
+    # Track API activity with session ID
+    activity_tracker.record_activity(
+        activity_type="api_call",
+        session_id=session_id,
+        details={
+            "endpoint": "/api/dream/start",
+            "mode": request.mode,
+            "duration": request.duration_minutes
+        }
+    )
+    
+    # Create a new dream session
     try:
         try:
             await get_tensor_connection()
@@ -352,11 +375,22 @@ async def schedule_dream_session(dream_processor, request, delay_seconds):
     except Exception as e:
         logger.error(f"Error in scheduled dream session: {e}")
 
-@router.get("/status")
+@router.get("/status", response_model=Dict[str, Any])
 async def get_dream_status(
     session_id: Optional[str] = None,
-    dream_processor: DreamProcessor = Depends(get_dream_processor)
-) -> Dict[str, Any]:
+    dream_processor: DreamProcessor = Depends(get_dream_processor),
+    activity_tracker: UserActivityTracker = Depends(get_activity_tracker)
+):
+    """Get status of current dream session or all active sessions"""
+    # Track API activity
+    activity_tracker.record_activity(
+        activity_type="api_call",
+        session_id=session_id,
+        details={
+            "endpoint": "/api/dream/status"
+        }
+    )
+    
     try:
         status = dream_processor.get_dream_status()
         if session_id:
@@ -373,11 +407,22 @@ async def get_dream_status(
         logger.error(f"Error getting dream status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/stop")
+@router.post("/stop", response_model=Dict[str, Any])
 async def stop_dream_session(
     session_id: Optional[str] = None,
-    dream_processor: DreamProcessor = Depends(get_dream_processor)
-) -> Dict[str, Any]:
+    dream_processor: DreamProcessor = Depends(get_dream_processor),
+    activity_tracker: UserActivityTracker = Depends(get_activity_tracker)
+):
+    """Stop an active dream session"""
+    # Track API activity
+    activity_tracker.record_activity(
+        activity_type="api_call",
+        session_id=session_id,
+        details={
+            "endpoint": "/api/dream/stop"
+        }
+    )
+    
     try:
         result = await dream_processor.stop_dream_session()
         if session_id and session_id in dream_sessions:
@@ -1144,16 +1189,26 @@ async def test_process_embedding(text: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 @router.get("/health")
-async def health_check() -> Dict[str, Any]:
-    """
-    Health check endpoint.
-    """
+async def health_check():
+    """Health check endpoint."""
+    # Track API activity
+    activity_tracker = UserActivityTracker.get_instance()
+    activity_tracker.record_activity(
+        activity_type="api_call",
+        details={
+            "endpoint": "/api/dream/health"
+        }
+    )
+    
+    connections = {
+        "tensor_server": {"connected": tensor_connection is not None and not tensor_connection.closed, "url": TENSOR_SERVER_URL},
+        "hpc_server": {"connected": hpc_connection is not None and not hpc_connection.closed, "url": HPC_SERVER_URL}
+    }
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "service": "dream_api",
-        "tensor_server": tensor_connection is not None and not tensor_connection.closed,
-        "hpc_server": hpc_connection is not None and not hpc_connection.closed
+        **connections
     }
 
 @router.post("/shutdown")
