@@ -52,9 +52,14 @@ class WebSocketConnectionPool:
         try:
             while not self.available_connections.empty():
                 ws, lock = await self.available_connections.get()
-                if not ws.closed:
+                # Safely check if connection is closed
+                try:
+                    # Use a safe way to check if connection is closed
+                    pong_waiter = await ws.ping()
+                    await asyncio.wait_for(pong_waiter, timeout=1.0)
                     return ws, lock
-                else:
+                except Exception:
+                    # Connection is closed or ping failed, remove it
                     self.active_connections.discard(ws)
                     if ws in self.connection_locks:
                         del self.connection_locks[ws]
@@ -81,10 +86,25 @@ class WebSocketConnectionPool:
     
     async def release_connection(self, ws: websockets.WebSocketClientProtocol):
         """Return a connection to the pool."""
-        if self._closed or ws.closed or ws not in self.active_connections:
-            return
-        
-        await self.available_connections.put((ws, self.connection_locks.get(ws, asyncio.Lock())))
+        # Safely check if the connection should be returned to the pool
+        try:
+            # Check if pool is closed or connection is unusable
+            if self._closed or ws not in self.active_connections:
+                return
+            
+            # Test if the connection is still alive
+            try:
+                pong_waiter = await ws.ping()
+                await asyncio.wait_for(pong_waiter, timeout=1.0)
+                # Connection is good, return it to the pool
+                await self.available_connections.put((ws, self.connection_locks.get(ws, asyncio.Lock())))
+            except Exception:
+                # Connection is not usable, remove it
+                self.active_connections.discard(ws)
+                if ws in self.connection_locks:
+                    del self.connection_locks[ws]
+        except Exception as e:
+            logger.warning(f"Error releasing connection: {e}")
     
     async def close(self):
         """Close all connections in the pool."""
@@ -101,11 +121,7 @@ class WebSocketConnectionPool:
         # Clear the queue
         while not self.available_connections.empty():
             try:
-                ws, _ = self.available_connections.get_nowait()
-                try:
-                    await ws.close()
-                except Exception:
-                    pass
+                await self.available_connections.get_nowait()
             except asyncio.QueueEmpty:
                 break
 
@@ -216,48 +232,97 @@ class HypersphereDispatcher:
         Returns:
             Dictionary containing the embedding and metadata
         """
-        # Ensure we have the geometry for this model
-        if not await self.geometry_registry.has_geometry(model_version):
-            await self._fetch_model_geometry(model_version)
-        
-        # Create embedding request
-        request = {
-            "type": "embedding",
-            "text": text,
-            "model_version": model_version,
-            "timestamp": time.time()
-        }
-        
-        # Send request to tensor server
-        response = await self._send_tensor_request(request)
-        
-        # Verify and apply geometry constraints
-        if "embedding" in response:
-            embedding = response["embedding"]
+        logger.info(f"HypersphereDispatcher: Getting embedding for model {model_version}, text length: {len(text)}")
+        try:
+            # Ensure we have the geometry for this model
+            if not await self.geometry_registry.has_geometry(model_version):
+                logger.info(f"HypersphereDispatcher: Fetching geometry for model {model_version}")
+                await self._fetch_model_geometry(model_version)
+            
+            # Create embedding request using the EXACT format expected by the tensor server
+            # Refer to the format in updated_hpc_client.py
+            request = {
+                'type': 'embed',  # This is the correct field name
+                'request_id': f"{int(time.time())}:{id(text)}",
+                'timestamp': time.time(),
+                'text': text,
+                'model_version': model_version
+            }
+            
+            # Send request to tensor server
+            logger.info(f"HypersphereDispatcher: Sending embedding request to tensor server: {request['type']}")
+            try:
+                response = await self._send_tensor_request(request)
+                logger.info(f"HypersphereDispatcher: Got response from tensor server: {response.keys() if isinstance(response, dict) else 'Not a dict'}")
+            except Exception as e:
+                logger.error(f"HypersphereDispatcher: Error in _send_tensor_request: {str(e)}")
+                return {"status": "error", "message": f"Failed to send tensor request: {str(e)}"}
+            
+            # Extract embedding from response (handle different response formats)
+            embedding = None
+            if "data" in response and "embedding" in response["data"]:
+                embedding = response["data"]["embedding"]
+            elif "embedding" in response:
+                embedding = response["embedding"]
+            elif "embeddings" in response:
+                embedding = response["embeddings"]  # Handle plural 'embeddings' key
+            elif "data" in response and "embeddings" in response["data"]:
+                embedding = response["data"]["embeddings"]
+            elif "result" in response and isinstance(response["result"], dict):
+                if "embedding" in response["result"]:
+                    embedding = response["result"]["embedding"]
+                elif "embeddings" in response["result"]:
+                    embedding = response["result"]["embeddings"]
+            
+            if not embedding:
+                logger.error(f"HypersphereDispatcher: No embedding in response: {response}")
+                return {"status": "error", "message": "No embedding in response", "response": response}
+            
+            # Verify and apply geometry constraints
+            # Check embedding structure
+            if not isinstance(embedding, list) or len(embedding) == 0:
+                logger.error(f"HypersphereDispatcher: Invalid embedding format: {type(embedding)}")
+                return {"status": "error", "message": "Invalid embedding format received from tensor server"}
+            
+            logger.info(f"HypersphereDispatcher: Embedding length: {len(embedding)}")
             
             # Verify the embedding is compatible with the model's geometry
-            if not await self.geometry_registry.check_embedding_compatibility(model_version, embedding):
-                logger.warning(f"Received incompatible embedding from tensor server for model {model_version}")
-                
-                # Attempt to fix the embedding according to geometry constraints
-                try:
-                    geometry = await self.geometry_registry.get_geometry(model_version)
+            try:
+                if not await self.geometry_registry.check_embedding_compatibility(model_version, embedding):
+                    logger.warning(f"HypersphereDispatcher: Received incompatible embedding from tensor server for model {model_version}")
                     
-                    # Normalize the embedding if needed (for unit hypersphere)
-                    import numpy as np
-                    embedding_np = np.array(embedding)
-                    norm = np.linalg.norm(embedding_np)
-                    
-                    if abs(norm - 1.0) > 0.001:  # If not already normalized
-                        normalized = embedding_np / norm
-                        embedding = normalized.tolist()
-                        response["embedding"] = embedding
-                        logger.info(f"Normalized embedding to conform to unit hypersphere for model {model_version}")
-                except Exception as e:
-                    logger.error(f"Failed to normalize embedding: {e}")
-                    # Continue with the original embedding
-        
-        return response
+                    # Attempt to fix the embedding according to geometry constraints
+                    try:
+                        geometry = await self.geometry_registry.get_geometry(model_version)
+                        
+                        # Normalize the embedding if needed (for unit hypersphere)
+                        import numpy as np
+                        embedding_np = np.array(embedding)
+                        norm = np.linalg.norm(embedding_np)
+                        
+                        if abs(norm - 1.0) > 0.001:  # If not already normalized
+                            normalized = embedding_np / norm
+                            embedding = normalized.tolist()
+                            logger.info(f"HypersphereDispatcher: Normalized embedding to conform to unit hypersphere for model {model_version}")
+                    except Exception as e:
+                        logger.error(f"HypersphereDispatcher: Failed to normalize embedding: {e}")
+                        # Continue with the original embedding
+            except Exception as e:
+                logger.error(f"HypersphereDispatcher: Error checking embedding compatibility: {str(e)}")
+            
+            # Return the final result with proper structure
+            return {
+                "status": "success",
+                "embedding": embedding,
+                "model_version": model_version,
+                "dimensions": len(embedding) if embedding else 0
+            }
+            
+        except Exception as e:
+            logger.error(f"HypersphereDispatcher: Unexpected error in get_embedding: {str(e)}")
+            import traceback
+            logger.error(f"HypersphereDispatcher: Traceback: {traceback.format_exc()}")
+            return {"status": "error", "message": f"Error generating embedding: {str(e)}"}
     
     async def batch_similarity_search(
         self, 

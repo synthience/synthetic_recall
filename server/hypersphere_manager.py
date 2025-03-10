@@ -71,6 +71,9 @@ class HypersphereManager:
         and performs any needed asynchronous setup.
         """
         try:
+            # Start the dispatcher
+            await self.dispatcher.start()
+            
             # Register the tensor and HPC WebSocket connection handlers if memory_client is available
             if self.memory_client is not None:
                 self.dispatcher.register_tensor_client(self.memory_client)
@@ -185,11 +188,18 @@ class HypersphereManager:
                     # Use the get_embedding method which should be available
                     result = await self.dispatcher.get_embedding(text=text, model_version=model_version)
                     
-                    if result and "embedding" in result:
+                    # Extract embedding from the result, supporting both status and direct formats
+                    embedding = None
+                    if result and "status" in result and result["status"] == "success":
+                        embedding = result.get("embedding")
+                    elif result and "embedding" in result:
+                        embedding = result["embedding"]
+                    
+                    if embedding:
                         embeddings.append({
                             "index": i,
-                            "embedding": result["embedding"],
-                            "dimensions": len(result["embedding"]),
+                            "embedding": embedding,
+                            "dimensions": len(embedding),
                             "model_version": result.get("model_version", model_version),
                             "status": "success"
                         })
