@@ -7,7 +7,12 @@ used by the dream processing system to generate text and process prompts.
 import logging
 import os
 import time
+import asyncio
 from typing import Dict, Any, Optional, List, Union
+
+# Import the model selector for dynamic model switching
+from .model_selector import ModelSelector
+from .resource_monitor import ResourceMonitor
 
 logger = logging.getLogger("LocalLLMPipeline")
 
@@ -45,6 +50,15 @@ class LocalLLMPipeline:
         self._last_connection_check = 0
         self._connection_check_interval = 60  # seconds
         
+        # Initialize the service ID for model selection tracking
+        self.service_id = f"llm_service_{id(self)}"
+        
+        # Get the model selector instance
+        self.model_selector = ModelSelector.get_instance()
+        
+        # Get the resource monitor instance
+        self.resource_monitor = ResourceMonitor.get_instance()
+        
         self.logger.info(f"Initialized LLM Pipeline with model={model} endpoint={self.base_url}")
 
     def set_memory_client(self, memory_client):
@@ -63,23 +77,34 @@ class LocalLLMPipeline:
                 if resp.status == 200:
                     self.logger.info("Successfully connected to LLM API.")
             self._last_connection_check = time.time()
+            
+            # Register with model selector
+            self.model_selector.register_llm_service(self.service_id, self)
+            
+            # Start resource monitor if not already running
+            self.resource_monitor.start()
+            
             return True
         except Exception as e:
             self.logger.warning(f"LLM API connectivity test failed: {e}")
             return False
 
-    async def generate(self, prompt: str, max_tokens: int = None, temperature: float = None) -> str:
+    async def generate(self, prompt: str, max_tokens: int = None, temperature: float = None, task_type: str = "general") -> str:
         """Generate text from a prompt.
         
         Args:
             prompt: Input prompt
             max_tokens: Maximum tokens to generate (overrides default)
             temperature: Temperature parameter (overrides default)
+            task_type: Type of task for model selection (general, reasoning, creative, etc.)
             
         Returns:
             Generated text
         """
         await self._ensure_connection()
+        
+        # Select appropriate model for the task if needed
+        await self.model_selector.select_model_for_task(task_type, self, self.service_id)
         
         effective_max_tokens = max_tokens or self.completion_tokens_limit
         effective_temperature = temperature or self.temperature
@@ -96,7 +121,25 @@ class LocalLLMPipeline:
             "stream": False
         }
         
+        # Record start time for performance tracking
+        start_time = time.time()
+        
         response = await self._execute_llm_request(payload)
+        
+        # Calculate response time and track performance
+        response_time = time.time() - start_time
+        
+        # Estimate token count for performance metrics
+        # This is a rough estimate - counting words and multiplying by 1.3
+        estimated_tokens = len(response.split()) * 1.3 if response else 0
+        
+        # Track model performance
+        self.resource_monitor.track_model_performance(
+            self.model, 
+            response_time, 
+            int(estimated_tokens)
+        )
+        
         return response or "I'm not sure how to respond to that."
 
     async def _execute_llm_request(self, payload: Dict[str, Any]) -> Optional[str]:
@@ -221,3 +264,24 @@ class LocalLLMPipeline:
         """Close the aiohttp session."""
         if self.session and not self.session.closed:
             await self.session.close()
+
+    async def generate_text(self, prompt: str, format: str = None, task_type: str = "reflection") -> str:
+        """Generate text from a prompt with specific formatting options.
+        
+        This is used by the reflection engine and self-model components.
+        
+        Args:
+            prompt: Input prompt
+            format: Optional format to request (e.g., "json")
+            task_type: Type of task for model selection
+            
+        Returns:
+            Generated text response
+        """
+        # Modify prompt based on format request
+        effective_prompt = prompt
+        if format and format.lower() == "json":
+            effective_prompt = f"{prompt}\n\nRespond with valid JSON format only."
+            
+        # Use specific model for reflection tasks
+        return await self.generate(effective_prompt, task_type=task_type)
