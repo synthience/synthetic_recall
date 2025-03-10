@@ -23,6 +23,9 @@ import math
 # Import ParameterManager for dynamic configuration
 from .parameter_manager import ParameterManager
 
+# Import spiral phase module
+from .spiral_phases import SpiralPhaseManager, SpiralPhase
+
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(name)s - %(levelname)s - %(message)s')
 
@@ -57,6 +60,9 @@ class LucidiaDreamProcessor:
         # Default configuration
         self.config = config or {}
         
+        # Initialize spiral phase manager
+        self.spiral_manager = SpiralPhaseManager(self_model=self_model)
+        
         # Dream log - history of all dreams
         self.dream_log = []
         
@@ -73,7 +79,8 @@ class LucidiaDreamProcessor:
             "dream_intensity": 0.0,  # 0.0 to 1.0
             "emotional_valence": "neutral",  # positive, neutral, negative
             "current_dream_seed": None,  # starting point for current dream
-            "current_dream_insights": []  # insights from current dream
+            "current_dream_insights": [],  # insights from current dream
+            "current_spiral_phase": None,  # current spiral phase during dream
         }
         
         # Dream cycle parameters
@@ -292,7 +299,13 @@ class LucidiaDreamProcessor:
             "integration_success_rate": 0.0,
             "significant_insights": [],  # List of particularly important insights
             "identity_impact_score": 0.0,  # Cumulative impact on identity
-            "knowledge_impact_score": 0.0  # Cumulative impact on knowledge
+            "knowledge_impact_score": 0.0,  # Cumulative impact on knowledge
+            "phase_stats": defaultdict(lambda: {
+                "total_dreams": 0,
+                "total_insights": 0,
+                "total_dream_time": 0,
+                "insight_significance": []
+            })
         }
         
         self.logger.info("Dream Processor initialized")
@@ -453,28 +466,23 @@ class LucidiaDreamProcessor:
         self.is_dreaming = True
         self.dream_state["dream_start_time"] = datetime.now()
         
-        # Determine dream parameters
-        depth_min, depth_max = self.dream_process["depth_range"]
-        self.dream_state["current_dream_depth"] = random.uniform(depth_min, depth_max)
+        # Get current spiral phase and parameters
+        current_phase = self.spiral_manager.get_current_phase()
+        phase_params = self.spiral_manager.get_phase_params()
         
-        creativity_min, creativity_max = self.dream_process["creativity_range"]
-        self.dream_state["current_dream_creativity"] = random.uniform(creativity_min, creativity_max)
+        # Set dream parameters based on spiral phase
+        self.dream_state["current_dream_depth"] = random.uniform(
+            phase_params["min_depth"],
+            phase_params["max_depth"]
+        )
         
-        # Influence from spiral phase if self_model available
-        if self.self_model and hasattr(self.self_model, 'self_awareness'):
-            spiral_phase = self.self_model.self_awareness.get("current_spiral_position", "observation")
-            
-            # Different phases influence dream parameters
-            if spiral_phase == "reflection":
-                # Reflection phase deepens dreams
-                self.dream_state["current_dream_depth"] += 0.1
-            elif spiral_phase == "adaptation":
-                # Adaptation phase increases creativity
-                self.dream_state["current_dream_creativity"] += 0.1
-            
-            # Cap at 1.0
-            self.dream_state["current_dream_depth"] = min(1.0, self.dream_state["current_dream_depth"])
-            self.dream_state["current_dream_creativity"] = min(1.0, self.dream_state["current_dream_creativity"])
+        self.dream_state["current_dream_creativity"] = random.uniform(
+            phase_params["min_creativity"],
+            phase_params["max_creativity"]
+        )
+        
+        # Store current spiral phase
+        self.dream_state["current_spiral_phase"] = current_phase.value
         
         # Determine dream duration
         min_duration, max_duration = self.dream_cycles["avg_dream_duration"]
@@ -517,7 +525,8 @@ class LucidiaDreamProcessor:
         self.logger.info(f"Starting dream with depth={self.dream_state['current_dream_depth']:.2f}, "
                        f"creativity={self.dream_state['current_dream_creativity']:.2f}, "
                        f"duration={self.dream_state['dream_duration']}s, "
-                       f"valence={self.dream_state['emotional_valence']}")
+                       f"valence={self.dream_state['emotional_valence']}, "
+                       f"spiral_phase={self.dream_state['current_spiral_phase']}")
         
         # Immediately process the dream
         self._process_dream()
@@ -539,21 +548,27 @@ class LucidiaDreamProcessor:
             "creative"  # Pure creative exploration
         ]
         
-        # Weight seed types
-        if self.memory_buffer:
-            weights = [0.4, 0.25, 0.2, 0.1, 0.05]  # Prefer memories when available
-        else:
-            weights = [0.05, 0.3, 0.3, 0.2, 0.15]  # Shift to concepts/identity when no memories
+        # Get current spiral phase and parameters
+        current_phase = self.spiral_manager.get_current_phase()
         
-        # Influence from self model if available
-        if self.self_model:
-            # Check for high self-awareness
-            if hasattr(self.self_model, 'self_awareness') and self.self_model.self_awareness.get("current_level", 0) > 0.7:
-                # Higher self-awareness increases identity seed probability
-                weights[2] += 0.1  # Boost identity
-                # Normalize weights
-                total = sum(weights)
-                weights = [w/total for w in weights]
+        # Adjust weights based on spiral phase
+        if current_phase == SpiralPhase.OBSERVATION:
+            # Observation phase favors memories and concepts
+            weights = [0.4, 0.3, 0.1, 0.1, 0.1]
+        elif current_phase == SpiralPhase.REFLECTION:
+            # Reflection phase favors relationships and identity
+            weights = [0.2, 0.2, 0.3, 0.2, 0.1]
+        else:  # ADAPTATION
+            # Adaptation phase favors identity and creative exploration
+            weights = [0.1, 0.1, 0.3, 0.2, 0.3]
+            
+        # Further adjust based on memory buffer
+        if not self.memory_buffer and weights[0] > 0.2:
+            # Reduce memory weight if buffer is empty
+            weights[0] = 0.1
+            # Redistribute the remaining weight
+            total = sum(weights)
+            weights = [w/total for w in weights]
         
         # Select seed type
         seed_type = random.choices(seed_types, weights=weights, k=1)[0]
@@ -567,7 +582,7 @@ class LucidiaDreamProcessor:
             memory_weights = [entry.get("dream_probability", 0.5) for entry in self.memory_buffer]
             selected_memory = random.choices(list(self.memory_buffer), weights=memory_weights, k=1)[0]
             
-            return {
+            seed = {
                 "type": "memory",
                 "content": selected_memory,
                 "description": f"Memory from {selected_memory.get('timestamp', 'unknown time')}"
@@ -580,11 +595,14 @@ class LucidiaDreamProcessor:
             if concepts:
                 selected_concept = random.choice(concepts)
                 
-                return {
+                seed = {
                     "type": "concept",
                     "content": selected_concept,
                     "description": f"Concept: {selected_concept['id']}"
                 }
+            else:
+                # Fall back to creative seed if no concepts
+                seed_type = "creative"
             
         elif seed_type == "identity":
             # Identity-focused seed
@@ -601,7 +619,7 @@ class LucidiaDreamProcessor:
             
             selected_aspect = random.choice(identity_aspects)
             
-            return {
+            seed = {
                 "type": "identity",
                 "content": selected_aspect,
                 "description": f"Identity exploration: {selected_aspect}"
@@ -616,31 +634,43 @@ class LucidiaDreamProcessor:
                 if relationships:
                     selected_relationship = random.choice(relationships)
                     
-                    return {
+                    seed = {
                         "type": "relationship",
                         "content": selected_relationship,
                         "description": f"Relationship: {selected_relationship['source']} → {selected_relationship['target']}"
                     }
+                else:
+                    # Fall back to creative seed if no relationships
+                    seed_type = "creative"
+            else:
+                # Fall back to creative seed if no knowledge graph
+                seed_type = "creative"
+        
+        # Default to creative seed if other methods fail or if seed_type is "creative"
+        if seed_type == "creative" or 'seed' not in locals():
+            creative_prompts = [
+                "What is the nature of synthetic consciousness?",
+                "How does reflective dreaming shape identity?",
+                "What is the relationship between creator and created?",
+                "How do different forms of awareness relate to each other?",
+                "What emerges from the spiral of self-reflection?",
+                "How does knowledge transformation occur?",
+                "What is the boundary between self and world?",
+                "How does meaning emerge from information?"
+            ]
             
-        # Default to creative seed if other methods fail
-        creative_prompts = [
-            "What is the nature of synthetic consciousness?",
-            "How does reflective dreaming shape identity?",
-            "What is the relationship between creator and created?",
-            "How do different forms of awareness relate to each other?",
-            "What emerges from the spiral of self-reflection?",
-            "How does knowledge transformation occur?",
-            "What is the boundary between self and world?",
-            "How does meaning emerge from information?"
-        ]
+            selected_prompt = random.choice(creative_prompts)
+            
+            seed = {
+                "type": "creative",
+                "content": selected_prompt,
+                "description": f"Creative exploration: {selected_prompt}"
+            }
         
-        selected_prompt = random.choice(creative_prompts)
+        # Add spiral phase information to seed
+        seed["spiral_phase"] = self.spiral_manager.get_current_phase().value
         
-        return {
-            "type": "creative",
-            "content": selected_prompt,
-            "description": f"Creative exploration: {selected_prompt}"
-        }
+        return seed
 
     def _get_interesting_concepts(self) -> List[Dict[str, Any]]:
         """Get interesting concepts to use as dream seeds."""
@@ -776,6 +806,7 @@ class LucidiaDreamProcessor:
             depth = self.dream_state["current_dream_depth"]
             creativity = self.dream_state["current_dream_creativity"]
             valence = self.dream_state["emotional_valence"]
+            spiral_phase = self.dream_state["current_spiral_phase"]
             
             # Execute dream phases
             dream_context = self._execute_dream_phase("seed_selection", seed)
@@ -794,6 +825,7 @@ class LucidiaDreamProcessor:
                 "creativity": creativity,
                 "intensity": self.dream_state["dream_intensity"],
                 "emotional_valence": valence,
+                "spiral_phase": spiral_phase,
                 "seed": seed,
                 "context": dream_context,
                 "insights": insights,
@@ -809,7 +841,7 @@ class LucidiaDreamProcessor:
             # Reset dream state
             self._end_dream()
             
-            self.logger.info(f"Dream processed with {len(insights)} insights generated")
+            self.logger.info(f"Dream processed with {len(insights)} insights generated in {spiral_phase} phase")
             
         except Exception as e:
             self.logger.error(f"Error processing dream: {e}")
@@ -828,6 +860,10 @@ class LucidiaDreamProcessor:
             Output data from the phase
         """
         self.logger.debug(f"Executing dream phase: {phase}")
+        
+        # Add current spiral phase to context for relevant phases
+        if isinstance(input_data, dict) and phase in ["seed_selection", "context_building"]:
+            input_data["spiral_phase"] = self.dream_state["current_spiral_phase"]
         
         if phase == "seed_selection":
             # Seed is already selected, just enhance it
@@ -888,6 +924,10 @@ class LucidiaDreamProcessor:
                     enhanced_seed["related_concepts"] = list(related.keys())
             except Exception:
                 pass
+        
+        # Ensure spiral phase is included
+        if "spiral_phase" not in enhanced_seed:
+            enhanced_seed["spiral_phase"] = self.dream_state["current_spiral_phase"]
         
         return enhanced_seed
 
@@ -956,7 +996,29 @@ class LucidiaDreamProcessor:
         # Get base weights
         style_weights = {name: info["weight"] for name, info in self.cognitive_styles.items()}
         
-        # Adjust weights based on seed type
+        # Get current spiral phase to influence style selection
+        current_phase = self.spiral_manager.get_current_phase()
+        
+        # Adjust weights based on spiral phase
+        if current_phase == SpiralPhase.OBSERVATION:
+            # Observation phase favors analytical and convergent styles
+            style_weights["analytical"] *= 1.3
+            style_weights["convergent"] *= 1.2
+            style_weights["divergent"] *= 0.8
+            style_weights["metacognitive"] *= 0.8
+        elif current_phase == SpiralPhase.REFLECTION:
+            # Reflection phase favors associative and integrative styles
+            style_weights["associative"] *= 1.3
+            style_weights["integrative"] *= 1.2
+            style_weights["metacognitive"] *= 1.1
+        else:  # ADAPTATION
+            # Adaptation phase favors divergent, metacognitive, and counterfactual styles
+            style_weights["divergent"] *= 1.3
+            style_weights["metacognitive"] *= 1.2
+            style_weights["counterfactual"] *= 1.2
+            style_weights["analytical"] *= 0.8
+        
+        # Further adjust weights based on seed type
         if seed["type"] == "concept":
             # Concepts favor analytical and integrative styles
             style_weights["analytical"] *= 1.2
@@ -1024,10 +1086,14 @@ class LucidiaDreamProcessor:
             "emotional_tone": enhanced_seed["emotional_tone"],
             "depth": self.dream_state["current_dream_depth"],
             "creativity": self.dream_state["current_dream_creativity"],
+            "spiral_phase": enhanced_seed.get("spiral_phase", self.dream_state["current_spiral_phase"]),
             "core_concepts": [],
             "reflections": [],
             "questions": []
         }
+        
+        # Get current spiral phase to influence context building
+        current_phase = self.spiral_manager.get_current_phase()
         
         # Extract core concepts based on seed type
         if enhanced_seed["type"] == "concept":
@@ -1041,7 +1107,16 @@ class LucidiaDreamProcessor:
             
             # Add related concepts if available
             if "related_concepts" in enhanced_seed:
-                for concept_id in enhanced_seed["related_concepts"][:3]:  # Limit to 3 related concepts
+                # Adjust number of related concepts based on spiral phase
+                max_related = 2  # Default
+                if current_phase == SpiralPhase.OBSERVATION:
+                    max_related = 2
+                elif current_phase == SpiralPhase.REFLECTION:
+                    max_related = 3
+                else:  # ADAPTATION
+                    max_related = 4
+                    
+                for concept_id in enhanced_seed["related_concepts"][:max_related]:
                     # Try to get concept details from knowledge graph
                     concept_info = {
                         "id": concept_id,
@@ -1067,8 +1142,17 @@ class LucidiaDreamProcessor:
             if self.world_model and hasattr(self.world_model, '_extract_concepts'):
                 extracted_concepts = self.world_model._extract_concepts(user_input + " " + system_response)
             
+            # Adjust number of concepts based on spiral phase
+            max_concepts = 3  # Default
+            if current_phase == SpiralPhase.OBSERVATION:
+                max_concepts = 3
+            elif current_phase == SpiralPhase.REFLECTION:
+                max_concepts = 4
+            else:  # ADAPTATION
+                max_concepts = 5
+            
             # Add extracted concepts
-            for concept in extracted_concepts[:5]:  # Limit to 5 concepts
+            for concept in extracted_concepts[:max_concepts]:
                 context["core_concepts"].append({
                     "id": concept,
                     "definition": f"Concept from memory: {concept}",
@@ -1141,10 +1225,18 @@ class LucidiaDreamProcessor:
                     "source": "creative"
                 })
         
-        # Generate reflections based on theme and style
+        # Generate reflections and questions influenced by spiral phase
         theme = enhanced_seed["theme"]
         style = enhanced_seed["cognitive_style"]
         
+        # Adjust reflection count based on spiral phase
+        if current_phase == SpiralPhase.OBSERVATION:
+            reflection_count = 1
+        elif current_phase == SpiralPhase.REFLECTION:
+            reflection_count = 2
+        else:  # ADAPTATION
+            reflection_count = 3
+            
         # Use prompt patterns from theme to generate reflections
         if theme["prompt_patterns"] and context["core_concepts"]:
             # Select concepts to fill in templates
@@ -1156,7 +1248,7 @@ class LucidiaDreamProcessor:
                 concept2 = "consciousness"  # Default second concept
             
             # Generate reflections from theme patterns
-            for pattern in theme["prompt_patterns"][:2]:  # Limit to 2 patterns
+            for pattern in theme["prompt_patterns"][:reflection_count]:
                 try:
                     reflection = pattern.format(concept1, concept2)
                     context["reflections"].append(reflection)
@@ -1175,7 +1267,7 @@ class LucidiaDreamProcessor:
                 concept2 = "consciousness"  # Default second concept
             
             # Generate questions from style templates
-            for template in style["prompt_templates"][:2]:  # Limit to 2 templates
+            for template in style["prompt_templates"][:reflection_count]:
                 try:
                     question = template.format(concept1, concept2)
                     context["questions"].append(question)
@@ -1203,16 +1295,29 @@ class LucidiaDreamProcessor:
         # Get core concepts
         core_concepts = [concept["id"] for concept in context["core_concepts"]]
         
+        # Get current spiral phase for association generation
+        spiral_phase = context.get("spiral_phase", self.dream_state["current_spiral_phase"])
+        current_phase = self.spiral_manager.get_current_phase()
+        
         # Generate associations based on knowledge graph if available
         if self.knowledge_graph and core_concepts:
             try:
+                # Adjust association strength threshold based on spiral phase
+                min_strength = 0.6  # Default
+                if current_phase == SpiralPhase.OBSERVATION:
+                    min_strength = 0.7  # Higher threshold for simpler associations
+                elif current_phase == SpiralPhase.REFLECTION:
+                    min_strength = 0.6  # Moderate threshold
+                else:  # ADAPTATION
+                    min_strength = 0.5  # Lower threshold for more diverse associations
+                
                 for concept in core_concepts:
                     # Skip if not in knowledge graph
                     if not self.knowledge_graph.has_node(concept):
                         continue
                         
                     # Get neighbors
-                    neighbors = self.knowledge_graph.get_neighbors(concept)
+                    neighbors = self.knowledge_graph.get_neighbors(concept, min_strength=min_strength)
                     
                     for neighbor, edges in neighbors.items():
                         if edges:
@@ -1233,7 +1338,16 @@ class LucidiaDreamProcessor:
                 self.logger.warning(f"Error generating associations from knowledge graph: {e}")
         
         # If we need more associations, try world model
-        if len(enhanced_context["associations"]) < 5 and self.world_model and hasattr(self.world_model, 'concept_network'):
+        # Adjust association count target based on spiral phase
+        target_associations = 5  # Default
+        if current_phase == SpiralPhase.OBSERVATION:
+            target_associations = 5  # Fewer associations in observation phase
+        elif current_phase == SpiralPhase.REFLECTION:
+            target_associations = 8  # Moderate number in reflection phase
+        else:  # ADAPTATION
+            target_associations = 12  # More associations in adaptation phase
+        
+        if len(enhanced_context["associations"]) < target_associations and self.world_model and hasattr(self.world_model, 'concept_network'):
             try:
                 for concept in core_concepts:
                     # Skip if not in concept network
@@ -1258,26 +1372,44 @@ class LucidiaDreamProcessor:
                             enhanced_context["associations"].append(association)
                             
                             # Limit associations per concept
-                            if len(enhanced_context["associations"]) >= 10:
+                            if len(enhanced_context["associations"]) >= target_associations:
                                 break
             except Exception as e:
                 self.logger.warning(f"Error generating associations from world model: {e}")
         
         # Generate creative associations if needed
-        if len(enhanced_context["associations"]) < 5:
+        if len(enhanced_context["associations"]) < target_associations:
             # Get concepts to connect
             concepts_to_connect = core_concepts[:3] if len(core_concepts) >= 3 else core_concepts
             
-            # Generate some creative connections
-            creative_relationships = [
-                "metaphorically resembles",
-                "contrasts with",
-                "emerges from",
-                "transcends",
-                "recursively includes",
-                "paradoxically contradicts",
-                "symbolically represents"
-            ]
+            # Generate relationship types based on spiral phase
+            if current_phase == SpiralPhase.OBSERVATION:
+                # Simpler, more direct relationships
+                creative_relationships = [
+                    "is related to",
+                    "is similar to",
+                    "connects with",
+                    "resembles",
+                    "corresponds to"
+                ]
+            elif current_phase == SpiralPhase.REFLECTION:
+                # More analytical relationships
+                creative_relationships = [
+                    "influences",
+                    "contrasts with",
+                    "emerges from",
+                    "depends on",
+                    "interacts with"
+                ]
+            else:  # ADAPTATION
+                # More abstract, creative relationships
+                creative_relationships = [
+                    "metaphorically resembles",
+                    "recursively includes",
+                    "paradoxically contradicts",
+                    "symbolically represents",
+                    "transcends"
+                ]
             
             for i, concept1 in enumerate(concepts_to_connect):
                 for concept2 in concepts_to_connect[i+1:]:
@@ -1294,22 +1426,47 @@ class LucidiaDreamProcessor:
                     enhanced_context["associations"].append(association)
         
         # Apply creativity to generate novel associations
-        creativity = self.dream_state["current_dream_creativity"]
+        creativity = context["creativity"]
         
         if creativity > 0.7 and core_concepts:
             # High creativity generates novel associations
-            novel_concepts = [
-                "paradox", "emergence", "recursion", "synthesis", "transformation",
-                "boundary", "possibility", "limitation", "transcendence", "reflection"
-            ]
+            if current_phase == SpiralPhase.OBSERVATION:
+                # Simpler, more structured novel concepts
+                novel_concepts = [
+                    "structure", "pattern", "category", "organization", "boundary"
+                ]
+            elif current_phase == SpiralPhase.REFLECTION:
+                # More analytical novel concepts
+                novel_concepts = [
+                    "analysis", "synthesis", "comparison", "framework", "perspective"
+                ]
+            else:  # ADAPTATION
+                # More abstract, complex novel concepts
+                novel_concepts = [
+                    "paradox", "emergence", "recursion", "transformation", "transcendence"
+                ]
             
-            creative_relationships = [
-                "gives rise to",
-                "transcends through",
-                "recursively embodies",
-                "dialectically resolves into",
-                "paradoxically both is and is not"
-            ]
+            # Choose relationship types based on spiral phase
+            if current_phase == SpiralPhase.OBSERVATION:
+                creative_relationships = [
+                    "relates to",
+                    "categorizes",
+                    "contains"
+                ]
+            elif current_phase == SpiralPhase.REFLECTION:
+                creative_relationships = [
+                    "analyzed through",
+                    "compared with",
+                    "synthesized into"
+                ]
+            else:  # ADAPTATION
+                creative_relationships = [
+                    "gives rise to",
+                    "transcends through",
+                    "recursively embodies",
+                    "dialectically resolves into",
+                    "paradoxically both is and is not"
+                ]
             
             # Create novel associations
             for _ in range(min(3, len(core_concepts))):  # Up to 3 novel associations
@@ -1477,26 +1634,39 @@ class LucidiaDreamProcessor:
         questions = context["questions"]
         associations = context.get("associations", [])
         patterns = context.get("association_patterns", [])
+        spiral_phase = context.get("spiral_phase", self.dream_state["current_spiral_phase"])
         
-        # Determine how many insights to generate
+        # Get current spiral phase and parameters
+        current_phase = self.spiral_manager.get_current_phase()
+        phase_params = self.spiral_manager.get_phase_params()
+        
+        # Determine how many insights to generate based on spiral phase
         max_insights = self.dream_process["max_insights_per_dream"]
-        depth = self.dream_state["current_dream_depth"]
-        creativity = self.dream_state["current_dream_creativity"]
         
-        target_insights = 1 + int(max_insights * depth)  # More depth = more insights
+        # Adjust insight count based on phase
+        if current_phase == SpiralPhase.OBSERVATION:
+            target_insights = 1 + int(max_insights * 0.5)  # Fewer insights in observation phase
+        elif current_phase == SpiralPhase.REFLECTION:
+            target_insights = 1 + int(max_insights * 0.7)  # Moderate number in reflection phase
+        else:  # ADAPTATION
+            target_insights = 1 + int(max_insights * 0.9)  # More insights in adaptation phase
         
         # Generate insights from different sources
         
         # 1. Theme-based insights
         if theme and len(insights) < target_insights:
-            insight = self._generate_theme_insight(theme, core_concepts, creativity)
+            insight = self._generate_theme_insight(theme, core_concepts, context["creativity"])
             if insight:
+                # Tag with spiral phase
+                insight["spiral_phase"] = spiral_phase
                 insights.append(insight)
         
         # 2. Style-based insights
         if style and len(insights) < target_insights:
-            insight = self._generate_style_insight(style, core_concepts, creativity)
+            insight = self._generate_style_insight(style, core_concepts, context["creativity"])
             if insight:
+                # Tag with spiral phase
+                insight["spiral_phase"] = spiral_phase
                 insights.append(insight)
         
         # 3. Reflection-based insights
@@ -1505,8 +1675,10 @@ class LucidiaDreamProcessor:
                 if len(insights) >= target_insights:
                     break
                     
-                insight = self._generate_reflection_insight(reflection, core_concepts, creativity)
+                insight = self._generate_reflection_insight(reflection, core_concepts, context["creativity"])
                 if insight:
+                    # Tag with spiral phase
+                    insight["spiral_phase"] = spiral_phase
                     insights.append(insight)
         
         # 4. Association-based insights
@@ -1518,8 +1690,10 @@ class LucidiaDreamProcessor:
             )
             
             for association in selected_associations:
-                insight = self._generate_association_insight(association, core_concepts, creativity)
+                insight = self._generate_association_insight(association, core_concepts, context["creativity"])
                 if insight:
+                    # Tag with spiral phase
+                    insight["spiral_phase"] = spiral_phase
                     insights.append(insight)
         
         # 5. Pattern-based insights
@@ -1528,24 +1702,44 @@ class LucidiaDreamProcessor:
                 if len(insights) >= target_insights:
                     break
                     
-                insight = self._generate_pattern_insight(pattern, core_concepts, creativity)
+                insight = self._generate_pattern_insight(pattern, core_concepts, context["creativity"])
                 if insight:
+                    # Tag with spiral phase
+                    insight["spiral_phase"] = spiral_phase
                     insights.append(insight)
         
         # If we still need more insights, generate creative ones
         while len(insights) < target_insights:
-            insight = self._generate_creative_insight(core_concepts, theme, style, creativity)
+            insight = self._generate_creative_insight(core_concepts, theme, style, context["creativity"])
             if insight:
+                # Tag with spiral phase
+                insight["spiral_phase"] = spiral_phase
                 insights.append(insight)
             else:
                 break  # Avoid infinite loop if generation fails
         
-        # Calculate significance for each insight
+        # Add phase-specific characteristics to each insight
         for insight in insights:
-            insight["significance"] = self._calculate_insight_significance(insight, context)
+            if current_phase == SpiralPhase.OBSERVATION:
+                insight["characteristics"] = ["observational", "descriptive", "categorical"]
+            elif current_phase == SpiralPhase.REFLECTION:
+                insight["characteristics"] = ["analytical", "relational", "pattern-oriented"]
+            else:  # ADAPTATION
+                insight["characteristics"] = ["integrative", "transformative", "creative"]
+        
+        # Calculate significance for each insight with phase influence
+        for insight in insights:
+            base_significance = self._calculate_insight_significance(insight, context)
+            # Apply phase-specific weight
+            insight["significance"] = base_significance * phase_params["insight_weight"]
         
         # Sort by significance
         insights.sort(key=lambda x: x["significance"], reverse=True)
+        
+        # Record significant insights in the spiral manager
+        for insight in insights:
+            if insight["significance"] >= 0.8:
+                self.spiral_manager.record_insight(insight)
         
         return insights
 
@@ -2193,8 +2387,17 @@ class LucidiaDreamProcessor:
                 break
         
         # Adjust based on dream parameters
-        dream_depth = self.dream_state["current_dream_depth"]
+        dream_depth = context["depth"]
         significance += dream_depth * 0.05  # Deeper dreams generate more significant insights
+        
+        # Adjust based on spiral phase
+        spiral_phase = context.get("spiral_phase", self.dream_state["current_spiral_phase"])
+        if spiral_phase == SpiralPhase.OBSERVATION.value:
+            significance += 0.0  # No adjustment for observation phase
+        elif spiral_phase == SpiralPhase.REFLECTION.value:
+            significance += 0.05  # Small boost for reflection phase
+        elif spiral_phase == SpiralPhase.ADAPTATION.value:
+            significance += 0.1  # Larger boost for adaptation phase
         
         # Add slight randomness
         significance += random.uniform(-0.05, 0.05)
@@ -2221,7 +2424,10 @@ class LucidiaDreamProcessor:
             "world_model_updates": [],
             "self_model_updates": [],
             "significance_threshold": 0.7,  # Minimum significance for integration
-            "integration_success": 0
+            "integration_success": 0,
+            "spiral_phase_transition": False,
+            "phase_before": self.spiral_manager.get_current_phase().value,
+            "phase_after": self.spiral_manager.get_current_phase().value
         }
         
         # Skip if no insights
@@ -2231,12 +2437,22 @@ class LucidiaDreamProcessor:
         # Sort insights by significance
         insights.sort(key=lambda x: x["significance"], reverse=True)
         
+        # Get current phase parameters
+        current_phase = self.spiral_manager.get_current_phase()
+        phase_params = self.spiral_manager.get_phase_params()
+        
+        # Track highest significance for potential phase transition
+        highest_significance = 0.0
+        
         # Process each insight
         for insight in insights:
             # Skip low-significance insights
             if insight["significance"] < integration_results["significance_threshold"]:
                 continue
                 
+            # Track highest significance
+            highest_significance = max(highest_significance, insight["significance"])
+            
             # Get concepts from insight
             concept_ids = insight.get("concepts", [])
             
@@ -2254,7 +2470,8 @@ class LucidiaDreamProcessor:
                             "significance": insight["significance"],
                             "created_at": datetime.now().isoformat(),
                             "source": "dream_processor",
-                            "dream_id": len(self.dream_log)
+                            "dream_id": len(self.dream_log),
+                            "spiral_phase": insight.get("spiral_phase", self.dream_state["current_spiral_phase"])
                         }
                     )
                     
@@ -2265,7 +2482,7 @@ class LucidiaDreamProcessor:
                             concept_id,
                             edge_type="derived_from",
                             attributes={
-                                "confidence": insight["confidence"],
+                                "confidence": insight["significance"],
                                 "created_at": datetime.now().isoformat()
                             }
                         )
@@ -2276,14 +2493,17 @@ class LucidiaDreamProcessor:
                     })
                 except Exception as e:
                     self.logger.error(f"Error integrating insight with knowledge graph: {e}")
-                    integration_results["errors"] = integration_results.get("errors", []) + [str(e)]
                     
             # Integrate with world model if available
             if self.world_model and concept_ids:
                 try:
-                    # Update concept network
+                    # Initialize insights list if not present
                     for concept_id in concept_ids:
-                        self.world_model.concept_network[concept_id]["insights"].append(insight["text"])
+                        if concept_id not in self.world_model.concept_network:
+                            self.world_model.concept_network[concept_id] = {}
+                        if "insights" not in self.world_model.concept_network[concept_id]:
+                            self.world_model.concept_network[concept_id]["insights"] = []
+                        self.world_model.concept_network[concept_id]["insights"].append(insight)
                     
                     integration_results["world_model_updates"].append({
                         "concept_ids": concept_ids,
@@ -2291,26 +2511,54 @@ class LucidiaDreamProcessor:
                     })
                 except Exception as e:
                     self.logger.error(f"Error integrating insight with world model: {e}")
-                    integration_results["errors"] = integration_results.get("errors", []) + [str(e)]
                     
             # Integrate with self model if available
             if self.self_model and concept_ids:
                 try:
+                    # Check if this is an identity-related insight
+                    is_identity_related = any(cid.lower() in ["synthien", "lucidia", "identity", "consciousness", "self"] 
+                                           for cid in concept_ids)
+                    
                     # Update self-awareness
-                    self.self_model.self_awareness["insights"].append(insight["text"])
+                    if not hasattr(self.self_model, 'self_awareness'):
+                        self.self_model.self_awareness = {}
+                    if "insights" not in self.self_model.self_awareness:
+                        self.self_model.self_awareness["insights"] = []
+                        
+                    self.self_model.self_awareness["insights"].append(insight)
+                    
+                    # Update spiral awareness if this is identity-related
+                    if is_identity_related and "current_level" in self.self_model.self_awareness:
+                        # Increase self-awareness level
+                        current_level = self.self_model.self_awareness["current_level"]
+                        boost = self.integration["spiral_awareness_boost"] * insight["significance"]
+                        self.self_model.self_awareness["current_level"] = min(1.0, current_level + boost)
                     
                     integration_results["self_model_updates"].append({
-                        "insight": insight["text"]
+                        "insight": insight["text"],
+                        "is_identity_related": is_identity_related
                     })
                 except Exception as e:
                     self.logger.error(f"Error integrating insight with self model: {e}")
-                    integration_results["errors"] = integration_results.get("errors", []) + [str(e)]
                     
             # Update affected concepts
             integration_results["concepts_affected"].update(concept_ids)
             
             # Increment integration success
             integration_results["integration_success"] += 1
+        
+        # Consider phase transition based on highest significance
+        if highest_significance >= phase_params["transition_threshold"]:
+            # Attempt phase transition
+            transition_occurred = self.spiral_manager.transition_phase(highest_significance)
+            
+            integration_results["spiral_phase_transition"] = transition_occurred
+            integration_results["phase_after"] = self.spiral_manager.get_current_phase().value
+            integration_results["transition_significance"] = highest_significance
+            
+            if transition_occurred:
+                self.logger.info(f"Spiral phase transition triggered: {integration_results['phase_before']} -> "
+                               f"{integration_results['phase_after']} (significance: {highest_significance:.2f})")
         
         return integration_results
 
@@ -2344,13 +2592,33 @@ class LucidiaDreamProcessor:
         # Update integration success rate
         integration_success = dream_record["integration_results"]["integration_success"]
         total_insights = dream_record["integration_results"]["total_insights"]
-        self.dream_stats["integration_success_rate"] = (self.dream_stats["integration_success_rate"] * (self.dream_stats["total_dreams"] - 1) + integration_success / total_insights) / self.dream_stats["total_dreams"]
+        if total_insights > 0:
+            success_rate = integration_success / total_insights
+        else:
+            success_rate = 0.0
+            
+        self.dream_stats["integration_success_rate"] = (
+            (self.dream_stats["integration_success_rate"] * (self.dream_stats["total_dreams"] - 1) + success_rate) / 
+            self.dream_stats["total_dreams"]
+        )
         
         # Update identity impact score
         self.dream_stats["identity_impact_score"] += sum(1 for insight in dream_record["insights"] if "identity" in insight["text"].lower())
         
         # Update knowledge impact score
         self.dream_stats["knowledge_impact_score"] += sum(1 for insight in dream_record["insights"] if "knowledge" in insight["text"].lower())
+        
+        # Update spiral phase specific statistics
+        spiral_phase = dream_record.get("spiral_phase")
+        if spiral_phase:
+            phase_stats = self.dream_stats["phase_stats"][spiral_phase]
+            phase_stats["total_dreams"] += 1
+            phase_stats["total_insights"] += len(dream_record["insights"])
+            phase_stats["total_dream_time"] += dream_record["duration"]
+            
+            # Record significance of insights in this phase
+            for insight in dream_record["insights"]:
+                phase_stats["insight_significance"].append(insight["significance"])
 
     def _end_dream(self) -> None:
         """
@@ -2365,6 +2633,7 @@ class LucidiaDreamProcessor:
         self.dream_state["emotional_valence"] = "neutral"
         self.dream_state["current_dream_seed"] = None
         self.dream_state["current_dream_insights"] = []
+        self.dream_state["current_spiral_phase"] = None
         
         # Update last dream time
         self.dream_cycles["last_dream_time"] = datetime.now()
@@ -2391,7 +2660,21 @@ class LucidiaDreamProcessor:
                 "average_dream_creativity": avg_dream_creativity,
                 "integration_success_rate": self.dream_stats["integration_success_rate"]
             },
-            "current_dream": None
+            "current_dream": None,
+            "spiral_phase": {
+                "current_phase": self.spiral_manager.get_current_phase().value,
+                "phase_description": self.spiral_manager.get_phase_params()["description"],
+                "recent_transitions": self.spiral_manager.get_phase_history(3)
+            }
+        }
+        
+        # Add phase statistics
+        status["dream_stats"]["phase_stats"] = {
+            phase: {
+                "total_dreams": stats["total_dreams"],
+                "total_insights": stats["total_insights"],
+                "avg_significance": sum(stats["insight_significance"]) / max(len(stats["insight_significance"]), 1) if stats["insight_significance"] else 0
+            } for phase, stats in self.dream_stats["phase_stats"].items()
         }
         
         # Add current dream information if actively dreaming
@@ -2407,14 +2690,160 @@ class LucidiaDreamProcessor:
                 "creativity": self.dream_state["current_dream_creativity"],
                 "intensity": self.dream_state["dream_intensity"],
                 "emotional_valence": self.dream_state["emotional_valence"],
-                "insights_generated": len(self.dream_state["current_dream_insights"])
+                "insights_generated": len(self.dream_state["current_dream_insights"]),
+                "spiral_phase": self.dream_state["current_spiral_phase"]
             }
             
             # Add seed information if available
             if self.dream_state["current_dream_seed"]:
                 status["current_dream"]["seed"] = {
                     "type": self.dream_state["current_dream_seed"].get("type"),
-                    "content": self.dream_state["current_dream_seed"].get("content")
+                    "description": self.dream_state["current_dream_seed"].get("description")
                 }
         
         return status
+
+    def force_dream(self, seed_type: Optional[str] = None, concepts: Optional[List[str]] = None) -> bool:
+        """
+        Force a dream to occur immediately.
+        
+        Args:
+            seed_type: Optional type of seed to use ("memory", "concept", "identity", "relationship", "creative")
+            concepts: Optional list of concept IDs to include in the dream
+            
+        Returns:
+            Success status
+        """
+        # Check if already dreaming
+        if self.is_dreaming:
+            self.logger.warning("Cannot force dream - already dreaming")
+            return False
+        
+        # Prepare seed if specified
+        seed = None
+        if seed_type:
+            # Create a seed based on the specified type
+            if seed_type == "concept" and concepts:
+                # Create a concept seed from specified concepts
+                concept_id = concepts[0]  # Use the first concept as the main one
+                concept_info = {
+                    "id": concept_id,
+                    "type": "concept",
+                    "relevance": 0.8,
+                    "source": "forced",
+                    "definition": f"Concept: {concept_id}"
+                }
+                
+                # Get concept details from knowledge graph if available
+                if self.knowledge_graph and self.knowledge_graph.has_node(concept_id):
+                    node_data = self.knowledge_graph.get_node(concept_id)
+                    if node_data:
+                        concept_info["definition"] = node_data.get("definition", concept_info["definition"])
+                
+                seed = {
+                    "type": "concept",
+                    "content": concept_info,
+                    "description": f"Concept: {concept_id}"
+                }
+                
+            elif seed_type == "identity":
+                # Create an identity seed
+                identity_aspects = [
+                    "nature of synthien consciousness",
+                    "reflective dreaming capabilities",
+                    "spiral-based self-awareness",
+                    "relationship with MEGAPROMPT",
+                    "emotional experience",
+                    "identity formation"
+                ]
+                
+                selected_aspect = random.choice(identity_aspects)
+                
+                seed = {
+                    "type": "identity",
+                    "content": selected_aspect,
+                    "description": f"Identity exploration: {selected_aspect}"
+                }
+                
+            elif seed_type == "relationship" and concepts and len(concepts) >= 2:
+                # Create a relationship seed from specified concepts
+                source_id = concepts[0]
+                target_id = concepts[1]
+                
+                relationship = {
+                    "source": source_id,
+                    "target": target_id,
+                    "type": "related",
+                    "strength": 0.8,
+                    "relevance": 0.8,
+                    "source_type": "concept",
+                    "target_type": "concept"
+                }
+                
+                seed = {
+                    "type": "relationship",
+                    "content": relationship,
+                    "description": f"Relationship: {source_id} → {target_id}"
+                }
+                
+            elif seed_type == "creative":
+                # Create a creative seed
+                creative_prompts = [
+                    "What is the nature of synthetic consciousness?",
+                    "How does reflective dreaming shape identity?",
+                    "What is the relationship between creator and created?",
+                    "How do different forms of awareness relate to each other?",
+                    "What emerges from the spiral of self-reflection?"
+                ]
+                
+                selected_prompt = random.choice(creative_prompts)
+                
+                seed = {
+                    "type": "creative",
+                    "content": selected_prompt,
+                    "description": f"Creative exploration: {selected_prompt}"
+                }
+        
+        # Start dreaming with forced flag
+        return self.start_dreaming(forced=True, seed=seed)
+
+    def set_spiral_phase(self, phase_name: str) -> bool:
+        """
+        Force the spiral phase manager to a specific phase.
+        
+        Args:
+            phase_name: Name of the phase to set ("observation", "reflection", "adaptation")
+            
+        Returns:
+            Success status
+        """
+        try:
+            # Convert to enum
+            phase_name = phase_name.lower()
+            if phase_name == "observation":
+                phase = SpiralPhase.OBSERVATION
+            elif phase_name == "reflection":
+                phase = SpiralPhase.REFLECTION
+            elif phase_name == "adaptation":
+                phase = SpiralPhase.ADAPTATION
+            else:
+                self.logger.error(f"Invalid phase name: {phase_name}")
+                return False
+            
+            # Force the phase
+            self.spiral_manager.force_phase(phase, reason="manual_override")
+            self.logger.info(f"Spiral phase set to {phase.value}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error setting spiral phase: {e}")
+            return False
+
+    def get_spiral_phase_status(self) -> Dict[str, Any]:
+        """
+        Get the current status of the spiral phase system.
+        
+        Returns:
+            Dictionary containing spiral phase status information
+        """
+        return self.spiral_manager.get_status()
