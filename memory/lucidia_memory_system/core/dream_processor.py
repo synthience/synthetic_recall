@@ -20,6 +20,9 @@ from datetime import datetime, timedelta
 from collections import defaultdict, deque
 import math
 
+# Import ParameterManager for dynamic configuration
+from .parameter_manager import ParameterManager
+
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(name)s - %(levelname)s - %(message)s')
 
@@ -1383,8 +1386,10 @@ class LucidiaDreamProcessor:
         # Add chain patterns
         for chain in chains[:3]:  # Limit to 3 chains
             # Convert to descriptive pattern
-            chain_str = " → ".join(chain)
-            
+            chain_str = " → ".join(chain[:3])
+            if len(chain) > 3:
+                chain_str += "..."
+                
             patterns.append({
                 "type": "chain",
                 "description": f"Association chain: {chain_str}",

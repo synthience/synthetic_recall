@@ -1,0 +1,40 @@
+{
+    "_version": "1.0.0",
+    "dream_cycles": {
+        "idle_threshold": 300,
+        "dream_frequency": 0.7,
+        "min_dream_interval": 1800,
+        "avg_dream_duration": [300, 900],
+        "auto_dream_enabled": true
+    },
+    "dream_process": {
+        "depth_range": [0.3, 0.9],
+        "creativity_range": [0.5, 0.95],
+        "max_insights_per_dream": 5,
+        "memory_weight": 0.7,
+        "concept_weight": 0.5,
+        "emotion_weight": 0.6,
+        "spiral_influence": 0.4,
+        "association_distance": 3,
+        "coherence_threshold": 0.3,
+        "dream_phases": ["seed_selection", "context_building", "associations", "insight_generation", "integration"],
+        "phase_durations": {
+            "seed_selection": 0.1,
+            "context_building": 0.2,
+            "associations": 0.3,
+            "insight_generation": 0.3,
+            "integration": 0.1
+        }
+    },
+    "integration": {
+        "default_confidence": 0.7,
+        "memory_integration_rate": 0.8,
+        "concept_integration_rate": 0.7,
+        "emotional_integration_rate": 0.6,
+        "self_model_influence_rate": 0.5,
+        "world_model_influence_rate": 0.4,
+        "spiral_awareness_boost": 0.05,
+        "personality_influence_rate": 0.02,
+        "identity_formation_rate": 0.03
+    }
+}
