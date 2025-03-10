@@ -100,7 +100,7 @@ CONNECTION_RETRY_LIMIT = int(os.getenv('CONNECTION_RETRY_LIMIT', '5'))
 CONNECTION_RETRY_DELAY = float(os.getenv('CONNECTION_RETRY_DELAY', '2.0'))
 CONNECTION_TIMEOUT = float(os.getenv('CONNECTION_TIMEOUT', '10.0'))
 DEFAULT_MODEL_VERSION = os.getenv('DEFAULT_MODEL_VERSION', 'latest')
-CONFIG_PATH = os.environ.get("LUCIDIA_CONFIG_PATH", "config/default_config.json")
+CONFIG_PATH = os.environ.get("LUCIDIA_CONFIG_PATH", "lucidia_config.json")
 
 # Create a patched version of WorldModel that initializes entity_importance
 class PatchedWorldModel(LucidiaWorldModel):
@@ -364,6 +364,7 @@ async def initialize_components():
         app.state.parameter_manager = parameter_manager
         app.state.dream_parameter_adapter = dream_parameter_adapter
         app.state.user_activity_tracker = user_activity_tracker
+        app.state.config_path = CONFIG_PATH  # Store config path for parameter persistence
         
         logger.info("All components initialized successfully")
         

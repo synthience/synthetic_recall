@@ -9,6 +9,7 @@ from jsonschema import validate
 import copy
 import time
 import math
+import os
 
 class ParameterManager:
     def __init__(self, initial_config=None, schema_path=None):
@@ -412,6 +413,8 @@ class ParameterManager:
                 success = self._set_nested_value(self.config, path, value)
                 if success:
                     self._notify_observers(path, value, change_record)
+                    # Save configuration to disk
+                    self.save_config_to_disk()
                     return {
                         "status": "success", 
                         "message": f"Parameter {path} updated successfully",
@@ -446,7 +449,61 @@ class ParameterManager:
                 "message": f"Parameter {path} scheduled for update",
                 "transaction_id": transaction_id
             }
-    
+
+    def save_config_to_disk(self):
+        """Save the current parameter configuration to disk."""
+        try:
+            # Determine the path to save to
+            if hasattr(self, 'config_file') and self.config_file:
+                config_path = self.config_file
+            else:
+                # Default to the original config path from initialization
+                # This might be stored in the initial_config attribute
+                config_path = getattr(self, 'initial_config', None)
+                if isinstance(config_path, str) and os.path.exists(os.path.dirname(config_path)):
+                    pass  # Valid path
+                else:
+                    self.logger.warning("No valid config path found for saving")
+                    return False
+            
+            # Create a clean copy of the config without internal attributes
+            config_to_save = {}
+            for key, value in self.config.items():
+                # Skip internal keys that start with underscore
+                if not key.startswith('_'):
+                    config_to_save[key] = value
+            
+            # Save to the config file
+            with open(config_path, 'w') as f:
+                json.dump(config_to_save, f, indent=2)
+            
+            self.logger.info(f"Saved updated configuration to {config_path}")
+            
+            # Also try to save to lucidia_config.json in the current directory
+            # This ensures the CLI can pick up the changes
+            local_config_path = "lucidia_config.json"
+            if os.path.exists(local_config_path) and os.path.abspath(local_config_path) != os.path.abspath(config_path):
+                # Load existing config first
+                try:
+                    with open(local_config_path, 'r') as f:
+                        local_config = json.load(f)
+                    
+                    # Update with our config values
+                    local_config.update(config_to_save)
+                    
+                    # Save back
+                    with open(local_config_path, 'w') as f:
+                        json.dump(local_config, f, indent=2)
+                    
+                    self.logger.info(f"Also saved configuration to local {local_config_path}")
+                except Exception as e:
+                    self.logger.warning(f"Could not update local config file: {e}")
+            
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving configuration: {e}")
+            return False
+
     def _start_transition_processor(self):
         """Start a background thread for processing parameter transitions"""
         self.transition_thread = threading.Thread(

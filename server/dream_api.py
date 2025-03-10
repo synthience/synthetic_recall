@@ -494,6 +494,36 @@ async def generate_memory_insights(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ========= Memory Query Endpoints =========
+
+@router.get("/memories/significant")
+async def get_significant_memories(
+    limit: int = Query(10, description="Maximum number of memories to return"),
+    threshold: float = Query(0.5, description="Minimum significance threshold"),
+    memory_client: Any = Depends(get_memory_client)
+):
+    """
+    Retrieve the most significant memories from the memory store.
+    Ordered by significance score (descending).
+    """
+    try:
+        logger.info(f"Retrieving up to {limit} significant memories (threshold: {threshold})")
+        
+        # Get memories from the memory client
+        memories = await memory_client.get_significant_memories(limit=limit, threshold=threshold)
+        
+        if not memories:
+            logger.warning("No significant memories found")
+            return []
+            
+        logger.info(f"Found {len(memories)} significant memories")
+        return memories
+        
+    except Exception as e:
+        logger.error(f"Error retrieving significant memories: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve significant memories: {str(e)}")
+
+
 # ========= Self-Reflection and Self-Model Endpoints =========
 
 @router.post("/self/reflect")
@@ -767,6 +797,190 @@ async def list_dream_reports(
         raise HTTPException(status_code=500, detail=f"Error listing dream reports: {str(e)}")
 
 
+# ========= Parameter Configuration Endpoints =========
+
+@router.get("/parameters/config", response_model=Dict[str, Any])
+async def get_all_parameters(request: Request):
+    """
+    Get all system parameters configuration.
+    """
+    try:
+        # Get parameter manager from app state
+        parameter_manager = request.app.state.parameter_manager
+        if not parameter_manager:
+            raise HTTPException(status_code=503, detail="Parameter manager not initialized")
+            
+        # Return the current parameter configuration
+        return parameter_manager.config
+    except Exception as e:
+        logger.error(f"Error retrieving parameters: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve parameters: {str(e)}")
+
+@router.get("/parameters/config/{parameter_path:path}", response_model=Dict[str, Any])
+async def get_parameter(parameter_path: str, request: Request):
+    """
+    Get a specific parameter by its path.
+    """
+    try:
+        # Get parameter manager from app state
+        parameter_manager = request.app.state.parameter_manager
+        if not parameter_manager:
+            raise HTTPException(status_code=503, detail="Parameter manager not initialized")
+        
+        # Use parameter manager to get the value
+        value = parameter_manager._get_nested_value(
+            parameter_manager.config, 
+            parameter_path
+        )
+        
+        if value is None:
+            raise HTTPException(status_code=404, detail=f"Parameter {parameter_path} not found")
+        
+        # Get metadata if available
+        metadata = parameter_manager._get_nested_value(
+            parameter_manager.parameter_metadata, 
+            parameter_path, 
+            {}
+        )
+        
+        # Return the parameter value with metadata
+        return {
+            "path": parameter_path,
+            "value": value,
+            "metadata": metadata
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving parameter {parameter_path}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve parameter: {str(e)}")
+
+@router.post("/parameters/config/{parameter_path:path}", response_model=Dict[str, Any])
+async def update_parameter(parameter_path: str, update: Dict[str, Any], request: Request):
+    """
+    Update a specific parameter value.
+    """
+    try:
+        # Get parameter manager from app state
+        parameter_manager = request.app.state.parameter_manager
+        if not parameter_manager:
+            raise HTTPException(status_code=503, detail="Parameter manager not initialized")
+            
+        # Get current value for comparison
+        current_value = parameter_manager._get_nested_value(
+            parameter_manager.config, 
+            parameter_path
+        )
+        
+        # Instead of raising a 404 error, we'll create the parameter if it doesn't exist
+        # by setting it to a default value first
+        if current_value is None:
+            # Create the parameter with a default value based on the path
+            # This ensures the structure exists before updating
+            logger.info(f"Parameter {parameter_path} not found, creating it")
+            
+            # Initialize the parameter with a sensible default based on parameter name
+            if "batch_size" in parameter_path:
+                default_value = 50  # Default batch size
+            elif "threshold" in parameter_path:
+                default_value = 0.7  # Default threshold
+            elif "rate" in parameter_path:
+                default_value = 0.01  # Default rate
+            elif "interval" in parameter_path:
+                default_value = 3600  # Default interval (1 hour)
+            elif "limit" in parameter_path:
+                default_value = 100  # Default limit
+            elif "time" in parameter_path:
+                default_value = 300  # Default time (5 min)
+            elif "level" in parameter_path:
+                default_value = "INFO"  # Default logging level
+            elif "optimize" in parameter_path or "normalize" in parameter_path:
+                default_value = True  # Default boolean
+            elif "memories" in parameter_path:
+                default_value = 10000  # Default max memories
+            elif "dimension" in parameter_path:
+                default_value = 384  # Default embedding dimension
+            else:
+                default_value = 0  # Generic default
+                
+            # Set the default value
+            parameter_manager._set_nested_value(parameter_manager.config, parameter_path, default_value)
+            current_value = default_value
+            
+            # Save the configuration to ensure the structure persists
+            if hasattr(parameter_manager, 'save_config_to_disk'):
+                parameter_manager.save_config_to_disk()
+            else:
+                save_config_to_disk(parameter_manager, request.app.state.config_path)
+            
+        # Update the parameter
+        # If transition_period is provided, use with_transition
+        new_value = update.get("value")
+        transition_period = update.get("transition_period")
+        
+        if transition_period:
+            # Convert transition_period from seconds to timedelta
+            transition_period = timedelta(seconds=float(transition_period))
+            
+        # Use update_parameter instead of set_parameter to properly update and persist
+        result = parameter_manager.update_parameter(
+            parameter_path, 
+            new_value, 
+            transition_period=transition_period
+        )
+            
+        if result.get("status") != "success" and result.get("status") != "scheduled":
+            raise HTTPException(status_code=400, detail=f"Failed to update parameter {parameter_path}: {result.get('message')}")
+            
+        # Save the configuration to disk
+        if hasattr(parameter_manager, 'save_config_to_disk'):
+            parameter_manager.save_config_to_disk()
+        else:
+            save_config_to_disk(parameter_manager, request.app.state.config_path)
+            
+        return {
+            "success": True,
+            "path": parameter_path,
+            "updated": True,
+            "previous_value": current_value,
+            "new_value": new_value,
+            "status": result.get("status"),
+            "transaction_id": result.get("transaction_id")
+        }
+    except Exception as e:
+        logger.error(f"Error updating parameter {parameter_path}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update parameter: {str(e)}")
+
+def save_config_to_disk(parameter_manager, config_path):
+    """
+    Save the current parameter configuration to disk.
+    
+    Args:
+        parameter_manager: The parameter manager instance
+        config_path: Path to the configuration file
+    """
+    try:
+        if not config_path:
+            logger.warning("No config path provided, skipping configuration save")
+            return False
+            
+        # Create a clean copy of the config without internal attributes
+        config_to_save = {}
+        for key, value in parameter_manager.config.items():
+            # Skip internal keys that start with underscore
+            if not key.startswith('_'):
+                config_to_save[key] = value
+                
+        # Save to the config file
+        with open(config_path, 'w') as f:
+            json.dump(config_to_save, f, indent=2)
+            
+        logger.info(f"Saved updated configuration to {config_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Error saving configuration to {config_path}: {e}")
+        return False
+
 # ========= Test and Utility Endpoints =========
 
 @router.post("/test/batch_embedding")
@@ -779,16 +993,25 @@ async def test_batch_embedding(request: Request):
         data = await request.json()
         texts = data.get("texts", [])
         use_hypersphere = data.get("use_hypersphere", True)
+        model_version = data.get("model_version", "latest")
         
         if not texts:
             raise HTTPException(status_code=400, detail="No texts provided")
         
-        # Even if use_hypersphere is True, we'll prefer direct WebSocket calls for reliability
-        # but log that we would have used HypersphereManager for transparency
+        # Check if we should use HypersphereManager or fallback to direct WebSocket connections
         if use_hypersphere and hypersphere_manager:
-            logger.info(f"Using direct tensor server connection instead of HypersphereManager for reliable embedding generation")
+            logger.info(f"Using HypersphereManager for batch embedding generation with {len(texts)} texts")
+            try:
+                # Use HypersphereManager for efficient batched processing
+                result = await hypersphere_manager.batch_process_embeddings(texts=texts, model_version=model_version)
+                return result
+            except Exception as e:
+                logger.error(f"HypersphereManager batch processing failed: {str(e)}. Falling back to direct WebSocket connection.")
+                # Continue with fallback method
+        else:
+            logger.info(f"Using direct tensor server connection for embedding generation")
             
-        # Process each text directly using WebSocket connection to tensor server
+        # Fallback: Process each text directly using WebSocket connection to tensor server
         embeddings = []
         for i, text in enumerate(texts):
             try:
@@ -905,44 +1128,64 @@ async def test_similarity_search(request: Request):
     try:
         knowledge_graph = request.app.state.knowledge_graph
         embedding_comparator = request.app.state.embedding_comparator
+        hypersphere_manager = request.app.state.hypersphere_manager
         
         data = await request.json()
         query = data.get("query", "")
         top_k = data.get("top_k", 3)
+        use_hypersphere = data.get("use_hypersphere", True)
+        model_version = data.get("model_version", "latest")
         
         if not query:
             raise HTTPException(status_code=400, detail="No query provided")
         
-        # Generate embedding directly using tensor server for reliability
-        logger.info(f"Generating embedding for query using direct tensor server connection")
-        try:
-            # Use direct WebSocket connection to tensor server
-            tensor_ws = await get_tensor_connection()
-            
-            # Format the request according to what tensor_server.py expects
-            request_data = {
-                "type": "embed",
-                "text": query
-            }
-            
-            async with tensor_lock:
-                await tensor_ws.send(json.dumps(request_data))
-                response = await tensor_ws.recv()
+        # Generate embedding using HypersphereManager if available, otherwise use tensor server
+        if use_hypersphere and hypersphere_manager:
+            logger.info(f"Generating embedding for query using HypersphereManager")
+            try:
+                # Use HypersphereManager for embedding generation
+                embedding_result = await hypersphere_manager.get_embedding(text=query, model_version=model_version)
+                if embedding_result and "embedding" in embedding_result:
+                    query_embedding = embedding_result["embedding"]
+                    logger.info(f"Successfully generated embedding with {len(query_embedding)} dimensions using HypersphereManager")
+                else:
+                    logger.warning(f"HypersphereManager failed to generate embedding, falling back to direct approach")
+                    # Fall back to direct tensor server connection
+                    raise Exception("HypersphereManager returned invalid embedding result")
+            except Exception as e:
+                logger.warning(f"Error using HypersphereManager: {e}, falling back to direct tensor server connection")
+                # Continue with fallback method
+        
+        # Fallback: Generate embedding directly using tensor server if HypersphereManager failed or wasn't used
+        if query_embedding is None:
+            try:
+                # Use direct WebSocket connection to tensor server
+                tensor_ws = await get_tensor_connection()
                 
-            response_data = json.loads(response)
-            
-            if response_data.get("type") == "embeddings" and "embeddings" in response_data:
-                query_embedding = response_data["embeddings"]
-                logger.info(f"Successfully generated embedding with {len(query_embedding)} dimensions")
-            else:
-                # Fall back to process_embedding if direct approach fails
-                logger.warning(f"Failed to generate embedding directly, falling back to process_embedding")
+                # Format the request according to what tensor_server.py expects
+                request_data = {
+                    "type": "embed",
+                    "text": query
+                }
+                
+                async with tensor_lock:
+                    await tensor_ws.send(json.dumps(request_data))
+                    response = await tensor_ws.recv()
+                    
+                response_data = json.loads(response)
+                
+                if response_data.get("type") == "embeddings" and "embeddings" in response_data:
+                    query_embedding = response_data["embeddings"]
+                    logger.info(f"Successfully generated embedding with {len(query_embedding)} dimensions")
+                else:
+                    # Fall back to process_embedding if direct approach fails
+                    logger.warning(f"Failed to generate embedding directly, falling back to process_embedding")
+                    embedding_data = await process_embedding(query)
+                    query_embedding = embedding_data.get("embedding", [])
+            except Exception as e:
+                logger.warning(f"Error in direct embedding generation: {e}, falling back to process_embedding")
                 embedding_data = await process_embedding(query)
                 query_embedding = embedding_data.get("embedding", [])
-        except Exception as e:
-            logger.warning(f"Error in direct embedding generation: {e}, falling back to process_embedding")
-            embedding_data = await process_embedding(query)
-            query_embedding = embedding_data.get("embedding", [])
             
         if not query_embedding:
             raise HTTPException(status_code=500, detail="Failed to generate embedding for query")
@@ -951,9 +1194,12 @@ async def test_similarity_search(request: Request):
         memories = await knowledge_graph.get_nodes_by_type("memory")
         if not memories:
             return {"status": "success", "results": []}
-            
-        # Calculate similarity for each memory
-        results = []
+        
+        # Prepare data for batch similarity search
+        memory_embeddings = []
+        memory_ids = []
+        memory_contents = {}
+        
         for memory_id, memory_data in memories.items():
             memory_attrs = memory_data.get("attributes", memory_data)
             content = memory_attrs.get("content", "")
@@ -961,11 +1207,50 @@ async def test_similarity_search(request: Request):
             if not embedding:
                 continue
                 
+            memory_embeddings.append(embedding)
+            memory_ids.append(memory_id)
+            memory_contents[memory_id] = content
+        
+        # Use HypersphereManager for batch similarity search if available
+        if use_hypersphere and hypersphere_manager and len(memory_embeddings) > 0:
+            try:
+                search_results = await hypersphere_manager.batch_similarity_search(
+                    query_embedding=query_embedding,
+                    memory_embeddings=memory_embeddings,
+                    memory_ids=memory_ids,
+                    model_version=model_version,
+                    top_k=top_k
+                )
+                
+                # Format results
+                results = [
+                    {
+                        "memory_id": result["memory_id"],
+                        "content": memory_contents.get(result["memory_id"], ""),
+                        "score": result["score"]
+                    }
+                    for result in search_results
+                ]
+                
+                return {
+                    "status": "success", 
+                    "results": results,
+                    "total_matches": len(memory_ids),
+                    "query": query,
+                    "method": "hypersphere"
+                }
+            except Exception as e:
+                logger.warning(f"Error in HypersphereManager batch similarity search: {e}, falling back to manual comparison")
+                # Continue with fallback method
+        
+        # Fallback: Calculate similarity for each memory individually
+        results = []
+        for i, (memory_id, embedding) in enumerate(zip(memory_ids, memory_embeddings)):
             # Use the embedding_comparator's compare method for consistency
             score = await embedding_comparator.compare(query_embedding, embedding)
             results.append({
                 "memory_id": memory_id,
-                "content": content,
+                "content": memory_contents.get(memory_id, ""),
                 "score": score
             })
             
@@ -977,7 +1262,8 @@ async def test_similarity_search(request: Request):
             "status": "success", 
             "results": top_results,
             "total_matches": len(results),
-            "query": query
+            "query": query,
+            "method": "individual"
         }
     except Exception as e:
         logger.exception(f"Error in similarity search: {e}")

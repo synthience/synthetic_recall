@@ -129,6 +129,7 @@ The Parameter Reconfiguration System allows dynamic adjustment of system paramet
 - **Parameter API**: REST API endpoints for parameter configuration retrieval and updates
 - **Configuration Validation**: JSON schema validation for parameter configurations
 - **Parameter Change Handlers**: Event-based architecture for parameter changes
+- **Parameter Persistence**: Robust mechanism for ensuring parameter changes persist across server restarts and between CLI and API interactions
 - **Testing Framework**: Comprehensive test suite for the parameter system
 
 ### Parameter Categories
@@ -137,3 +138,29 @@ The Parameter Reconfiguration System allows dynamic adjustment of system paramet
 - **Dream Parameters**: Adjusts dream generation, insight extraction, and report creation
 - **System Parameters**: Manages resource allocation, state transitions, and model selection
 - **Spiral Parameters**: Configures spiral phases, reflection depth, and creativity ranges
+
+### Parameter Persistence Mechanism
+
+The parameter persistence mechanism ensures that parameter changes are properly saved and maintained across system restarts and between different components:
+
+- **Configuration File**: All parameters are stored in a shared configuration file (`lucidia_config.json`) that serves as the single source of truth
+- **ParameterManager Auto-Save**: The `ParameterManager` automatically saves parameter changes to disk after successful updates
+- **Cross-Component Consistency**: Both the API server and CLI use the same configuration file path to ensure consistency
+- **Default Parameter Creation**: Missing parameters are automatically created with sensible defaults when updated
+- **Docker-Aware**: The persistence mechanism is designed to work seamlessly in Docker environments where components may run in separate containers
+
+### Parameter Update Workflow
+
+```mermaid
+sequenceDiagram
+    participant C as CLI
+    participant A as Dream API
+    participant P as Parameter Manager
+    participant F as Config File
+    
+    C->>A: Update Parameter Request
+    A->>P: Update Parameter
+    P->>P: Validate & Apply Update
+    P->>F: Save Config to Disk
+    A->>C: Return Success
+    C->>F: Update Local Config Copy

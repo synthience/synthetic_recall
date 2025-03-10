@@ -240,6 +240,73 @@ tar -czvf lucidia-config-backup.tar.gz ./config
 tar -xzvf lucidia-data-backup.tar.gz
 ```
 
+## Parameter Management
+
+### Configuration Structure
+
+The Lucidia system uses a hierarchical parameter structure stored in a JSON configuration file:
+
+```json
+{
+  "memory": {
+    "batch_size": 300,
+    "significance_threshold": 0.7,
+    "decay_rate": 0.01,
+    "max_memories": 10000
+  },
+  "dream": {
+    "processing_interval": 3600,
+    "batch_limit": 100,
+    "min_consolidation_time": 300
+  },
+  "embedding": {
+    "model": "default",
+    "dimension": 384,
+    "normalize": true
+  },
+  "system": {
+    "logging_level": "INFO",
+    "auto_optimize": true,
+    "backup_interval": 86400
+  }
+}
+```
+
+### Parameter Persistence in Docker Environment
+
+Since the Lucidia system runs in a Docker environment with multiple containers, special considerations are required for parameter persistence:
+
+1. **Shared Configuration File**: The central configuration file (`lucidia_config.json`) is used by both the Dream API server and CLI
+
+2. **Parameter Updates Process**:
+   - When parameters are updated via the CLI, the changes are sent to the Dream API
+   - The API's ParameterManager updates its internal state and saves changes to disk
+   - The CLI also updates its local copy of the configuration file
+
+3. **Container Persistence**:
+   - The configuration file is stored in a mounted volume to persist across container restarts
+   - Both the CLI (running on the host) and the API (running in containers) access the same configuration
+
+4. **Auto-Creation of Parameters**:
+   - Missing parameters are automatically created with sensible defaults
+   - This ensures backward compatibility and prevents errors with partial configurations
+
+### Parameter Management Commands
+
+```bash
+# View all parameters
+python lucidia_cli.py params
+
+# View specific parameter branch
+python lucidia_cli.py params --branch memory
+
+# Update a parameter
+python lucidia_cli.py params --path memory.batch_size --value 300
+
+# View parameter history
+python lucidia_cli.py params --history memory.batch_size
+```
+
 ## Troubleshooting
 
 ### Common Issues
