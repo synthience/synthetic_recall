@@ -6,31 +6,27 @@ import sys
 import uvicorn
 import json
 import time
+import torch
 from fastapi import FastAPI, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timedelta
 import websockets
 from websockets.exceptions import ConnectionClosed
 from server.user_activity_tracker import UserActivityTracker
-
-# Add project root to path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# Import dream API router
+from server.memory_system import MemorySystem  # Import MemorySystem
+from server.memory_bridge import MemoryBridge  # Import the new MemoryBridge
+from server.model_manager import ModelManager, ModelPurpose
+from server.resource_monitor import ResourceMonitor, SystemState
 from server.dream_api import router as dream_router
-
-# Import memory system components
+from server.llm_pipeline import LocalLLMPipeline  # Add import for LLM Pipeline
 from memory.lucidia_memory_system.core.dream_processor import LucidiaDreamProcessor as DreamProcessor
 from memory.lucidia_memory_system.core.knowledge_graph import LucidiaKnowledgeGraph as KnowledgeGraph
 from memory.lucidia_memory_system.core.Self.self_model import LucidiaSelfModel as SelfModel
 from memory.lucidia_memory_system.core.World.world_model import LucidiaWorldModel
 from memory.lucidia_memory_system.core.embedding_comparator import EmbeddingComparator
-from memory.lucidia_memory_system.core.integration import MemoryIntegration
 from memory.lucidia_memory_system.core.reflection_engine import ReflectionEngine
 from memory.lucidia_memory_system.core.hypersphere_dispatcher import HypersphereDispatcher
-from memory.lucidia_memory_system.core.manifold_geometry import ManifoldGeometryRegistry
-
-# Import parameter management components
+from memory.lucidia_memory_system.core.integration.memory_integration import MemoryIntegration
 from memory.lucidia_memory_system.core.parameter_manager import ParameterManager
 from memory.lucidia_memory_system.core.dream_parameter_adapter import DreamParameterAdapter
 from memory.lucidia_memory_system.api.dream_parameter_api import router as parameter_router, init_dream_parameter_api
@@ -38,9 +34,10 @@ from memory.lucidia_memory_system.api.parameter_api import router as general_par
 
 # Import client and service components 
 from server.memory_client import EnhancedMemoryClient
-from server.llm_pipeline import LocalLLMPipeline
-from server.hypersphere_manager import HypersphereManager
 from voice_core.config.config import LLMConfig
+
+# Import configuration
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
@@ -82,6 +79,10 @@ hypersphere_manager = None
 parameter_manager = None
 dream_parameter_adapter = None
 user_activity_tracker = None
+memory_system = None  # Added memory_system global variable
+memory_bridge = None  # Added memory_bridge global variable
+model_manager = None  # Added model_manager global variable
+resource_monitor = None  # Added resource_monitor global variable
 
 # WebSocket connections and locks
 tensor_connection = None
@@ -90,7 +91,8 @@ tensor_lock = asyncio.Lock()
 hpc_lock = asyncio.Lock()
 
 # Environment variables
-STORAGE_PATH = os.getenv('LUCIDIA_STORAGE_PATH', './data')
+STORAGE_PATH = os.getenv('STORAGE_PATH', './data')
+LUCIDIA_STORAGE_PATH = os.getenv('LUCIDIA_STORAGE_PATH', '/app/memory')
 TENSOR_SERVER_URL = os.getenv('TENSOR_SERVER_URL', 'ws://nemo_sig_v3:5001')
 HPC_SERVER_URL = os.getenv('HPC_SERVER_URL', 'ws://nemo_sig_v3:5005')
 LLM_API_ENDPOINT = os.getenv('LLM_API_ENDPOINT', 'http://localhost:1234/v1/chat/completions')
@@ -100,7 +102,41 @@ CONNECTION_RETRY_LIMIT = int(os.getenv('CONNECTION_RETRY_LIMIT', '5'))
 CONNECTION_RETRY_DELAY = float(os.getenv('CONNECTION_RETRY_DELAY', '2.0'))
 CONNECTION_TIMEOUT = float(os.getenv('CONNECTION_TIMEOUT', '10.0'))
 DEFAULT_MODEL_VERSION = os.getenv('DEFAULT_MODEL_VERSION', 'latest')
-CONFIG_PATH = os.environ.get("LUCIDIA_CONFIG_PATH", "lucidia_config.json")
+# Get the project root directory for absolute path resolution
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Use absolute path for configuration
+CONFIG_PATH = os.environ.get("LUCIDIA_CONFIG_PATH", os.path.join(PROJECT_ROOT, "config", "lucidia_config.json"))
+
+# Load configuration
+settings = {}
+try:
+    config_path = Path("config/server_config.json")
+    if config_path.exists():
+        with open(config_path, "r") as f:
+            settings = json.load(f)
+        logger.info(f"Loaded configuration from {config_path}")
+    else:
+        logger.warning(f"Configuration file {config_path} not found. Using defaults.")
+        settings = {}
+except Exception as e:
+    logger.error(f"Error loading configuration: {e}")
+    settings = {}
+
+# Load LM Studio configuration if available
+try:
+    lm_studio_config_path = Path("config/lm_studio_config.json")
+    if lm_studio_config_path.exists():
+        with open(lm_studio_config_path, "r") as f:
+            lm_studio_config = json.load(f)
+        
+        # Only add the configuration if it's enabled
+        if lm_studio_config.get("enabled", False):
+            settings["lm_studio"] = lm_studio_config
+            logger.info(f"LM Studio integration enabled with URL: {lm_studio_config.get('url')}")
+        else:
+            logger.info("LM Studio integration is disabled in config")
+except Exception as e:
+    logger.error(f"Error loading LM Studio configuration: {e}")
 
 # Create a patched version of WorldModel that initializes entity_importance
 class PatchedWorldModel(LucidiaWorldModel):
@@ -219,40 +255,40 @@ def get_user_activity_tracker():
 
 # Initialize components
 async def initialize_components():
-    global dream_processor, knowledge_graph, memory_client, llm_service, self_model, world_model
-    global embedding_comparator, hypersphere_manager, reflection_engine, parameter_manager, dream_parameter_adapter
-    global memory_integration, llm_pipeline, memory_client, user_activity_tracker
+    """Initialize all system components."""
+    global dream_processor, knowledge_graph, self_model, world_model, embedding_comparator, reflection_engine
+    global hypersphere_manager, parameter_manager, dream_parameter_adapter, user_activity_tracker, memory_system
+    global memory_bridge, model_manager, resource_monitor, llm_service
     
     try:
-        logger.info(f"Using storage path: {STORAGE_PATH}")
-        logger.info(f"Loading configuration from {CONFIG_PATH}")
+        logger.info("Starting Dream API server on port 8080...")
         
-        # Ensure storage directories exist
-        os.makedirs(f"{STORAGE_PATH}/self_model", exist_ok=True)
-        os.makedirs(f"{STORAGE_PATH}/world_model", exist_ok=True)
-        os.makedirs(f"{STORAGE_PATH}/knowledge_graph", exist_ok=True)
-        os.makedirs(f"{STORAGE_PATH}/dreams", exist_ok=True)
-        os.makedirs(f"{STORAGE_PATH}/reflection", exist_ok=True)
+        # Ensure storage directory exists
+        os.makedirs(STORAGE_PATH, exist_ok=True)
         
-        # Initialize parameter manager first
+        # Initialize parameter manager
         logger.info("Initializing parameter manager...")
-        parameter_manager = ParameterManager(initial_config=CONFIG_PATH)
+        parameter_manager = ParameterManager(initial_config=settings)
         
-        logger.info("Initializing knowledge graph...")
-        knowledge_graph = KnowledgeGraph(config={
-            "storage_directory": f"{STORAGE_PATH}/knowledge_graph"
+        # Initialize model manager with configuration
+        logger.info("Initializing model manager...")
+        model_manager = ModelManager(config_path=CONFIG_PATH)
+        
+        # Initialize resource monitor
+        logger.info("Initializing resource monitor...")
+        resource_monitor = ResourceMonitor.get_instance()
+        
+        # Initialize unified memory system
+        logger.info("Initializing unified memory system...")
+        memory_storage_path = os.path.join(LUCIDIA_STORAGE_PATH, "stored")
+        os.makedirs(memory_storage_path, exist_ok=True)
+        memory_system = MemorySystem(config={
+            'storage_path': memory_storage_path,
+            'embedding_dim': settings.get("memory", {}).get("embedding_dim", 1024)
         })
         
-        logger.info("Initializing self model...")
-        self_model = SelfModel(config={
-            "storage_directory": f"{STORAGE_PATH}/self_model",
-            "show_ascii": True
-        })
-        
-        logger.info("Initializing world model...")
-        world_model = PatchedWorldModel(config={
-            "storage_directory": f"{STORAGE_PATH}/world_model"
-        })
+        logger.info("Initializing memory bridge...")
+        memory_bridge = MemoryBridge(memory_system=memory_system)
         
         logger.info("Initializing memory client...")
         # Connect to tensor and HPC servers running in the same Docker network
@@ -262,71 +298,67 @@ async def initialize_components():
             "ping_interval": PING_INTERVAL,
             "max_retries": CONNECTION_RETRY_LIMIT,
             "retry_delay": CONNECTION_RETRY_DELAY
-        })
+        }, memory_system=memory_system, memory_bridge=memory_bridge)  # Pass the memory system and bridge directly
         await memory_client.initialize()
         
-        logger.info("Initializing HypersphereManager for enhanced embedding operations...")
-        hypersphere_manager = HypersphereManager(
-            memory_client=memory_client,
-            config={
-                "max_connections": 5,
-                "min_batch_size": 1,
-                "max_batch_size": 32,
-                "target_latency": 100,  # ms
-                "default_model_version": DEFAULT_MODEL_VERSION,
-                "supported_model_versions": ["latest", "v1", "v2"],
-                "batch_timeout": 0.1,  # seconds
-                "use_circuit_breaker": True
-            }
+        logger.info("Initializing HypersphereDispatcher for enhanced embedding operations...")
+        hypersphere_manager = HypersphereDispatcher(
+            tensor_server_uri=TENSOR_SERVER_URL,
+            hpc_server_uri=HPC_SERVER_URL,
+            max_connections=5,
+            min_batch_size=4,
+            max_batch_size=32,
+            target_latency=0.5,
+            reconnect_backoff_min=0.1,
+            reconnect_backoff_max=30.0,
+            reconnect_backoff_factor=2.0,
+            health_check_interval=60.0
         )
-        await hypersphere_manager.initialize()
+        await hypersphere_manager.start()
         
-        logger.info("Initializing LLM service for dream processing...")
-        # Create LLM configuration
-        llm_config = LLMConfig(
-            api_endpoint=LLM_API_ENDPOINT,
-            model=LLM_MODEL,
-            system_prompt="You are Lucidia's reflection system, analyzing performance and suggesting improvements during dream processing.",
-            temperature=float(os.getenv('LLM_TEMPERATURE', '0.7')),
-            max_tokens=int(os.getenv('LLM_MAX_TOKENS', '1024')),
-            timeout=30
-        )
-        llm_service = LocalLLMPipeline(config=llm_config)
-        await llm_service.initialize()
+        logger.info("Initializing knowledge graph...")
+        knowledge_graph = KnowledgeGraph({
+            "memory_client": memory_client,
+            "hypersphere_manager": hypersphere_manager,
+            "parameter_manager": parameter_manager
+        })
         
-        # Set memory_core in models
-        self_model.memory_core = memory_client
-        world_model.memory_core = memory_client
+        logger.info("Initializing world model...")
+        world_model = PatchedWorldModel({
+            "memory_client": memory_client,
+            "knowledge_graph": knowledge_graph,
+            "parameter_manager": parameter_manager
+        })
         
-        # Set LLM service in models
-        self_model.llm_service = llm_service
-        world_model.llm_service = llm_service
+        logger.info("Initializing self model...")
+        self_model = SelfModel({
+            "memory_client": memory_client,
+            "knowledge_graph": knowledge_graph,
+            "world_model": world_model,
+            "parameter_manager": parameter_manager
+        })
+        
+        # Initialize self model connections with knowledge graph
+        knowledge_graph.self_model = self_model
+        knowledge_graph.world_model = world_model
+        
+        # Initialize model imports after all components are available
+        logger.info("Initializing knowledge graph imports from models...")
+        await knowledge_graph.initialize_model_imports()
+        logger.info("Knowledge graph model imports complete")
         
         logger.info("Initializing embedding comparator...")
         embedding_comparator = EmbeddingComparator(hpc_client=memory_client)
         
-        # Merge parameter_manager's config with additional config for dream processor
-        combined_config = parameter_manager.config.copy() if parameter_manager.config else {}
-        combined_config.update({
-            "storage_path": f"{STORAGE_PATH}/dreams",
-            "llm_service": llm_service
-        })
-        
-        logger.info("Initializing dream processor...")
-        dream_processor = DreamProcessor(
-            self_model=self_model,
-            world_model=world_model,
-            knowledge_graph=knowledge_graph,
-            config=combined_config
+        logger.info("Initializing LLM service...")
+        # Configure LLM service to work with the model manager
+        llm_config = LLMConfig(
+            api_endpoint="http://127.0.0.1:1234/v1",  # Local LLM API endpoint
+            model=model_manager.active_model if model_manager else "qwen2.5-7b-instruct",
+            max_tokens=2048,
+            temperature=0.7
         )
-        
-        # Initialize dream parameter adapter to connect parameter manager with dream processor
-        logger.info("Initializing dream parameter adapter...")
-        dream_parameter_adapter = DreamParameterAdapter(dream_processor, parameter_manager)
-        
-        # Initialize parameter API routers
-        init_parameter_api(parameter_manager)
-        init_dream_parameter_api(dream_parameter_adapter)
+        llm_service = LocalLLMPipeline(config=llm_config)
         
         logger.info("Initializing reflection engine...")
         memory_integration = MemoryIntegration(
@@ -339,12 +371,38 @@ async def initialize_components():
             knowledge_graph=knowledge_graph,
             memory_integration=memory_integration,
             llm_service=llm_service,
-            hypersphere_dispatcher=hypersphere_manager.dispatcher,
+            hypersphere_dispatcher=hypersphere_manager,
             config={
-                "storage_path": f"{STORAGE_PATH}/reflection",
+                "storage_path": f"{LUCIDIA_STORAGE_PATH}/reflection",
                 "domain": "synthien_studies",
                 "default_model_version": DEFAULT_MODEL_VERSION
             }
+        )
+        
+        # Get the LM Studio URL configuration if it exists
+        lm_studio_url = settings.get("lm_studio", {}).get("url", None)
+        if lm_studio_url:
+            # Add the LM Studio URL to the dream processor configuration
+            settings["dream_processor"]["lm_studio_url"] = lm_studio_url
+            logger.info(f"LM Studio integration enabled with URL: {lm_studio_url}")
+        
+        logger.info("Initializing dream processor...")
+        dream_processor = DreamProcessor({
+            "memory_client": memory_client,
+            "knowledge_graph": knowledge_graph,
+            "self_model": self_model,
+            "world_model": world_model,
+            "reflection_engine": reflection_engine,
+            "parameter_manager": parameter_manager,
+            "model_manager": model_manager,  # Pass model_manager to dream processor
+            "resource_monitor": resource_monitor,  # Pass resource_monitor to dream processor
+            "config": settings.get("dream_processor", {})
+        })
+        
+        logger.info("Initializing dream parameter adapter...")
+        dream_parameter_adapter = DreamParameterAdapter(
+            dream_processor=dream_processor,
+            parameter_manager=parameter_manager
         )
         
         # Initialize user activity tracker
@@ -364,16 +422,22 @@ async def initialize_components():
         app.state.parameter_manager = parameter_manager
         app.state.dream_parameter_adapter = dream_parameter_adapter
         app.state.user_activity_tracker = user_activity_tracker
+        app.state.memory_system = memory_system  # Add memory_system to app state
+        app.state.memory_bridge = memory_bridge  # Add memory_bridge to app state
         app.state.config_path = CONFIG_PATH  # Store config path for parameter persistence
         
         logger.info("All components initialized successfully")
         
-        # Schedule a background task for continuous dream processing when idle
+        # Start background task for continuous dream processing
         asyncio.create_task(continuous_dream_processing())
         
+        return True
+        
     except Exception as e:
-        logger.error(f"Error initializing components: {e}", exc_info=True)
-        raise
+        logger.error(f"Error initializing components: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return False
 
 # Continuous background dream processing
 async def continuous_dream_processing():
@@ -383,180 +447,106 @@ async def continuous_dream_processing():
     """
     global dream_processor, self_model, world_model
     
-    # Wait for initial startup to complete
-    await asyncio.sleep(60)
+    # Wait for initialization to complete
+    await asyncio.sleep(10)  # Short delay to allow system to initialize
     
     while True:
         try:
-            # Get the activity tracker
-            activity_tracker = UserActivityTracker.get_instance()
-            
-            # Check if system is idle (no active sessions, user AFK)
+            # Check if the system is idle
             is_idle = await check_system_idle()
             
-            if is_idle and dream_processor and not dream_processor.is_dreaming:
-                logger.info("System is idle, starting dream session...")
+            if is_idle:
+                logger.info("System is idle, starting dream processing cycle")
                 
-                # Record system activity
-                activity_tracker.record_activity(
-                    activity_type="system_operation",
-                    details={
-                        "operation": "continuous_dream_processing",
-                        "state": "starting"
-                    }
-                )
+                # Set system state to dreaming in the resource monitor
+                if resource_monitor:
+                    resource_monitor.set_system_state(SystemState.IDLE)
                 
-                # Get tensor and HPC connections
-                try:
-                    tensor_conn = await get_tensor_connection()
-                    hpc_conn = await get_hpc_connection()
-                except Exception as e:
-                    logger.error(f"Error establishing connections for dream session: {e}")
-                    activity_tracker.record_activity(
-                        activity_type="system_operation",
-                        details={
-                            "operation": "continuous_dream_processing",
-                            "state": "connection_error",
-                            "error": str(e)
-                        }
-                    )
-                    await asyncio.sleep(300)  # Wait 5 minutes before retrying
-                    continue
-                
-                # Perform self-reflection before dream session
-                try:
-                    logger.info("Performing self-model reflection...")
-                    # Record system activity
-                    activity_tracker.record_activity(
-                        activity_type="system_operation",
-                        details={
-                            "operation": "self_reflection",
-                            "state": "starting"
-                        }
-                    )
-                    await self_model.reflect(["performance", "improvement"])
-                except Exception as e:
-                    logger.error(f"Error during self-reflection: {e}")
-                    activity_tracker.record_activity(
-                        activity_type="system_operation",
-                        details={
-                            "operation": "self_reflection",
-                            "state": "error",
-                            "error": str(e)
-                        }
-                    )
-                
-                # Check if user has become active during processing
-                if activity_tracker.has_recent_activity(seconds=60) or not activity_tracker.is_afk():
-                    logger.info("User activity detected, pausing background processing")
-                    await asyncio.sleep(120)  # Wait 2 minutes before checking again
-                    continue
-                
-                # Analyze world model knowledge graph
-                try:
-                    logger.info("Analyzing world model knowledge graph...")
-                    # Record system activity
-                    activity_tracker.record_activity(
-                        activity_type="system_operation",
-                        details={
-                            "operation": "world_model_analysis",
-                            "state": "starting"
-                        }
-                    )
-                    await world_model.analyze_concept_network()
-                except Exception as e:
-                    logger.error(f"Error analyzing world model: {e}")
-                    activity_tracker.record_activity(
-                        activity_type="system_operation",
-                        details={
-                            "operation": "world_model_analysis",
-                            "state": "error",
-                            "error": str(e)
-                        }
-                    )
-                
-                # Check again if user has become active during processing
-                if activity_tracker.has_recent_activity(seconds=60) or not activity_tracker.is_afk():
-                    logger.info("User activity detected, pausing background processing")
-                    await asyncio.sleep(120)  # Wait 2 minutes before checking again
-                    continue
-                
-                # Start a dream session with the connections
-                try:
-                    # Determine dream duration based on user AFK duration
-                    dream_duration = 15  # Default duration
-                    if activity_tracker.is_extended_afk():
-                        # If user is on extended AFK, we can run longer dream sessions
-                        dream_duration = 30  # Extend to 30 minutes
+                # Switch to dream model if we have a model manager
+                if model_manager:
+                    # Get the dream model from config
+                    config = {}
+                    try:
+                        if os.path.exists(CONFIG_PATH):
+                            with open(CONFIG_PATH, 'r') as f:
+                                config = json.load(f)
+                    except Exception as e:
+                        logger.error(f"Error loading configuration: {e}")
                     
-                    # Record system activity
-                    activity_tracker.record_activity(
-                        activity_type="system_operation",
-                        details={
-                            "operation": "dream_session",
-                            "state": "starting",
-                            "duration": dream_duration
-                        }
-                    )
+                    dream_model = config.get("models", {}).get("dream_model", "qwen_qwq-32b")
+                    logger.info(f"Switching to dream model: {dream_model}")
                     
-                    await dream_processor.schedule_dream_session(
-                        duration_minutes=dream_duration,
-                        tensor_connection=tensor_conn,
-                        hpc_connection=hpc_conn,
-                        priority="low"  # Use low priority for background processing
-                    )
-                except Exception as e:
-                    logger.error(f"Error starting dream session: {e}")
-                    activity_tracker.record_activity(
-                        activity_type="system_operation",
-                        details={
-                            "operation": "dream_session",
-                            "state": "error",
-                            "error": str(e)
-                        }
-                    )
+                    # Get the recommended model for dreaming
+                    recommended_model = model_manager.get_recommended_model(ModelPurpose.DREAMING)
+                    if recommended_model:
+                        logger.info(f"Using recommended model for dreaming: {recommended_model}")
+                        # Notify the dream processor to use this model
+                        if dream_processor:
+                            dream_processor.set_model(recommended_model)
                 
-                # Wait for dream session to complete
-                while dream_processor.is_dreaming:
-                    # Periodically check if user has become active during dream session
-                    if activity_tracker.has_recent_activity(seconds=60) or not activity_tracker.is_afk():
-                        # User has become active, consider stopping the dream session
-                        if dream_processor.dream_session_length() > 300:  # If already running > 5 minutes
-                            logger.info("User activity detected, stopping dream session")
-                            try:
-                                await dream_processor.stop_dream_session()
-                            except Exception as e:
-                                logger.error(f"Error stopping dream session: {e}")
-                            break
-                    await asyncio.sleep(30)
+                # Use the dream processor to generate and process dreams
+                if dream_processor:
+                    try:
+                        # Generate a dream
+                        logger.info("Generating dream...")
+                        dream_result = await dream_processor.generate_dream()
+                        
+                        if dream_result and "dream_content" in dream_result:
+                            logger.info(f"Generated dream with ID: {dream_result.get('dream_id', 'unknown')}")
+                            
+                            # Process the dream to extract insights and update knowledge
+                            logger.info("Processing dream for insights...")
+                            insights = await dream_processor.process_dream(dream_result)
+                            
+                            if insights:
+                                logger.info(f"Extracted {len(insights)} insights from dream")
+                                
+                                # Update knowledge graph with insights
+                                if knowledge_graph:
+                                    logger.info("Updating knowledge graph with dream insights...")
+                                    for insight in insights:
+                                        await knowledge_graph.add_node(
+                                            node_id=insight.get("node_id"),
+                                            node_type=insight.get("node_type", "dream_insight"),
+                                            attributes=insight.get("attributes", {})
+                                        )
+                            
+                            # Perform reflection on the dream and its processing
+                            if reflection_engine:
+                                logger.info("Performing reflection on dream processing...")
+                                reflection_result = await reflection_engine.reflect_on_dream(
+                                    dream_content=dream_result.get("dream_content"),
+                                    insights=insights
+                                )
+                                logger.info("Dream reflection complete")
+                    except Exception as e:
+                        logger.error(f"Error in dream processing: {e}")
                 
-                # Record completion of dream session
-                activity_tracker.record_activity(
-                    activity_type="system_operation",
-                    details={
-                        "operation": "dream_session",
-                        "state": "completed"
-                    }
-                )
+                # Switch back to default model
+                if model_manager:
+                    default_model = config.get("models", {})
+                    if isinstance(default_model, dict):
+                        default_model = default_model.get("default_model", "qwen2.5-7b-instruct")
+                    else:
+                        default_model = "qwen2.5-7b-instruct"
+                    logger.info(f"Switching back to default model: {default_model}")
+                    recommended_model = model_manager.get_recommended_model(ModelPurpose.GENERAL)
+                    if recommended_model:
+                        logger.info(f"Using recommended model for general tasks: {recommended_model}")
                 
-                # Wait before checking again
-                # Adjust wait time based on user activity level
-                if activity_tracker.is_extended_afk():
-                    wait_time = 300  # 5 minutes for extended AFK
-                else:
-                    wait_time = 600  # 10 minutes for regular AFK
-                
-                await asyncio.sleep(wait_time)
-            else:
-                # If user is active, check more frequently
-                if activity_tracker.has_recent_activity(seconds=300):
-                    await asyncio.sleep(30)  # Check every 30 seconds during active use
-                else:
-                    await asyncio.sleep(60)  # Check every minute during inactive periods
-                
+                # Reset system state
+                if resource_monitor:
+                    resource_monitor.set_system_state(SystemState.ACTIVE)
+            
+            # Wait before checking again
+            # Adaptive wait time: longer when idle, shorter when active
+            wait_time = 10800 if is_idle else 60  # 3 hours if idle, 1 minute if active
+            logger.info(f"Waiting {wait_time} seconds before next dream processing check")
+            await asyncio.sleep(wait_time)
+            
         except Exception as e:
             logger.error(f"Error in continuous dream processing: {e}")
-            await asyncio.sleep(300)  # Wait 5 minutes before retrying
+            await asyncio.sleep(60)  # Wait a minute before retrying
 
 # Check if the system is idle (no active voice sessions)
 async def check_system_idle():

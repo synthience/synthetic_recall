@@ -39,6 +39,7 @@ from pyvis.network import Network
 import networkx as nx
 import random
 import urllib.parse
+import re
 
 # Import the LM Studio client
 from llm_client import LMStudioClient
@@ -582,10 +583,17 @@ class LucidiaReflectionClient:
         if not stats:
             return
         
-        # Memory counts
-        self.metrics["memory_count"]["stm"].append(stats.get("stm_count", 0))
-        self.metrics["memory_count"]["ltm"].append(stats.get("ltm_count", 0))
-        self.metrics["memory_count"]["mpl"].append(stats.get("mpl_count", 0))
+        # Memory counts - check for both flat and hierarchical memory structures
+        if "hierarchical_memory" in stats and isinstance(stats["hierarchical_memory"], dict):
+            # New API structure with hierarchical memory
+            self.metrics["memory_count"]["stm"].append(stats["hierarchical_memory"].get("stm", 0))
+            self.metrics["memory_count"]["ltm"].append(stats["hierarchical_memory"].get("ltm", 0))
+            self.metrics["memory_count"]["mpl"].append(stats["hierarchical_memory"].get("mpl", 0))
+        else:
+            # Legacy flat structure
+            self.metrics["memory_count"]["stm"].append(stats.get("stm_count", 0))
+            self.metrics["memory_count"]["ltm"].append(stats.get("ltm_count", 0))
+            self.metrics["memory_count"]["mpl"].append(stats.get("mpl_count", 0))
         
         # Integration effectiveness (ratio of memories successfully integrated from STM to LTM)
         if "integration_rate" in stats:
@@ -1734,24 +1742,70 @@ class LucidiaReflectionClient:
             title="Lucidia Chat Help", border_style="blue"
         ))
         
-    async def _create_memory(self, content: str, chat_context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _create_memory(self, content: str, chat_context: Dict[str, Any], significance_override: float = None) -> Dict[str, Any]:
         """Create a new memory from chat content.
         
         Args:
             content: The memory content
             chat_context: The current chat context
+            significance_override: Override the default significance value
             
         Returns:
             The created memory object or None if failed
         """
         try:
-            # Generate significance score if local LLM is available
-            significance = 0.7  # Default significance
-            if self.llm_client:
-                significance = await self.llm_client.evaluate_significance(content)
+            # Check Docker server connectivity first
+            docker_available = False
+            if self.session and not self.config["use_local_llm"]:
+                try:
+                    # Try to ping the Dream API to verify connectivity
+                    health_response = await self._request_with_retry(
+                        self.session.get,
+                        f"{self.dream_api_url}/api/health",
+                        max_retries=1,  # Quick check
+                        initial_delay=0.5
+                    )
+                    docker_available = health_response and health_response.status == 200
+                    logger.info(f"Dream API connectivity: {'Available' if docker_available else 'Unavailable'}")
+                except Exception as e:
+                    logger.warning(f"Docker container connectivity check failed: {e}")
+                    docker_available = False
+            
+            # Generate significance score based on available methods
+            significance = 0.5  # Better default minimum significance
+            
+            if docker_available:
+                # Use Docker container for significance calculation
+                try:
+                    response = await self._request_with_retry(
+                        self.session.post,
+                        f"{self.dream_api_url}/api/dream/evaluate_significance",
+                        json={"content": content},
+                        max_retries=2
+                    )
+                    if response and response.status == 200:
+                        result = await response.json()
+                        if "significance" in result:
+                            significance = result["significance"]
+                            logger.info(f"Using Docker-calculated significance: {significance}")
+                except Exception as e:
+                    logger.error(f"Error calculating significance via Docker: {e}")
+            elif self.llm_client and significance_override is None:
+                # Fallback to local LLM
+                try:
+                    significance = await self.llm_client.evaluate_significance(content)
+                    logger.info(f"Using local LLM significance: {significance}")
+                except Exception as e:
+                    logger.error(f"Error calculating significance via local LLM: {e}")
+            elif significance_override is not None:
+                # Use override if provided
+                significance = significance_override
+                logger.info(f"Using override significance: {significance}")
+            else:
+                logger.info(f"Using default significance: {significance}")
             
             # Create memory object
-            memory_id = f"m_{len(chat_context['memories']) + 1}_{int(time.time())}"            
+            memory_id = f"m_{len(chat_context['memories']) + 1}_{int(time.time())}"
             memory = {
                 "id": memory_id,
                 "content": content,
@@ -1766,18 +1820,19 @@ class LucidiaReflectionClient:
             
             # Save memory to file
             memory_path = os.path.join(self.session_dir, chat_context["session_id"], f"{memory_id}.json")
+            os.makedirs(os.path.dirname(memory_path), exist_ok=True)
             with open(memory_path, "w") as f:
                 json.dump(memory, f, indent=2)
                 
             # Try to add memory to Dream API if connected
-            try:
-                if self.session and not self.config["use_local_llm"]:
+            if docker_available:
+                try:
                     response = await self._request_with_retry(
                         self.session.post,
                         f"{self.dream_api_url}/api/dream/memories",
                         json={
                             "content": content,
-                            "importance": significance,
+                            "significance": significance,  # Changed from importance to significance
                             "metadata": memory["metadata"]
                         }
                     )
@@ -1787,10 +1842,17 @@ class LucidiaReflectionClient:
                         if "memory_id" in result:
                             # Update with server-assigned ID
                             memory["server_id"] = result["memory_id"]
+                            logger.info(f"Memory added to Dream API with ID: {result['memory_id']}")
                     else:
-                        logger.warning("Failed to add memory to Dream API")
-            except Exception as e:
-                logger.error(f"Error adding memory to Dream API: {e}")
+                        logger.warning(f"Failed to add memory to Dream API: {response.status if response else 'No response'}")
+                except Exception as e:
+                    logger.error(f"Error adding memory to Dream API: {e}")
+            else:
+                logger.warning("Skipping Dream API memory creation - Docker not available")
+                
+            # Add to chat context
+            chat_context["memories"].append(memory)
+            console.print(f"[green]Memory created with ID: [bold]{memory_id}[/bold] (significance: {significance:.2f})")
                 
             return memory
             
@@ -1807,20 +1869,78 @@ class LucidiaReflectionClient:
             chat_context: The current chat context
         """
         try:
-            # First, check local memories by simple keyword matching
+            # Expand query with common synonyms and related terms
+            expanded_query_terms = [query.lower()]
+            
+            # Common synonym mappings for frequent recall terms
+            synonyms = {
+                "name": ["identity", "title", "label", "handle", "alias", "moniker"],
+                "my": ["user", "person", "speaker"],
+                "i": ["user", "person", "speaker"],
+                "me": ["user", "person", "speaker"],
+                "remember": ["recall", "memory", "stored", "saved"],
+                "said": ["mentioned", "stated", "noted", "told", "expressed"],
+                "told": ["mentioned", "stated", "noted", "said", "expressed"],
+            }
+            
+            # Add expanded query terms
+            query_words = query.lower().split()
+            for word in query_words:
+                if word in synonyms:
+                    expanded_query_terms.extend(synonyms[word])
+            
+            logger.info(f"Expanded query '{query}' to include: {expanded_query_terms}")
+            
+            # First, check local memories with expanded terms
             local_results = []
+            
+            # Score function to rank results
+            def score_memory(memory_content, query_terms):
+                content_lower = memory_content.lower()
+                # Base score starts at 0
+                score = 0
+                
+                # Add points for exact matches
+                for term in query_terms:
+                    if term in content_lower:
+                        # Exact match gets higher score
+                        score += 1
+                        
+                        # Bonus for term appearing at beginning of content
+                        if content_lower.startswith(term):
+                            score += 0.5
+                            
+                # Add points for containing all original query words
+                if all(word in content_lower for word in query_words):
+                    score += 2
+                    
+                return score
+            
+            # Score all memories
+            scored_memories = []
             for memory in chat_context["memories"]:
-                # Simple keyword matching - in a real system, you'd use embeddings
-                if query.lower() in memory["content"].lower():
-                    local_results.append(memory)
+                memory_score = score_memory(memory["content"], expanded_query_terms)
+                if memory_score > 0:
+                    # Clone the memory and add score
+                    scored_memory = memory.copy()
+                    scored_memory["score"] = memory_score
+                    scored_memories.append(scored_memory)
+            
+            # Sort by score (highest first)
+            scored_memories.sort(key=lambda m: m["score"], reverse=True)
+            
+            # Select top results
+            local_results = scored_memories
             
             # Then try to search from Dream API if available
             api_results = []
             if self.session and not self.config["use_local_llm"]:
                 try:
+                    # Include expanded terms in the API search
+                    expanded_query_str = " OR ".join(expanded_query_terms)
                     response = await self._request_with_retry(
                         self.session.get,
-                        f"{self.dream_api_url}/api/dream/memories/search?query={urllib.parse.quote(query)}"
+                        f"{self.dream_api_url}/api/dream/memories/search?query={urllib.parse.quote(expanded_query_str)}"
                     )
                     
                     if response and response.status == 200:
@@ -1838,13 +1958,18 @@ class LucidiaReflectionClient:
                 table.add_column("ID")
                 table.add_column("Content")
                 table.add_column("Significance")
+                table.add_column("Relevance")
                 table.add_column("Created")
                 
                 for memory in all_results:
+                    # Format score if available, otherwise blank
+                    score_display = f"{memory.get('score', 0):.2f}" if "score" in memory else ""
+                    
                     table.add_row(
                         memory.get("id", "Unknown"),
                         memory.get("content", "")[:50] + ("..." if len(memory.get("content", "")) > 50 else ""),
                         str(round(memory.get("significance", 0) * 100) / 100),
+                        score_display,
                         memory.get("created_at", "Unknown")
                     )
                 
@@ -2059,7 +2184,7 @@ class LucidiaReflectionClient:
             
             with open(chat_path, "w") as f:
                 json.dump(save_data, f, indent=2)
-                
+            
             return chat_path
             
         except Exception as e:
@@ -2076,6 +2201,31 @@ class LucidiaReflectionClient:
             use_local: Whether to use local LLM
         """
         try:
+            # Check for introductions or important user information and auto-create memories
+            introduction_patterns = [
+                # Common introduction patterns
+                r"(?i)my name is (\w+)",  # "My name is Name"
+                r"(?i)i am (\w+)",       # "I am Name"
+                r"(?i)(\w+) here",       # "Name here"
+                r"(?i)this is (\w+)",    # "This is Name"
+                r"(?i)(?:it's|its) (\w+)", # "It's Name"
+            ]
+            
+            # Check if message contains an introduction
+            for pattern in introduction_patterns:
+                match = re.search(pattern, message)
+                if match:
+                    # Extract the name
+                    name = match.group(1)
+                    
+                    # Create a memory about the user's name with high significance
+                    memory_content = f"The user's name is {name}."
+                    logger.info(f"Auto-creating memory for user introduction: {memory_content}")
+                    
+                    # Create memory with higher significance to ensure it's kept
+                    await self._create_memory(memory_content, chat_context, significance_override=0.9)
+                    break
+            
             # Prepare context for LLM
             message_history = chat_context["messages"][-10:] if len(chat_context["messages"]) > 10 else chat_context["messages"]
             
@@ -2314,7 +2464,7 @@ async def main():
                 elif args.type == "metrics":
                     await client.visualize_metrics(output_file=args.output)
                 else:
-                    await client.show_dashboard()
+                    await client.display_evolution_dashboard()
             finally:
                 await client.disconnect()
         

@@ -176,6 +176,14 @@ def get_activity_tracker(request: Request):
     """Get user activity tracker instance"""
     return UserActivityTracker.get_instance()
 
+def get_memory_bridge(request: Request):
+    """Get memory bridge instance for connecting hierarchical and flat memory systems"""
+    return request.app.state.memory_bridge
+
+def get_memory_system(request: Request):
+    """Get hierarchical memory system instance"""
+    return request.app.state.memory_system
+
 
 # ========= Connection Functions =========
 
@@ -649,7 +657,9 @@ async def add_to_knowledge_graph(
 @router.get("/knowledge-graph")
 async def get_knowledge_graph_data(
     request: Request,
-    knowledge_graph: KnowledgeGraph = Depends(get_knowledge_graph)
+    knowledge_graph: KnowledgeGraph = Depends(get_knowledge_graph),
+    self_model: SelfModel = Depends(get_self_model),
+    world_model: WorldModel = Depends(get_world_model)
 ):
     """Get knowledge graph data for visualization.
     
@@ -1623,7 +1633,9 @@ async def get_system_stats(
     dream_processor: DreamProcessor = Depends(get_dream_processor),
     self_model: SelfModel = Depends(get_self_model),
     world_model: WorldModel = Depends(get_world_model),
-    knowledge_graph: KnowledgeGraph = Depends(get_knowledge_graph)
+    knowledge_graph: KnowledgeGraph = Depends(get_knowledge_graph),
+    memory_bridge: Any = Depends(get_memory_bridge),
+    memory_system: Any = Depends(get_memory_system)
 ):
     """Get system statistics including memory counts and state.
     
@@ -1642,7 +1654,9 @@ async def get_system_stats(
             "hierarchical_memory": {
                 "stm": 0,
                 "ltm": 0,
-                "mpl": 0
+                "mpl": 0,
+                "mtm": 0,
+                "lstm": 0
             },
             "knowledge_graph": {
                 "nodes": 0,
@@ -1683,11 +1697,24 @@ async def get_system_stats(
         
         # Get hierarchical memory stats if available
         try:
-            if hasattr(dream_processor, "memory_core"):
+            # First try to get stats from memory_bridge if available
+            if memory_bridge and hasattr(memory_bridge, 'get_stats'):
+                bridge_stats = memory_bridge.get_stats()
+                if 'hierarchical_memories' in bridge_stats and isinstance(bridge_stats['hierarchical_memories'], dict):
+                    # Copy the hierarchical memory stats from the bridge
+                    memory_stats["hierarchical_memory"]["stm"] = bridge_stats['hierarchical_memories'].get('stm', 0)
+                    memory_stats["hierarchical_memory"]["ltm"] = bridge_stats['hierarchical_memories'].get('ltm', 0)
+                    memory_stats["hierarchical_memory"]["mpl"] = bridge_stats['hierarchical_memories'].get('mpl', 0)
+                    
+                    # Also update bridge stats
+                    memory_stats["bridge_stats"]["migrations"] = bridge_stats.get("migrations", 0)
+                    memory_stats["bridge_stats"]["shared_memories"] = bridge_stats.get("shared_memories", 0)
+            # Fallback to direct access if bridge not available
+            elif hasattr(dream_processor, "memory_core"):
                 memory_core = dream_processor.memory_core
-                memory_stats["hierarchical_memory"]["stm"] = len(memory_core.stm.memories)
-                memory_stats["hierarchical_memory"]["ltm"] = len(memory_core.ltm.memories)
-                memory_stats["hierarchical_memory"]["mpl"] = len(memory_core.mpl.memories) if hasattr(memory_core, "mpl") else 0
+                memory_stats["hierarchical_memory"]["stm"] = len(memory_core.stm.memories) if hasattr(memory_core, "stm") and hasattr(memory_core.stm, "memories") else 0
+                memory_stats["hierarchical_memory"]["ltm"] = len(memory_core.ltm.memories) if hasattr(memory_core, "ltm") and hasattr(memory_core.ltm, "memories") else 0
+                memory_stats["hierarchical_memory"]["mpl"] = len(memory_core.mpl.memories) if hasattr(memory_core, "mpl") and hasattr(memory_core.mpl, "memories") else 0
         except Exception as e:
             logger.error(f"Error getting hierarchical memory stats: {e}")
         
@@ -1765,15 +1792,6 @@ async def get_system_stats(
                     pass
         except Exception as e:
             logger.error(f"Error getting self model stats: {e}")
-        
-        # Get memory bridge stats if available
-        try:
-            if memory_bridge:
-                bridge_stats = memory_bridge.get_stats()
-                memory_stats["bridge_stats"]["migrations"] = bridge_stats.get("migrations", 0)
-                memory_stats["bridge_stats"]["shared_memories"] = bridge_stats.get("shared_memories", 0)
-        except Exception as e:
-            logger.error(f"Error getting memory bridge stats: {e}")
             
         return memory_stats
     except Exception as e:
@@ -1783,7 +1801,8 @@ async def get_system_stats(
 @router.get("/spiral-phase")
 async def get_spiral_phase(
     request: Request,
-    dream_processor: DreamProcessor = Depends(get_dream_processor)
+    dream_processor: DreamProcessor = Depends(get_dream_processor),
+    self_model: SelfModel = Depends(get_self_model)
 ):
     """Get the current spiral phase and history.
     
@@ -1797,7 +1816,17 @@ async def get_spiral_phase(
             "phase_metrics": {}
         }
         
-        # Check if dream processor has spiral phase information
+        # First try to get data from self model implementation
+        if hasattr(self_model, "get_spiral_phase"):
+            try:
+                spiral_data = await self_model.get_spiral_phase()
+                response.update(spiral_data)
+                logger.info(f"Retrieved spiral phase data from self model: {response['current_phase']}")
+                return response
+            except Exception as e:
+                logger.error(f"Error getting spiral phase from self model: {e}")
+
+        # Fallback to dream processor
         if hasattr(dream_processor, "spiral_awareness"):
             spiral = dream_processor.spiral_awareness
             response["current_phase"] = getattr(spiral, "current_phase", "unknown")
