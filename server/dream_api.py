@@ -646,6 +646,84 @@ async def add_to_knowledge_graph(
         logger.error(f"Error adding to knowledge graph: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/knowledge-graph")
+async def get_knowledge_graph_data(
+    request: Request,
+    knowledge_graph: KnowledgeGraph = Depends(get_knowledge_graph)
+):
+    """Get knowledge graph data for visualization.
+    
+    Returns nodes and edges from the knowledge graph with additional visualization attributes.
+    """
+    try:
+        if not knowledge_graph:
+            return {
+                "nodes": [],
+                "edges": [],
+                "stats": {
+                    "total_nodes": 0,
+                    "total_edges": 0,
+                    "node_types": {}
+                }
+            }
+            
+        # Get basic stats
+        kg_stats = await knowledge_graph.get_stats() if hasattr(knowledge_graph, "get_stats") else {}
+        
+        # Create a simplified representation suitable for visualization
+        nodes = []
+        edges = []
+        
+        # Add nodes (limit to 100 for performance)
+        node_count = min(getattr(knowledge_graph, "total_nodes", 0), 100)
+        node_types = {}
+        
+        # Try to get graph nodes if possible
+        if hasattr(knowledge_graph, "graph") and hasattr(knowledge_graph.graph, "nodes"):
+            for i, (node_id, data) in enumerate(list(knowledge_graph.graph.nodes(data=True))[:node_count]):
+                node_type = data.get("type", "unknown")
+                node_types[node_type] = node_types.get(node_type, 0) + 1
+                
+                nodes.append({
+                    "id": node_id,
+                    "label": data.get("label", node_id),
+                    "type": node_type,
+                    "domain": data.get("domain", "unknown"),
+                    "relevance": data.get("relevance", 0.5)
+                })
+                
+        # Add edges (limit to 200 for performance)
+        edge_count = min(getattr(knowledge_graph, "total_edges", 0), 200)
+        
+        # Try to get graph edges if possible
+        if hasattr(knowledge_graph, "graph") and hasattr(knowledge_graph.graph, "edges"):
+            node_ids = {node["id"] for node in nodes}  # Only use edges between nodes we've included
+            
+            for i, (source, target, key, data) in enumerate(list(knowledge_graph.graph.edges(data=True, keys=True))):
+                if i >= edge_count:
+                    break
+                    
+                if source in node_ids and target in node_ids:
+                    edges.append({
+                        "source": source,
+                        "target": target,
+                        "type": data.get("type", "unknown"),
+                        "strength": data.get("strength", 0.5)
+                    })
+        
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "stats": {
+                "total_nodes": getattr(knowledge_graph, "total_nodes", 0),
+                "total_edges": getattr(knowledge_graph, "total_edges", 0),
+                "node_types": node_types
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting knowledge graph data: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting knowledge graph data: {str(e)}")
+
 
 # ========= Dream Report Endpoints =========
 
@@ -1432,6 +1510,29 @@ async def test_refine_report(request: Request):
 
 # ========= Test Connection Endpoints =========
 
+@router.get("/geometry", response_model=Dict[str, Any])
+async def get_geometry(
+    model_version: Optional[str] = Query("latest", description="Model version to get geometry for")
+) -> Dict[str, Any]:
+    """
+    Get hypersphere geometry information from the HPC server.
+    
+    Returns:
+        Dictionary with geometry information including dimensions, model version, etc.
+    """
+    try:
+        # Get connection to HPC server
+        hpc_conn = await get_hpc_connection()
+        
+        # Request geometry information
+        geometry_info = await hpc_conn.get_geometry(model_version)
+        
+        # Return to the client
+        return geometry_info
+    except Exception as e:
+        logger.error(f"Error getting geometry information: {e}")
+        raise HTTPException(status_code=500, detail=f"Could not retrieve geometry information: {str(e)}")
+
 @router.post("/test/tensor_connection")
 async def test_tensor_connection() -> Dict[str, Any]:
     """
@@ -1514,3 +1615,200 @@ async def shutdown_connections() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error shutting down connections: {e}")
         return {"status": "error", "message": str(e)}
+
+@router.get("/stats")
+async def get_system_stats(
+    request: Request,
+    memory_client: Any = Depends(get_memory_client),
+    dream_processor: DreamProcessor = Depends(get_dream_processor),
+    self_model: SelfModel = Depends(get_self_model),
+    world_model: WorldModel = Depends(get_world_model),
+    knowledge_graph: KnowledgeGraph = Depends(get_knowledge_graph)
+):
+    """Get system statistics including memory counts and state.
+    
+    Returns statistics from all memory systems and components.
+    """
+    try:
+        # Get memory bridge from the app state if available
+        memory_bridge = request.app.state.memory_bridge if hasattr(request.app.state, "memory_bridge") else None
+        
+        # Memory stats from flat memory system
+        memory_stats = {
+            "flat_memory": {
+                "count": 0,
+                "categories": {}
+            },
+            "hierarchical_memory": {
+                "stm": 0,
+                "ltm": 0,
+                "mpl": 0
+            },
+            "knowledge_graph": {
+                "nodes": 0,
+                "edges": 0,
+                "concepts": 0
+            },
+            "world_model": {
+                "entities": 0,
+                "relationships": 0,
+                "domains": 0
+            },
+            "self_model": {
+                "aspects": 0,
+                "values": 0,
+                "goals": 0
+            },
+            "bridge_stats": {
+                "migrations": 0,
+                "shared_memories": 0
+            },
+            "dream_sessions": len(dream_sessions)
+        }
+        
+        # Get flat memory stats if available
+        try:
+            if hasattr(memory_client, "get_all_memories"):
+                flat_memories = await memory_client.get_all_memories()
+                memory_stats["flat_memory"]["count"] = len(flat_memories)
+                
+                # Count by category
+                categories = {}
+                for memory in flat_memories:
+                    for category in memory.get("categories", []):
+                        categories[category] = categories.get(category, 0) + 1
+                memory_stats["flat_memory"]["categories"] = categories
+        except Exception as e:
+            logger.error(f"Error getting flat memory stats: {e}")
+        
+        # Get hierarchical memory stats if available
+        try:
+            if hasattr(dream_processor, "memory_core"):
+                memory_core = dream_processor.memory_core
+                memory_stats["hierarchical_memory"]["stm"] = len(memory_core.stm.memories)
+                memory_stats["hierarchical_memory"]["ltm"] = len(memory_core.ltm.memories)
+                memory_stats["hierarchical_memory"]["mpl"] = len(memory_core.mpl.memories) if hasattr(memory_core, "mpl") else 0
+        except Exception as e:
+            logger.error(f"Error getting hierarchical memory stats: {e}")
+        
+        # Get knowledge graph stats
+        try:
+            if knowledge_graph:
+                # Get stats from the knowledge graph
+                kg_stats = await knowledge_graph.get_stats() if hasattr(knowledge_graph, "get_stats") else {}
+                
+                # Use the total_nodes and total_edges attributes directly if available
+                memory_stats["knowledge_graph"]["nodes"] = getattr(knowledge_graph, "total_nodes", 0) or kg_stats.get("total_nodes", 0)
+                memory_stats["knowledge_graph"]["edges"] = getattr(knowledge_graph, "total_edges", 0) or kg_stats.get("total_edges", 0)
+                
+                # Get concept count from node type distribution if available
+                node_type_distribution = kg_stats.get("node_type_distribution", {})
+                memory_stats["knowledge_graph"]["concepts"] = node_type_distribution.get("concept", 0)
+        except Exception as e:
+            logger.error(f"Error getting knowledge graph stats: {e}")
+        
+        # Get world model stats
+        try:
+            if world_model:
+                # Try different methods to get entity count
+                try:
+                    if hasattr(world_model, "entities"):
+                        memory_stats["world_model"]["entities"] = len(world_model.entities)
+                    elif hasattr(world_model, "get_entities"):
+                        memory_stats["world_model"]["entities"] = len(await world_model.get_entities())
+                except:
+                    pass
+                    
+                # Try different methods to get relationship count
+                try:
+                    if hasattr(world_model, "relationships"):
+                        memory_stats["world_model"]["relationships"] = len(world_model.relationships)
+                    elif hasattr(world_model, "get_relationships"):
+                        memory_stats["world_model"]["relationships"] = len(await world_model.get_relationships())
+                except:
+                    pass
+                    
+                # Try to get knowledge domains count
+                if hasattr(world_model, "knowledge_domains"):
+                    memory_stats["world_model"]["domains"] = len(world_model.knowledge_domains)
+        except Exception as e:
+            logger.error(f"Error getting world model stats: {e}")
+        
+        # Get self model stats
+        try:
+            if self_model:
+                # Try different methods to get aspects
+                try:
+                    if hasattr(self_model, "aspects"):
+                        memory_stats["self_model"]["aspects"] = len(self_model.aspects)
+                    elif hasattr(self_model, "get_aspects"):
+                        memory_stats["self_model"]["aspects"] = len(await self_model.get_aspects())
+                except:
+                    pass
+                    
+                # Try different methods to get values
+                try:
+                    if hasattr(self_model, "values"):
+                        memory_stats["self_model"]["values"] = len(self_model.values)
+                    elif hasattr(self_model, "get_values"):
+                        memory_stats["self_model"]["values"] = len(await self_model.get_values())
+                except:
+                    pass
+                    
+                # Try different methods to get goals
+                try:
+                    if hasattr(self_model, "goals"):
+                        memory_stats["self_model"]["goals"] = len(self_model.goals)
+                    elif hasattr(self_model, "get_goals"):
+                        memory_stats["self_model"]["goals"] = len(await self_model.get_goals())
+                except:
+                    pass
+        except Exception as e:
+            logger.error(f"Error getting self model stats: {e}")
+        
+        # Get memory bridge stats if available
+        try:
+            if memory_bridge:
+                bridge_stats = memory_bridge.get_stats()
+                memory_stats["bridge_stats"]["migrations"] = bridge_stats.get("migrations", 0)
+                memory_stats["bridge_stats"]["shared_memories"] = bridge_stats.get("shared_memories", 0)
+        except Exception as e:
+            logger.error(f"Error getting memory bridge stats: {e}")
+            
+        return memory_stats
+    except Exception as e:
+        logger.error(f"Error generating system stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating system stats: {str(e)}")
+
+@router.get("/spiral-phase")
+async def get_spiral_phase(
+    request: Request,
+    dream_processor: DreamProcessor = Depends(get_dream_processor)
+):
+    """Get the current spiral phase and history.
+    
+    Returns the current phase of the spiral awareness process and history of phase transitions.
+    """
+    try:
+        # Default response structure
+        response = {
+            "current_phase": "unknown",
+            "phase_history": [],
+            "phase_metrics": {}
+        }
+        
+        # Check if dream processor has spiral phase information
+        if hasattr(dream_processor, "spiral_awareness"):
+            spiral = dream_processor.spiral_awareness
+            response["current_phase"] = getattr(spiral, "current_phase", "unknown")
+            response["phase_history"] = getattr(spiral, "phase_history", [])
+            response["phase_metrics"] = getattr(spiral, "phase_metrics", {})
+        elif hasattr(dream_processor, "get_spiral_phase"):
+            # Alternative method if available
+            spiral_data = await dream_processor.get_spiral_phase()
+            response.update(spiral_data)
+        
+        return response
+    except Exception as e:
+        logger.error(f"Error getting spiral phase: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting spiral phase: {str(e)}")

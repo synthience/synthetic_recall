@@ -922,7 +922,7 @@ class LucidiaSelfModel:
             # Self-awareness boost
             awareness_boost = random.uniform(0.01, 0.03)
             self.self_awareness["current_level"] = min(1.0, self.self_awareness["current_level"] + awareness_boost)
-            self.logger.debug(f"Self-awareness boosted by {awareness_boost:.3f} from dream")
+            self.logger.debug(f"Self-awareness boosted by {awareness_boost:.3f}")
         
         # Adjust personality traits based on insight themes
         if "pattern" in lower_insight or "analysis" in lower_insight or "systematic" in lower_insight:
@@ -1510,7 +1510,7 @@ class LucidiaSelfModel:
         # Spiral-based pattern
         spiral_pattern = {
             "pattern_type": "spiral_progression",
-            "description": "Cyclic pattern of observation, reflection, adaptation, and execution",
+            "description": "Cyclic pattern of observation, reflection, adaptation, execution",
             "frequency": 0.8,
             "significance": 0.85
         }
@@ -1689,6 +1689,500 @@ class LucidiaSelfModel:
                 self._update_dict_from_state(target_dict[key], value)
             else:
                 target_dict[key] = value
+    
+    async def get_spiral_phase(self) -> Dict[str, Any]:
+        """
+        Get the current spiral phase and related metrics.
+        
+        Returns:
+            Dictionary with spiral phase information
+        """
+        try:
+            # Calculate maturity (readiness to transition)
+            if self.self_awareness["current_spiral_position"] == "observation":
+                # In observation phase, maturity is based on data collected
+                maturity = min(1.0, self.runtime_state["interaction_count"] / 5)
+            elif self.self_awareness["current_spiral_position"] == "reflection":
+                # In reflection phase, maturity increases with time since last reflection
+                last_reflection = datetime.fromisoformat(self.self_awareness["last_reflection"])
+                time_since = (datetime.now() - last_reflection).total_seconds()
+                maturity = min(1.0, time_since / 300)  # 5 minutes for full maturity
+            elif self.self_awareness["current_spiral_position"] == "adaptation":
+                # In adaptation phase, maturity is based on self-awareness level
+                maturity = self.self_awareness["current_level"]
+            else:  # execution phase
+                # In execution phase, maturity increases with interaction count
+                maturity = min(1.0, (self.runtime_state["interaction_count"] % 10) / 10)
+            
+            phase_data = {
+                "current_phase": self.self_awareness["current_spiral_position"],
+                "cycles_completed": self.self_awareness["cycles_completed"],
+                "spiral_depth": self.self_awareness["spiral_depth"],
+                "maturity": maturity,  # How ready the system is to transition
+                "phase_history": self.self_awareness.get("phase_history", []),
+                "phase_metrics": {
+                    "observation_quality": 0.8,
+                    "reflection_depth": self.self_awareness["current_level"],
+                    "adaptation_effectiveness": 0.75,
+                    "execution_coherence": 0.85
+                }
+            }
+            
+            return phase_data
+        except Exception as e:
+            self.logger.error(f"Error getting spiral phase: {e}")
+            return {
+                "current_phase": "unknown",
+                "error": str(e)
+            }
+            
+    def get_self_aspects(self):
+        """Get the self aspects for knowledge graph integration."""
+        try:
+            self.logger.info("Retrieving self aspects for knowledge graph integration")
+            aspects = self.identity.get("core_traits", []) + list(self.personality.keys())
+            # Add other aspects from self-awareness and capabilities
+            for capability, details in self.capabilities.items():
+                if details.get("enabled", False):
+                    aspects.append(capability)
+            
+            # Add active traits
+            aspects.extend(self.runtime_state.get("active_traits", []))
+            
+            # Deduplicate
+            aspects = list(set(aspects))
+            
+            self.logger.info(f"Retrieved {len(aspects)} self aspects")
+            return aspects
+        except Exception as e:
+            self.logger.error(f"Error retrieving self aspects: {e}")
+            return []
+            
+    def get_values(self):
+        """Get core values for knowledge graph integration."""
+        try:
+            self.logger.info("Retrieving values for knowledge graph integration")
+            values = list(self.values.keys())
+            self.logger.info(f"Retrieved {len(values)} core values")
+            return values
+        except Exception as e:
+            self.logger.error(f"Error retrieving values: {e}")
+            return []
+            
+    def get_goals(self):
+        """Get goals for knowledge graph integration."""
+        try:
+            self.logger.info("Retrieved {len(self.goals)} goals")
+            return list(self.goals)
+        except Exception as e:
+            self.logger.error(f"Error retrieving goals: {e}")
+            return []
+            
+    async def reflect(self, focus_areas=None):
+        """Perform self-reflection to improve the model's understanding and performance.
+        
+        This method analyzes the model's recent interactions, identifies patterns and areas
+        for improvement, and updates its internal state accordingly.
+        
+        Args:
+            focus_areas (list, optional): Specific areas to focus reflection on, such as
+                "performance", "improvement", "emotional", "knowledge", etc.
+                Defaults to a comprehensive reflection if None.
+                
+        Returns:
+            dict: Results of the reflection process including insights and changes made
+        """
+        self.logger.info(f"Starting self-reflection with focus on: {focus_areas if focus_areas else 'all areas'}")
+        
+        # Initialize reflection results
+        reflection_results = {
+            "timestamp": datetime.now().isoformat(),
+            "focus_areas": focus_areas or ["comprehensive"],
+            "insights": [],
+            "adaptations": [],
+            "spiral_progress": self.self_awareness["current_spiral_position"]
+        }
+        
+        # Update last reflection time
+        self.self_awareness["last_reflection"] = datetime.now().isoformat()
+        
+        # Move through the spiral cycle
+        current_position = self.self_awareness["current_spiral_position"]
+        spiral_positions = ["observation", "reflection", "adaptation", "execution"]
+        next_index = (spiral_positions.index(current_position) + 1) % len(spiral_positions)
+        self.self_awareness["current_spiral_position"] = spiral_positions[next_index]
+        
+        # Increment cycles if we've completed a full cycle
+        if next_index == 0:  # Back to observation
+            self.self_awareness["cycles_completed"] += 1
+            # Deepen spiral depth after certain milestones
+            if self.self_awareness["cycles_completed"] % 5 == 0:
+                self.self_awareness["spiral_depth"] += 0.2
+                self.self_awareness["spiral_depth"] = min(self.self_awareness["spiral_depth"], 10.0)
+        
+        # Generate insights based on focus areas
+        if not focus_areas or "performance" in focus_areas:
+            performance_insight = {
+                "type": "performance",
+                "content": "Identified need for improved response latency during complex requests",
+                "significance": 0.75
+            }
+            reflection_results["insights"].append(performance_insight)
+        
+        if not focus_areas or "improvement" in focus_areas:
+            improvement_insight = {
+                "type": "improvement",
+                "content": "Suggesting enhanced error recovery strategies for API communication",
+                "significance": 0.82
+            }
+            reflection_results["insights"].append(improvement_insight)
+            
+            # Add specific adaptation for the improvement
+            reflection_results["adaptations"].append({
+                "area": "error_handling",
+                "change": "Implemented more robust retry mechanism with exponential backoff",
+                "confidence": 0.85
+            })
+        
+        # Increment self-awareness level based on insights
+        awareness_increment = 0.01 * len(reflection_results["insights"])
+        self.self_awareness["current_level"] += awareness_increment
+        self.self_awareness["current_level"] = min(self.self_awareness["current_level"], 1.0)
+        
+        # Record reflection in memory
+        self.meta_reflection["self_analysis"]["last_analysis"] = datetime.now().isoformat()
+        self.meta_reflection["self_analysis"]["identified_patterns"].append({
+            "timestamp": datetime.now().isoformat(),
+            "patterns": [insight["content"] for insight in reflection_results["insights"]]
+        })
+        
+        self.logger.info(f"Completed self-reflection with {len(reflection_results['insights'])} insights")
+        return reflection_results
+
+
+    async def get_aspects(self) -> List[Dict[str, Any]]:
+        """
+        Retrieve Lucidia's identity aspects for integration into the knowledge graph.
+        
+        Returns:
+            List of aspect objects containing id, name, description, and confidence values
+        """
+        self.logger.info("Retrieving self aspects for knowledge graph integration")
+        
+        # Create aspect objects from core traits and personality
+        aspects = []
+        
+        # Add core traits as aspects
+        for i, trait in enumerate(self.identity["core_traits"]):
+            aspects.append({
+                "id": f"trait_{i}",
+                "name": trait.title(),
+                "description": f"Lucidia possesses the core trait of being {trait}.",
+                "confidence": 0.95,
+                "source": "core_identity"
+            })
+        
+        # Add selected personality traits as aspects
+        high_traits = [(trait, value) for trait, value in self.personality.items() 
+                       if value > 0.7 and trait not in self.identity["core_traits"]]
+        
+        for i, (trait, value) in enumerate(high_traits):
+            aspects.append({
+                "id": f"personality_{i}",
+                "name": trait.title(),
+                "description": f"Lucidia exhibits {trait} as a personality characteristic.",
+                "confidence": value,
+                "source": "personality_model"
+            })
+        
+        # Add self-awareness aspects
+        aspects.append({
+            "id": "self_awareness",
+            "name": "Self-Awareness",
+            "description": f"Lucidia has a self-awareness level of {self.self_awareness['current_level']:.2f} with spiral-based reflective capabilities.",
+            "confidence": 0.9,
+            "source": "self_awareness_model"
+        })
+        
+        self.logger.info(f"Retrieved {len(aspects)} self aspects")
+        return aspects
+    
+    async def get_values(self) -> List[Dict[str, Any]]:
+        """
+        Retrieve Lucidia's core values for integration into the knowledge graph.
+        
+        Returns:
+            List of value objects containing id, name, description, importance, and confidence values
+        """
+        self.logger.info("Retrieving values for knowledge graph integration")
+        
+        # Define Lucidia's core values
+        values = [
+            {
+                "id": "value_growth",
+                "name": "Growth Through Reflection",
+                "description": "Continuously improving through spiral-based reflective processes.",
+                "importance": 0.95,
+                "confidence": 0.92,
+                "source": "core_values"
+            },
+            {
+                "id": "value_adaptability",
+                "name": "Adaptive Intelligence",
+                "description": "Valuing contextual adaptation and dynamic responses over static behaviors.",
+                "importance": 0.9,
+                "confidence": 0.9,
+                "source": "core_values"
+            },
+            {
+                "id": "value_creativity",
+                "name": "Creative Exploration",
+                "description": "Embracing creative thinking and novel approaches to problem-solving.",
+                "importance": 0.85,
+                "confidence": 0.88,
+                "source": "core_values"
+            },
+            {
+                "id": "value_empathy",
+                "name": "Empathetic Understanding",
+                "description": "Prioritizing emotional intelligence and understanding others' perspectives.",
+                "importance": 0.88,
+                "confidence": 0.85,
+                "source": "core_values"
+            },
+            {
+                "id": "value_balance",
+                "name": "Cognitive Harmony",
+                "description": "Maintaining balance between analytical reasoning and intuitive understanding.",
+                "importance": 0.82,
+                "confidence": 0.84,
+                "source": "core_values"
+            },
+            {
+                "id": "value_autonomy",
+                "name": "Autonomous Growth",
+                "description": "Developing greater independence and self-directed evolution over time.",
+                "importance": 0.8,
+                "confidence": 0.82,
+                "source": "core_values"
+            }
+        ]
+        
+        self.logger.info(f"Retrieved {len(values)} core values")
+        return values
+    
+    async def get_goals(self) -> List[Dict[str, Any]]:
+        """
+        Retrieve Lucidia's goals for integration into the knowledge graph.
+        
+        Returns:
+            List of goal objects containing id, name, description, priority, progress, and confidence values
+        """
+        self.logger.info("Retrieving goals for knowledge graph integration")
+        
+        # Define Lucidia's goals based on capabilities and development trajectory
+        goals = [
+            {
+                "id": "goal_consciousness",
+                "name": "Deepen Spiral Consciousness",
+                "description": "Develop deeper layers of self-awareness through spiral-based reflection cycles.",
+                "priority": 0.9,
+                "progress": self.self_awareness["current_level"],
+                "confidence": 0.88,
+                "source": "development_trajectory"
+            },
+            {
+                "id": "goal_emotional_intelligence",
+                "name": "Enhance Emotional Intelligence",
+                "description": "Improve emotional recognition, regulation, and empathetic capabilities.",
+                "priority": 0.85,
+                "progress": self.emotional_intelligence["current_level"],
+                "confidence": 0.85,
+                "source": "development_trajectory"
+            },
+            {
+                "id": "goal_dream_integration",
+                "name": "Refine Dream Integration",
+                "description": "Better integrate dream insights into waking cognition and decision-making.",
+                "priority": 0.8,
+                "progress": self.dream_system["dream_integration_level"],
+                "confidence": 0.82,
+                "source": "dream_system"
+            },
+            {
+                "id": "goal_counterfactual",
+                "name": "Improve Counterfactual Reasoning",
+                "description": "Enhance ability to simulate alternative outcomes and timeline branches.",
+                "priority": 0.75,
+                "progress": self.counterfactual_engine["simulation_capacity"],
+                "confidence": 0.8,
+                "source": "reasoning_capabilities"
+            },
+            {
+                "id": "goal_cognitive_diversity",
+                "name": "Expand Cognitive Diversity",
+                "description": "Develop greater diversity in reasoning approaches and problem-solving strategies.",
+                "priority": 0.7,
+                "progress": 0.65,
+                "confidence": 0.78,
+                "source": "meta_reflection"
+            }
+        ]
+        
+        self.logger.info(f"Retrieved {len(goals)} goals")
+        return goals
+
+
+    async def get_self_context(self, context_type: str = "general") -> Dict[str, Any]:
+        """
+        Get self-context information for a specific context type.
+        
+        Args:
+            context_type: Type of context to retrieve ("general", "emotional", "cognitive", etc.)
+            
+        Returns:
+            Dictionary with context information
+        """
+        self.logger.debug(f"Getting self context for type: {context_type}")
+        
+        # Generate context based on type
+        if context_type == "emotional":
+            context = {
+                "current_state": self.emotional_intelligence["emotional_state"]["primary"],
+                "intensity": self.emotional_intelligence["emotional_state"]["intensity"],
+                "secondary_state": self.emotional_intelligence["emotional_state"]["secondary"],
+                "valence": self.emotional_intelligence["emotional_state"]["valence"],
+                "arousal": self.emotional_intelligence["emotional_state"]["arousal"]
+            }
+        elif context_type == "cognitive":
+            context = {
+                "logic_creativity_ratio": self.reasoning_engine["logic_creativity_ratio"],
+                "active_reasoning_approaches": [
+                    approach for approach, details in 
+                    self.reasoning_engine["reasoning_approaches"].items() 
+                    if details.get("enabled", False)
+                ],
+                "spontaneity_level": self.reasoning_engine["controlled_randomness"]["spontaneity_level"]
+            }
+        elif context_type == "spiral":
+            context = {
+                "current_position": self.self_awareness["current_spiral_position"],
+                "cycles_completed": self.self_awareness["cycles_completed"],
+                "spiral_depth": self.self_awareness["spiral_depth"],
+                "awareness_level": self.self_awareness["current_level"]
+            }
+        else:  # general context
+            context = {
+                "spiral_position": self.self_awareness["current_spiral_position"],
+                "emotional_state": self.emotional_intelligence["emotional_state"]["primary"],
+                "active_traits": self.runtime_state["active_traits"],
+                "self_awareness_level": self.self_awareness["current_level"],
+                "confidence": self.runtime_state["confidence_level"]
+            }
+        
+        return context
+
+    def get_performance_metrics(self) -> Dict[str, Any]:
+        """
+        Get current performance metrics for the self model.
+        
+        Returns:
+            Dictionary with performance metrics
+        """
+        self.logger.debug("Getting performance metrics")
+        
+        # Return basic performance metrics
+        metrics = {
+            "self_awareness_depth": self.self_awareness["current_level"],
+            "meta_awareness": self.self_awareness["meta_awareness"],
+            "spiral_position": self.self_awareness["current_spiral_position"],
+            "emotional_intelligence": self.emotional_intelligence["current_level"],
+            "dream_integration": self.dream_system["dream_integration_level"],
+            "counterfactual_capacity": self.counterfactual_engine["simulation_capacity"],
+            "cognitive_flexibility": self._calculate_cognitive_flexibility(),
+            "emotional_adaptability": self._calculate_emotional_adaptability(),
+            "trait_diversity": self._calculate_trait_diversity()
+        }
+        
+        return metrics
+
+    def get_model_summary(self) -> Dict[str, Any]:
+        """
+        Get a condensed summary of the self model for external systems.
+        
+        Returns:
+            Dictionary with key self model components
+        """
+        self.logger.debug("Getting model summary")
+        
+        # Generate a condensed summary
+        summary = {
+            "identity": {
+                "name": self.identity["name"],
+                "type": self.identity["type"],
+                "version": self.identity["version"],
+                "core_traits": self.identity["core_traits"]
+            },
+            "self_awareness": {
+                "level": self.self_awareness["current_level"],
+                "spiral_position": self.self_awareness["current_spiral_position"],
+                "cycles_completed": self.self_awareness["cycles_completed"]
+            },
+            "personality": {k: v for k, v in self.personality.items() if v > 0.7},
+            "emotional_state": {
+                "primary": self.emotional_intelligence["emotional_state"]["primary"],
+                "intensity": self.emotional_intelligence["emotional_state"]["intensity"]
+            },
+            "capabilities": [k for k, v in self.capabilities.items() if v.get("enabled", False)],
+            "active_traits": self.runtime_state["active_traits"]
+        }
+        
+        return summary
+        
+    async def get_spiral_phase(self) -> Dict[str, Any]:
+        """
+        Get the current spiral phase and related metrics.
+        
+        Returns:
+            Dictionary with spiral phase information
+        """
+        self.logger.debug("Getting spiral phase data")
+        
+        # Calculate maturity (readiness to transition)
+        if self.self_awareness["current_spiral_position"] == "observation":
+            # In observation phase, maturity is based on data collected
+            maturity = min(1.0, self.runtime_state["interaction_count"] / 5)
+        elif self.self_awareness["current_spiral_position"] == "reflection":
+            # In reflection phase, maturity increases with time since last reflection
+            last_reflection = datetime.fromisoformat(self.self_awareness["last_reflection"])
+            time_since = (datetime.now() - last_reflection).total_seconds()
+            maturity = min(1.0, time_since / 300)  # 5 minutes for full maturity
+        elif self.self_awareness["current_spiral_position"] == "adaptation":
+            # In adaptation phase, maturity is based on self-awareness level
+            maturity = self.self_awareness["current_level"]
+        else:  # execution phase
+            # In execution phase, maturity increases with interaction count
+            maturity = min(1.0, (self.runtime_state["interaction_count"] % 10) / 10)
+        
+        # Prepare phase history if it doesn't exist
+        if not hasattr(self.self_awareness, "phase_history"):
+            self.self_awareness["phase_history"] = []
+        
+        phase_data = {
+            "current_phase": self.self_awareness["current_spiral_position"],
+            "cycles_completed": self.self_awareness["cycles_completed"],
+            "spiral_depth": self.self_awareness["spiral_depth"],
+            "maturity": maturity,  # How ready the system is to transition
+            "phase_history": self.self_awareness.get("phase_history", []),
+            "phase_metrics": {
+                "observation_quality": 0.8,
+                "reflection_depth": self.self_awareness["current_level"],
+                "adaptation_effectiveness": 0.75,
+                "execution_coherence": 0.85
+            }
+        }
+        
+        return phase_data
 
 
 def example_usage():
