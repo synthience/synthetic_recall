@@ -54,7 +54,7 @@ class LongTermMemory:
             config: Configuration options
         """
         self.config = {
-            'storage_path': os.path.join('memory', 'ltm_storage'),
+            'storage_path': os.path.join('/app/memory/stored', 'ltm'),  # Use the consistent Docker path
             'significance_threshold': 0.7,  # Minimum significance for storage
             'max_memories': 10000,          # Maximum number of memories to store
             'decay_rate': 0.05,             # Base decay rate (per day)

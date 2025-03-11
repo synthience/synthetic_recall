@@ -1297,3 +1297,117 @@ class ReflectionEngine:
             
         except Exception as e:
             self.logger.error(f"Error storing report in knowledge graph: {e}")
+    
+    async def reflect_on_dream(self, dream_content: str, insights: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Reflect on a dream and its extracted insights to deepen understanding.
+        
+        This method analyzes a dream and its extracted insights, evaluating their
+        quality, coherence, and potential integration into the knowledge graph.
+        
+        Args:
+            dream_content: The content of the dream to reflect on
+            insights: List of insights extracted from the dream
+            
+        Returns:
+            Dictionary containing reflection results and meta-analysis
+        """
+        self.logger.info("Reflecting on dream content and insights")
+        
+        try:
+            if not dream_content or not insights:
+                self.logger.warning("Cannot reflect on empty dream or insights")
+                return {
+                    "status": "error",
+                    "message": "Insufficient content for reflection",
+                    "reflection": ""
+                }
+            
+            # Prepare reflection context
+            insight_summaries = []
+            avg_significance = 0.0
+            valid_insights_count = 0
+            
+            for idx, insight in enumerate(insights):
+                # Handle different insight formats
+                if isinstance(insight, str):
+                    # If insight is a string, use it directly
+                    insight_text = insight
+                    significance = 0.5  # Default significance
+                    insight_summaries.append(f"Insight {idx+1}: {insight_text} (Significance: {significance:.2f})")
+                    avg_significance += significance
+                    valid_insights_count += 1
+                elif isinstance(insight, dict):
+                    # If insight is a dictionary, check different possible structures
+                    if 'attributes' in insight:
+                        # Format with nested attributes
+                        attributes = insight.get("attributes", {})
+                        content = attributes.get('content', '')
+                        significance = attributes.get('significance', 0.5)
+                    else:
+                        # Format with direct keys
+                        content = insight.get('content', '')
+                        significance = insight.get('significance', 0.5)
+                    
+                    if content:  # Only count insights with actual content
+                        insight_summaries.append(f"Insight {idx+1}: {content} (Significance: {significance:.2f})")
+                        avg_significance += significance
+                        valid_insights_count += 1
+            
+            if valid_insights_count == 0:
+                valid_insights_count = 1  # Avoid division by zero
+            
+            insight_text = "\n".join(insight_summaries)
+            
+            # Structure the reflection prompt
+            reflection_prompt = f"""Dream Content:
+{dream_content}
+
+Extracted Insights:
+{insight_text}
+
+Reflection Task: Analyze the dream content and the extracted insights. 
+
+1. Evaluate the coherence and meaning of the dream
+2. Assess the quality and relevance of the extracted insights
+3. Identify any missed opportunities or alternative interpretations
+4. Suggest potential connections to existing knowledge
+5. Provide a meta-cognitive assessment of this dream processing
+"""
+
+            # Use the language model to generate reflection
+            if self.llm_service:
+                reflection_response = await self.llm_service.generate(
+                    prompt=reflection_prompt,
+                    max_tokens=1024,
+                    temperature=0.7
+                )
+                reflection_text = reflection_response.get("text", "")
+            else:
+                self.logger.warning("No LLM service available for dream reflection")
+                reflection_text = "Reflection unavailable: LLM service not configured"
+            
+            # Store the reflection result
+            result = {
+                "status": "success",
+                "timestamp": time.time(),
+                "dream_length": len(dream_content),
+                "num_insights": valid_insights_count,
+                "reflection": reflection_text,
+                "metadata": {
+                    "avg_insight_significance": avg_significance / valid_insights_count,
+                    "reflection_length": len(reflection_text)
+                }
+            }
+            
+            # Update reflection stats
+            self.review_stats["total_refinements"] += 1
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Error during dream reflection: {e}")
+            return {
+                "status": "error",
+                "message": f"Reflection error: {str(e)}",
+                "reflection": ""
+            }

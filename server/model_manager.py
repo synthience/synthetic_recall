@@ -83,33 +83,55 @@ class ModelManager:
     def _load_model_configs(self) -> None:
         """Load model configurations from file"""
         try:
+            # Create config directory if it doesn't exist
             config_dir = os.path.dirname(self.config_path)
             os.makedirs(config_dir, exist_ok=True)
             
             # If config doesn't exist, create default config
             if not os.path.exists(self.config_path):
+                logger.warning(f"Model configuration file not found at {self.config_path}, creating default")
                 self._create_default_config()
                 
-            with open(self.config_path, 'r') as f:
-                config_data = json.load(f)
+            # Try to load configuration from file
+            try:
+                with open(self.config_path, 'r') as f:
+                    config_data = json.load(f)
                 
-            for model_name, model_data in config_data.get('models', {}).items():
-                purposes = [ModelPurpose(p) for p in model_data.get('purposes', ['general'])]
+                # Validate config_data is a dictionary
+                if not isinstance(config_data, dict):
+                    logger.error(f"Invalid configuration format: expected dictionary, got {type(config_data)}")
+                    raise ValueError("Invalid configuration format")
+                    
+                # Process model definitions
+                models_data = config_data.get('models', {})
+                if not models_data:
+                    logger.warning("No models defined in configuration, using defaults")
+                    self._create_default_models()
+                    return
+                    
+                for model_name, model_data in models_data.items():
+                    purposes = [ModelPurpose(p) for p in model_data.get('purposes', ['general'])]
+                    
+                    self.models[model_name] = ModelProfile(
+                        name=model_name,
+                        purposes=purposes,
+                        context_length=model_data.get('context_length', 4096),
+                        strength=model_data.get('strength', 0.7),
+                        speed=model_data.get('speed', 0.7),
+                        resource_usage=model_data.get('resource_usage', {'memory': 0.5, 'cpu': 0.5}),
+                        endpoint=model_data.get('endpoint', None)
+                    )
                 
-                self.models[model_name] = ModelProfile(
-                    name=model_name,
-                    purposes=purposes,
-                    context_length=model_data.get('context_length', 4096),
-                    strength=model_data.get('strength', 0.7),
-                    speed=model_data.get('speed', 0.7),
-                    resource_usage=model_data.get('resource_usage', {'memory': 0.5, 'cpu': 0.5}),
-                    endpoint=model_data.get('endpoint', None)
-                )
-                
-            # Set default model if specified in config
-            if 'default_model' in config_data and config_data['default_model'] in self.models:
-                self.default_model = config_data['default_model']
-                self.active_model = self.default_model
+                # Set default model if specified in config
+                if 'default_model' in config_data and config_data['default_model'] in self.models:
+                    self.default_model = config_data['default_model']
+                    self.active_model = self.default_model
+            except json.JSONDecodeError as e:
+                logger.error(f"Error parsing model configuration: {e}")
+                self._create_default_models()
+            except FileNotFoundError:
+                logger.error(f"Configuration file not found at {self.config_path} after creation attempt")
+                self._create_default_models()
                 
         except Exception as e:
             logger.error(f"Error loading model configurations: {e}")
@@ -127,7 +149,7 @@ class ModelManager:
                     "speed": 0.7,
                     "resource_usage": {"memory": 0.7, "cpu": 0.7}
                 },
-                "phi3.5-mini": {
+                "phi-3.1-mini-128k-instruct": {
                     "purposes": ["general", "memory", "reflection"],
                     "context_length": 4096,
                     "strength": 0.6,
@@ -180,8 +202,8 @@ class ModelManager:
                 speed=0.7,
                 resource_usage={"memory": 0.7, "cpu": 0.7}
             ),
-            "phi3.5-mini": ModelProfile(
-                name="phi3.5-mini",
+            "phi-3.1-mini-128k-instruct": ModelProfile(
+                name="phi-3.1-mini-128k-instruct",
                 purposes=[ModelPurpose.GENERAL, ModelPurpose.MEMORY_PROCESSING, ModelPurpose.REFLECTION],
                 context_length=4096,
                 strength=0.6,

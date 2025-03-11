@@ -14,7 +14,7 @@
         "cpu": 0.7
       }
     },
-    "phi3.5-mini": {
+    "phi-3.1-mini-128k-instruct": {
       "purposes": [
         "general",
         "memory",

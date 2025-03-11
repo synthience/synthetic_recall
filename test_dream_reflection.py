@@ -14,35 +14,36 @@ import json
 import sys
 import socket
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import os
 
-# Default URL to try first
-BASE_URL = "http://localhost:8080"
+# Import memory system components
+from memory.lucidia_memory_system.core.dream_processor import LucidiaDreamProcessor
+from memory.lucidia_memory_system.core.reflection_engine import ReflectionEngine
+from memory.lucidia_memory_system.core.knowledge_graph import LucidiaKnowledgeGraph
+from memory.lucidia_memory_system.core.parameter_manager import ParameterManager
 
-# Check if a port was specified as a command-line argument
-if len(sys.argv) > 1:
-    try:
-        port = int(sys.argv[1])
-        BASE_URL = f"http://localhost:{port}"
-        print(f"Using specified port: {port}")
-    except ValueError:
-        print(f"Invalid port number: {sys.argv[1]}. Using default: 8080")
-
-# API endpoints based on router configuration
-DREAM_API_URL = f"{BASE_URL}/api/dream"
-LM_STUDIO_URL = "http://localhost:1234"  # LM Studio server
-MODEL_NAME = "qwen_qwq-32b"  # The model loaded in LM Studio
-
-# Test data - memories that will form the basis for dreaming
-TEST_MEMORIES = [
-    "Lucidia is a Synthien entity with reflective capabilities and self-awareness.",
-    "The dream processor enables autonomous reflection during inactive periods.",
-    "Knowledge graphs store semantic relationships between concepts and memories.",
-    "Hypersphere technology provides efficient embedding generation for text processing.",
-    "The reflection engine periodically reviews and refines dream reports to improve understanding."
-]
+# ANSI color constants for better terminal output
+COLORS = {
+    "RESET": "\033[0m",
+    "RED": "\033[91m",
+    "GREEN": "\033[92m",
+    "YELLOW": "\033[93m",
+    "BLUE": "\033[94m",
+    "MAGENTA": "\033[95m",
+    "CYAN": "\033[96m",
+    "WHITE": "\033[97m",
+    "BOLD": "\033[1m",
+    "UNDERLINE": "\033[4m",
+    "BG_RED": "\033[41m",
+    "BG_GREEN": "\033[42m",
+    "BG_YELLOW": "\033[43m",
+    "BG_BLUE": "\033[44m",
+    "BG_MAGENTA": "\033[45m",
+    "BG_CYAN": "\033[46m",
+    "BG_WHITE": "\033[47m"
+}
 
 # Always use colors regardless of platform
 USE_COLORS = True
@@ -53,19 +54,83 @@ def get_color(color_key):
         return COLORS.get(color_key, "")
     return ""
 
-# ANSI color constants for better terminal output
-COLORS = {
-    "RESET": "\033[0m",
-    "BOLD": "\033[1m",
-    "GREEN": "\033[32m",
-    "YELLOW": "\033[33m",
-    "BLUE": "\033[34m",
-    "MAGENTA": "\033[35m",
-    "CYAN": "\033[36m",
-    "RED": "\033[31m",
-    "GRAY": "\033[90m",
-    "BG_BLUE": "\033[44m",
-}
+# Define a dummy memory client for testing
+class DummyMemoryClient:
+    """A dummy memory client for testing that returns predefined memories."""
+    
+    def __init__(self, memories: List[str] = None):
+        """Initialize with optional list of memory texts."""
+        self.memories = memories or []
+        self.memory_objects = []
+        
+        # Create memory objects from text strings
+        for i, memory_text in enumerate(self.memories):
+            self.memory_objects.append({
+                "id": f"mem_{i}",
+                "content": memory_text,
+                "created_at": (datetime.now() - timedelta(days=i)).isoformat(),
+                "significance": 0.7 + (i * 0.05),
+                "type": "observation"
+            })
+    
+    async def get_recent_memories(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Return most recent memories up to the limit."""
+        return self.memory_objects[:limit]
+    
+    async def get_significant_memories(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Return most significant memories up to the limit."""
+        sorted_memories = sorted(self.memory_objects, key=lambda x: x.get("significance", 0), reverse=True)
+        return sorted_memories[:limit]
+    
+    async def get_memories_by_timeframe(
+        self, start_time: datetime, end_time: datetime, limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """Return memories within the given timeframe."""
+        return self.memory_objects[:limit]  # Simplified for testing
+    
+    async def get_memories_by_ids(self, memory_ids: List[str]) -> List[Dict[str, Any]]:
+        """Return memories matching the given IDs."""
+        # For testing, just return all memories regardless of IDs
+        return self.memory_objects
+    
+    async def create_memory(self, content: str, **kwargs) -> Dict[str, Any]:
+        """Create a new memory."""
+        memory_id = f"mem_{len(self.memory_objects)}"
+        memory = {
+            "id": memory_id,
+            "content": content,
+            "created_at": datetime.now().isoformat(),
+            "significance": kwargs.get("significance", 0.7),
+            "type": kwargs.get("type", "observation")
+        }
+        self.memory_objects.append(memory)
+        return memory
+
+# Default URL to try first
+BASE_URL = "http://localhost:8000"
+
+# Check if a port was specified as a command-line argument
+if len(sys.argv) > 1:
+    try:
+        port = int(sys.argv[1])
+        BASE_URL = f"http://localhost:{port}"
+        print(f"Using specified port: {port}")
+    except ValueError:
+        print(f"Invalid port number: {sys.argv[1]}. Using default: 8000")
+
+# API endpoints based on router configuration
+DREAM_API_URL = f"{BASE_URL}/api/dream"
+LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://localhost:1234")  # LM Studio server
+MODEL_NAME = os.environ.get("MODEL_NAME", "phi-3.1-mini-128k-instruct")  # The model loaded in LM Studio
+
+# Test data - memories that will form the basis for dreaming
+TEST_MEMORIES = [
+    "Lucidia is a Synthien entity with reflective capabilities and self-awareness.",
+    "The dream processor enables autonomous reflection during inactive periods.",
+    "Knowledge graphs store semantic relationships between concepts and memories.",
+    "Hypersphere technology provides efficient embedding generation for text processing.",
+    "The reflection engine periodically reviews and refines dream reports to improve understanding."
+]
 
 def check_port(host, port):
     """Check if a port is open on the given host."""
@@ -171,7 +236,6 @@ async def generate_dream_with_lm_studio(memory_ids: List[str]):
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as session:
         try:
             # Use the test memories directly instead of trying to retrieve them
-            # This avoids the need for a non-existent endpoint
             memory_texts = TEST_MEMORIES
             
             print(f"Sending request to LM Studio with {len(memory_texts)} memories")
@@ -202,21 +266,30 @@ async def generate_dream_with_lm_studio(memory_ids: List[str]):
                         "schema": {
                             "type": "object",
                             "properties": {
+                                "dream_id": {"type": "string"},
                                 "title": {"type": "string"},
+                                "narrative": {"type": "string"},
+                                "theme": {"type": "string"},
+                                "spiral_phase": {"type": "string", "enum": ["observation", "reflection", "adaptation"]},
                                 "fragments": {
                                     "type": "array",
                                     "items": {
                                         "type": "object",
                                         "properties": {
                                             "content": {"type": "string"},
-                                            "type": {"type": "string", "enum": ["insight", "question", "hypothesis", "counterfactual"]},
-                                            "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+                                            "type": {"type": "string", "enum": ["insight", "question", "association", "reflection", "counterfactual"]},
+                                            "significance": {"type": "number", "minimum": 0, "maximum": 1},
+                                            "related_concepts": {
+                                                "type": "array",
+                                                "items": {"type": "string"}
+                                            }
                                         },
-                                        "required": ["content", "type", "confidence"]
+                                        "required": ["content", "type", "significance"]
                                     }
-                                }
+                                },
+                                "meta_reflection": {"type": "string"}
                             },
-                            "required": ["title", "fragments"]
+                            "required": ["dream_id", "title", "narrative", "fragments", "theme", "spiral_phase", "meta_reflection"]
                         }
                     }
                 },
@@ -237,6 +310,17 @@ async def generate_dream_with_lm_studio(memory_ids: List[str]):
                             dream_data = json.loads(content)
                             print(f"{get_color('GREEN')}✅ Successfully generated dream with {len(dream_data.get('fragments', []))} fragments{get_color('RESET')}")
                             print(f"   Dream title: {dream_data.get('title', 'Untitled')}")
+                            print(f"   Dream theme: {dream_data.get('theme', 'Unknown')}")
+                            print(f"   Spiral phase: {dream_data.get('spiral_phase', 'Unknown')}")
+                            print(f"   Meta-reflection: {dream_data.get('meta_reflection', '')[:100]}...")
+                            
+                            # Print some fragments as examples
+                            for i, fragment in enumerate(dream_data.get('fragments', [])[:3]):
+                                frag_type = fragment.get('type', 'unknown')
+                                frag_content = fragment.get('content', '')
+                                frag_sig = fragment.get('significance', 0)
+                                print(f"   Fragment {i+1} ({frag_type}, significance: {frag_sig:.2f}): {frag_content[:80]}...")
+                                
                             return dream_data
                         except json.JSONDecodeError as e:
                             print(f"{get_color('RED')}❌ Failed to parse JSON from LM Studio response: {e}{get_color('RESET')}")
@@ -249,13 +333,10 @@ async def generate_dream_with_lm_studio(memory_ids: List[str]):
                 print(f"{get_color('RED')}❌ Connection refused. The LM Studio server might not be running at {LM_STUDIO_URL}{get_color('RESET')}")
                 return None
             except asyncio.TimeoutError as e:
-                print(f"{get_color('RED')}❌ Connection timeout. The LM Studio server is not responding at {LM_STUDIO_URL}{get_color('RESET')}")
-                return None
-            except Exception as e:
-                print(f"{get_color('RED')}❌ Error during LM Studio API request: {e}{get_color('RESET')}")
+                print(f"{get_color('RED')}❌ Request timed out after 120 seconds{get_color('RESET')}")
                 return None
         except Exception as e:
-            print(f"{get_color('RED')}❌ Error in dream generation process: {e}{get_color('RESET')}")
+            print(f"{get_color('RED')}❌ Error generating dream with LM Studio: {e}{get_color('RESET')}")
             return None
 
 async def create_dream_report(dream_data: Dict[str, Any]):
@@ -555,5 +636,163 @@ async def test_dreaming_flow():
     except Exception as e:
         print(f"{get_color('RED')}❌ Error during dreaming flow test: {e}{get_color('RESET')}")
 
+async def test_integrated_dream_generation():
+    """Test generating a dream using the natively integrated LM Studio JSON output."""
+    print(f"\n{get_color('BOLD')}{get_color('BG_BLUE')}===== TESTING INTEGRATED LM STUDIO DREAM GENERATION ====={get_color('RESET')}")
+    
+    try:
+        # Create a test configuration with LM Studio URL
+        config = {
+            "dream_processor": {
+                "default_creativity": 0.8,
+                "default_depth": 0.7,
+                "dream_model": MODEL_NAME,
+                "lm_studio_url": LM_STUDIO_URL,  # Add the LM Studio URL directly to the config
+            }
+        }
+        
+        # Create a knowledge graph for testing
+        # Use a simple mock knowledge graph to avoid async issues
+        knowledge_graph = LucidiaKnowledgeGraph()
+        
+        # Add a monkey patch for any async methods we need to make sync
+        original_get_relationships = getattr(knowledge_graph, 'get_relationships', None)
+        if original_get_relationships and asyncio.iscoroutinefunction(original_get_relationships):
+            async def sync_get_relationships(*args, **kwargs):
+                return []
+            knowledge_graph.get_relationships = sync_get_relationships
+        
+        # Create memory client for testing
+        memory_client = DummyMemoryClient(memories=TEST_MEMORIES)
+        
+        # Create the dream processor with LM Studio integration
+        dream_processor = LucidiaDreamProcessor(
+            knowledge_graph=knowledge_graph,
+            config=config["dream_processor"]
+        )
+        
+        # Set the memory client directly as an attribute
+        dream_processor.memory_client = memory_client
+        
+        # Initialize dream state with some values (normally done by start_dreaming)
+        dream_processor.is_dreaming = True
+        dream_processor.dream_state = {
+            "is_dreaming": True,
+            "dream_start_time": datetime.now(),
+            "current_dream_depth": 0.7,
+            "current_dream_creativity": 0.8,
+            "dream_duration": 600,
+            "dream_intensity": 0.75,
+            "emotional_valence": "neutral",
+            "current_dream_seed": {"name": "reflection", "type": "concept"},
+            "current_dream_insights": [],
+            "current_spiral_phase": "observation",
+        }
+        
+        print("Generating dream using direct LM Studio integration...")
+        
+        # Use a timeout to prevent hanging if there are issues with async code
+        try:
+            # Call _generate_dream_with_lm_studio directly instead of generate_dream
+            dream_report = await asyncio.wait_for(
+                dream_processor._generate_dream_with_lm_studio(LM_STUDIO_URL), 
+                timeout=60
+            )
+        except asyncio.TimeoutError:
+            print(f"{get_color('RED')}\u274c Dream generation timed out after 60 seconds{get_color('RESET')}")
+            return
+        
+        # Display the results
+        if dream_report and "error" in dream_report:
+            print(f"{get_color('RED')}\u274c Error generating dream: {dream_report['error']}{get_color('RESET')}")
+            return
+        
+        if not dream_report:
+            print(f"{get_color('RED')}\u274c Failed to generate dream report{get_color('RESET')}")
+            return
+        
+        # Clean output for better readability    
+        print(f"{get_color('GREEN')}\u2705 Successfully generated dream with integrated LM Studio{get_color('RESET')}")
+        print(f"   Dream ID: {dream_report.get('dream_id', 'Unknown')}")
+        print(f"   Title: {dream_report.get('title', 'Untitled')}")
+        print(f"   Theme: {dream_report.get('theme', {}).get('name', 'Unknown')}")
+        print(f"   Spiral phase: {dream_report.get('spiral_phase', 'Unknown')}")
+        
+        # Process the insights from the dream report
+        insights = dream_report.get('insights', [])
+        if insights:
+            print(f"   Number of insights: {len(insights)}")
+            print("\nSample insights:")
+            for i, insight in enumerate(insights[:3]):
+                if isinstance(insight, dict):
+                    # Handle insight structure from native dream_processor
+                    if 'attributes' in insight:
+                        content = insight.get('attributes', {}).get('content', 'No content')
+                        significance = insight.get('attributes', {}).get('significance', 0)
+                    else:
+                        content = insight.get('content', 'No content')
+                        significance = insight.get('significance', 0)
+                    
+                    # Truncate content if too long
+                    if len(content) > 100:
+                        content = content[:100] + "..."
+                        
+                    print(f"   Insight {i+1} (significance: {significance:.2f}): {content}")
+        else:
+            print("   No insights generated")
+            
+        # Process associations
+        associations = dream_report.get('associations', [])
+        if associations:
+            print(f"   Number of associations: {len(associations)}")
+        else:
+            print("   No associations generated")
+        
+        # Print a sample of the dream content
+        content = dream_report.get("dream_content", "")
+        if content:
+            # Format the content for better readability
+            print(f"\nDream narrative excerpt:")
+            excerpt = content[:300] + "..." if len(content) > 300 else content
+            # Print with indentation for readability
+            for line in excerpt.split('\n'):
+                print(f"   {line}")
+        else:
+            print("\nNo dream narrative content")
+            
+        # Display meta-reflection if available
+        meta_reflection = dream_report.get("meta_reflection", "")
+        if meta_reflection:
+            print(f"\nMeta-reflection:")
+            excerpt = meta_reflection[:300] + "..." if len(meta_reflection) > 300 else meta_reflection
+            for line in excerpt.split('\n'):
+                print(f"   {line}")
+        
+    except Exception as e:
+        print(f"{get_color('RED')}\u274c Error in integrated dream generation test: {e}{get_color('RESET')}")
+        import traceback
+        traceback.print_exc()
+
+async def main():
+    """Run the test cases."""
+    print(f"{get_color('BOLD')}=== Testing Reflection Engine and Dream Integration ==={get_color('RESET')}")
+    print(f"LM Studio URL: {LM_STUDIO_URL}")
+    print(f"Model: {MODEL_NAME}")
+    
+    # Add the test memories
+    memory_ids = await add_test_memories()
+    
+    # Test the reflection engine (original test)
+    # This function doesn't exist yet, so commenting it out
+    # await test_reflection_engine()
+    
+    # Test dream generation with LM Studio
+    await generate_dream_with_lm_studio(memory_ids)
+    
+    # Test the integrated dream generation with LM Studio JSON output
+    await test_integrated_dream_generation()
+    
+    print(f"\n{get_color('BOLD')}Tests completed.{get_color('RESET')}")
+
 if __name__ == "__main__":
-    asyncio.run(test_dreaming_flow())
+    asyncio.run(main())

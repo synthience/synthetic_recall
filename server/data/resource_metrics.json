@@ -1,0 +1,147 @@
+{
+  "current": {
+    "cpu": 0.0,
+    "memory": 43.4,
+    "disk": 48.6,
+    "gpu": 0.0,
+    "network": {
+      "sent": 253654,
+      "received": 18602576,
+      "time": 1741659360.2041094
+    }
+  },
+  "averages": {
+    "cpu_avg_5min": 0.0,
+    "cpu_avg_15min": 0.0,
+    "cpu_avg_60min": 0.0,
+    "memory_avg_5min": 43.4,
+    "memory_avg_15min": 43.4,
+    "memory_avg_60min": 43.4
+  },
+  "process_stats": {
+    "python.exe": {
+      "cpu": 0.0,
+      "memory": 192131072,
+      "updated_at": 1741569012.4887073
+    },
+    "python": {
+      "cpu": 0.0,
+      "memory": 413306880,
+      "updated_at": 1741659360.2048502
+    }
+  },
+  "model_performance": {
+    "response_times": {},
+    "token_rates": {}
+  },
+  "hourly_metrics": {
+    "2025-03-10-01": {
+      "cpu_avg": 38.0,
+      "memory_avg": 86.8,
+      "disk_avg": 91.1,
+      "response_times": {
+        "qwen2.5-7b-instruct": 1.8,
+        "phi-3.1-mini-128k-instruct": 1.2,
+        "gemma2-9b-it": 0.95
+      },
+      "token_rates": {
+        "qwen2.5-7b-instruct": 83.33333333333333,
+        "phi-3.1-mini-128k-instruct": 166.66666666666669,
+        "gemma2-9b-it": 263.15789473684214
+      },
+      "timestamp": 1741569013.373903
+    },
+    "2025-03-10-16": {
+      "cpu_avg": 0.2,
+      "memory_avg": 36.9,
+      "disk_avg": 48.6,
+      "response_times": {},
+      "token_rates": {},
+      "timestamp": 1741622680.5622327
+    },
+    "2025-03-10-17": {
+      "cpu_avg": 0.9,
+      "memory_avg": 36.8,
+      "disk_avg": 48.6,
+      "response_times": {},
+      "token_rates": {},
+      "timestamp": 1741629495.7254078
+    },
+    "2025-03-10-18": {
+      "cpu_avg": 1.8,
+      "memory_avg": 36.7,
+      "disk_avg": 48.6,
+      "response_times": {},
+      "token_rates": {},
+      "timestamp": 1741633186.6484723
+    },
+    "2025-03-10-19": {
+      "cpu_avg": 8.6,
+      "memory_avg": 36.6,
+      "disk_avg": 48.6,
+      "response_times": {},
+      "token_rates": {},
+      "timestamp": 1741635473.1915796
+    },
+    "2025-03-10-20": {
+      "cpu_avg": 0.3,
+      "memory_avg": 27.9,
+      "disk_avg": 48.6,
+      "response_times": {},
+      "token_rates": {},
+      "timestamp": 1741640151.0527227
+    },
+    "2025-03-11-01": {
+      "cpu_avg": 0.1,
+      "memory_avg": 29.0,
+      "disk_avg": 48.6,
+      "response_times": {},
+      "token_rates": {},
+      "timestamp": 1741657112.1582937
+    },
+    "2025-03-11-02": {
+      "cpu_avg": 0.0,
+      "memory_avg": 43.4,
+      "disk_avg": 48.6,
+      "response_times": {},
+      "token_rates": {},
+      "timestamp": 1741659360.2049224
+    }
+  },
+  "daily_metrics": {
+    "2025-03-10": {
+      "cpu_avg": 8.299999999999999,
+      "memory_avg": 43.61666666666667,
+      "disk_avg": 55.68333333333334,
+      "hours_recorded": 6,
+      "timestamp": 1741640151.052737
+    },
+    "2025-03-11": {
+      "cpu_avg": 0.05,
+      "memory_avg": 36.2,
+      "disk_avg": 48.6,
+      "hours_recorded": 2,
+      "timestamp": 1741659360.204936
+    }
+  },
+  "resource_allocation": {
+    "memory": {
+      "memory_system": 2624637889.306123,
+      "llm_service": 2657453101.9755106,
+      "dream_processor": 2019179674.644898,
+      "knowledge_graph": 1917777159.3142858,
+      "reflection_engine": 1547939187.9836736,
+      "embedding_service": 1312318944.6530614,
+      "api_server": 1009589837.322449
+    },
+    "cpu": {
+      "memory_system": 192.75510204081633,
+      "llm_service": 178.9795918367347,
+      "dream_processor": 155.20408163265304,
+      "knowledge_graph": 136.42857142857142,
+      "reflection_engine": 117.65306122448979,
+      "embedding_service": 98.87755102040816,
+      "api_server": 80.10204081632652
+    }
+  }
+}
