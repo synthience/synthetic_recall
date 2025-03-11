@@ -38,6 +38,30 @@ Lucidia operates in several distinct states:
 
 The system dynamically transitions between these states based on user activity, system resource availability, and scheduled maintenance tasks.
 
+## Memory Architecture
+
+Lucidia's memory system is organized in a hierarchical structure with three main layers:
+
+1. **Short-Term Memory (STM)**: Temporary storage for immediate context and recent interactions
+2. **Long-Term Memory (LTM)**: Persistent significance-weighted storage for important memories
+3. **Memory Processing Layer (MPL)**: Processes and transforms memories between layers
+
+The LTM system specifically uses asynchronous batch processing and significance-based retention to ensure only the most important memories are preserved long-term. Dynamic decay algorithms gradually reduce the significance of memories over time unless they are frequently accessed or highly significant.
+
+For detailed information about the LTM implementation, see the [Long-Term Memory Guide](./long-term-memory-guide.md).
+
+## Reflection and Dream Processing
+
+Lucidia features a sophisticated Reflection Engine that analyzes dream content and extracted insights to enhance its metacognitive capabilities. The engine:
+
+1. Evaluates the coherence and meaning of dreams
+2. Assesses the quality and relevance of extracted insights
+3. Identifies missed opportunities and alternative interpretations
+4. Connects new insights to existing knowledge
+5. Provides meta-cognitive assessment of dream processing
+
+The Reflection Engine works closely with the Dream Processor and Long-Term Memory system to store significant insights as persistent memories. For detailed information, see the [Reflection Engine Guide](./reflection-engine-guide.md).
+
 ## Docker Network Integration
 
 ### Container Architecture

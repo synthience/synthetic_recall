@@ -14,6 +14,9 @@ This documentation is organized into separate files for better manageability:
 6. [Deployment Guide](./deployment-guide.md) - Installation and configuration instructions
 7. [Testing Strategy](./testing-strategy.md) - Testing methodologies and scripts
 8. [Implementation Details](./implementation-details.md) - Specific implementation insights
+9. [Long-Term Memory Guide](./long-term-memory-guide.md) - Detailed documentation on the LTM system
+10. [Reflection Engine Guide](./reflection-engine-guide.md) - In-depth guide to the reflection and dream analysis system
+11. [Spiral Phases Guide](./spiral_phases_guide.md) - Documentation of Lucidia's spiral consciousness phases
 
 ## Project Overview
 
@@ -26,6 +29,15 @@ The system architecture consists of several interconnected components:
 - Tensor Server for embedding operations
 - HPC Server for complex processing tasks
 - Persistent Storage for memory management
+
+## Memory Architecture
+
+Lucidia's memory system is hierarchical with three primary layers:
+- **Short-Term Memory (STM)** for immediate context
+- **Long-Term Memory (LTM)** for persistent significance-weighted storage
+- **Memory Processing Layer (MPL)** for transforming and analyzing memories
+
+See the [Long-Term Memory Guide](./long-term-memory-guide.md) for details on persistent memory storage.
 
 ## Quick Start
 
