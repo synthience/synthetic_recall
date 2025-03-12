@@ -1381,7 +1381,15 @@ Reflection Task: Analyze the dream content and the extracted insights.
                     max_tokens=1024,
                     temperature=0.7
                 )
-                reflection_text = reflection_response.get("text", "")
+                
+                # Handle both dictionary and string responses from LLM service
+                if isinstance(reflection_response, dict):
+                    reflection_text = reflection_response.get("text", "")
+                elif isinstance(reflection_response, str):
+                    reflection_text = reflection_response
+                else:
+                    reflection_text = str(reflection_response)
+                    self.logger.warning(f"Unexpected response type from LLM service: {type(reflection_response)}")
             else:
                 self.logger.warning("No LLM service available for dream reflection")
                 reflection_text = "Reflection unavailable: LLM service not configured"

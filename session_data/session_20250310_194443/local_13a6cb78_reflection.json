@@ -1,0 +1,22 @@
+{
+  "status": "success",
+  "title": "Three Test Memories Analyzed",
+  "fragments": [
+    {
+      "content": "Test memory 0 for reflection",
+      "type": "insight",
+      "confidence": 0.7435129866228284
+    },
+    {
+      "content": "Why are these test memories named sequentially?",
+      "type": "question",
+      "confidence": 0.6227305258534759
+    }
+  ],
+  "metadata": {
+    "depth": 0.5,
+    "creativity": 0.5,
+    "temperature": 0.85,
+    "memory_count": 3
+  }
+}

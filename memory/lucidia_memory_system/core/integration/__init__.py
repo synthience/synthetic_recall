@@ -15,7 +15,8 @@ from ..long_term_memory import LongTermMemory
 from ..memory_prioritization_layer import MemoryPrioritizationLayer
 from ..embedding_comparator import EmbeddingComparator
 from ....storage.memory_persistence_handler import MemoryPersistenceHandler
-from ..memory_core import MemoryCore as EnhancedMemoryCore  # Aliasing existing core as enhanced for now
+# Remove direct import to avoid circular reference
+# from ..memory_core import MemoryCore as EnhancedMemoryCore
 from .memory_integration import MemoryIntegration
 from .updated_hpc_client import EnhancedHPCClient
 
@@ -28,6 +29,7 @@ __all__ = [
     'MemoryPrioritizationLayer',
     'EmbeddingComparator',
     'MemoryPersistenceHandler',
+    # Still include in __all__ for importing from module
     'EnhancedMemoryCore',
     'MemoryIntegration',
     'EnhancedHPCClient'

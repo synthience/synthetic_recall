@@ -75,9 +75,49 @@ class MemorySystem:
                     with open(file_path, 'r') as f:
                         memory = json.load(f)
                         if isinstance(memory, dict) and 'timestamp' in memory:
-                            # Convert embedding from list to tensor if needed
-                            if 'embedding' in memory and isinstance(memory['embedding'], list):
-                                memory['embedding'] = memory['embedding']  # Keep as list for now
+                            # Check and possibly repair the embedding
+                            if 'embedding' in memory:
+                                embedding_repaired = False
+                                
+                                # Handle various embedding formats and attempt to repair
+                                if isinstance(memory['embedding'], str):
+                                    try:
+                                        # Try to parse string as JSON
+                                        embedding_data = json.loads(memory['embedding'])
+                                        if isinstance(embedding_data, list):
+                                            memory['embedding'] = embedding_data
+                                            embedding_repaired = True
+                                            logger.info(f"Repaired string embedding for memory {memory.get('id', 'unknown')}")
+                                    except json.JSONDecodeError:
+                                        # If parsing fails, we'll set a placeholder embedding
+                                        logger.warning(f"Invalid embedding string in memory {memory.get('id', 'unknown')}, setting placeholder")
+                                        memory['embedding'] = [0.0] * self.config['embedding_dim']
+                                        memory['has_placeholder_embedding'] = True
+                                        embedding_repaired = True
+                                
+                                # If the embedding is a list but contains non-numeric values, repair it
+                                elif isinstance(memory['embedding'], list):
+                                    if not all(isinstance(x, (int, float)) for x in memory['embedding']):
+                                        logger.warning(f"Non-numeric values in embedding list for memory {memory.get('id', 'unknown')}, setting placeholder")
+                                        memory['embedding'] = [0.0] * self.config['embedding_dim']
+                                        memory['has_placeholder_embedding'] = True
+                                        embedding_repaired = True
+                                
+                                # For completely invalid embeddings, set a placeholder
+                                elif memory['embedding'] is None:
+                                    logger.warning(f"Null embedding in memory {memory.get('id', 'unknown')}, setting placeholder")
+                                    memory['embedding'] = [0.0] * self.config['embedding_dim']
+                                    memory['has_placeholder_embedding'] = True
+                                    embedding_repaired = True
+                                
+                                # If we repaired the embedding, save the memory file
+                                if embedding_repaired:
+                                    try:
+                                        with open(file_path, 'w') as save_f:
+                                            json.dump(memory, save_f, indent=2)
+                                        logger.info(f"Saved repaired embedding for memory {memory.get('id', 'unknown')}")
+                                    except Exception as save_error:
+                                        logger.error(f"Failed to save repaired embedding: {save_error}")
                             
                             self.memories.append(memory)
                             

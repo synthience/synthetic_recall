@@ -6,7 +6,7 @@ from datetime import timedelta
 import logging
 
 # Router for dream parameter endpoints
-router = APIRouter(prefix="/dream/parameters", tags=["dream_parameters"])
+router = APIRouter(prefix="/api/dream/parameters", tags=["dream_parameters"])
 
 # Adapter reference (to be set during initialization)
 dream_parameter_adapter = None

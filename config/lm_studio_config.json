@@ -1,0 +1,10 @@
+{
+    "enabled": true,
+    "url": "http://localhost:1234",
+    "default_model": "qwen2.5-7b-instruct",
+    "dream": {
+        "temperature": 0.7,
+        "max_tokens": 2000,
+        "top_p": 0.95
+    }
+}

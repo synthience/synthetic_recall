@@ -115,6 +115,11 @@ class MemoryIntegration:
         # Initialize Knowledge Graph
         self.knowledge_graph = LucidiaKnowledgeGraph(self_model=self.self_model, world_model=self.world_model)
         
+        # Initialize model imports in the knowledge graph
+        logger.info("Triggering model imports into knowledge graph")
+        await self.knowledge_graph.initialize_model_imports()
+        logger.info("Model imports complete")
+        
         # Load components from persistence if available
         await self.load_from_persistence()
         

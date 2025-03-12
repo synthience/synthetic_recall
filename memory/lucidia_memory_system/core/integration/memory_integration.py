@@ -16,7 +16,6 @@ from ..embedding_comparator import EmbeddingComparator
 from ..short_term_memory import ShortTermMemory
 from ..long_term_memory import LongTermMemory
 from ..memory_prioritization_layer import MemoryPrioritizationLayer
-from ..memory_core import MemoryCore as EnhancedMemoryCore
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +32,23 @@ class MemoryIntegration:
         Initialize the memory integration layer.
         
         Args:
-            config: Configuration dictionary
+            config: Optional configuration dictionary
         """
         self.config = config or {}
         
-        # Create enhanced memory core
+        # Configure logging
+        logger.info("Initializing Memory Integration Layer")
+        
+        # Lazy import MemoryCore to avoid circular reference
+        from ..memory_core import MemoryCore as EnhancedMemoryCore
+        
+        # Define memory architecture components:
+        # - MemoryCore (STM, LTM, MPL)
+        # - Persistence Layer
+        # - Optimizers
+        
+        # Initialize enhanced memory core
+        logger.info("Initializing enhanced memory core...")
         self.memory_core = EnhancedMemoryCore(self.config)
         
         # Create direct references to components for advanced usage

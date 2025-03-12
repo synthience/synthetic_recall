@@ -3,6 +3,7 @@ import websockets
 import json
 import logging
 import torch
+import time
 
 # Import the HPCSIGFlowManager from the memory system
 from memory.lucidia_memory_system.core.integration.hpc_sig_flow_manager import HPCSIGFlowManager
@@ -22,6 +23,10 @@ class HPCServer:
       {
         "type": "stats"
       }
+    or
+      {
+        "type": "get_geometry"
+      }
     """
     def __init__(self, host='0.0.0.0', port=5005):
         self.host = host
@@ -38,6 +43,24 @@ class HPCServer:
             'type': 'stats',
             **self.hpc_sig_manager.get_stats()
         }
+
+    def get_geometry(self, model_version="latest"):
+        # Return hypersphere geometry information
+        geometry_info = {
+            'type': 'geometry',
+            'model_version': model_version,
+            'embedding_dim': self.hpc_sig_manager.config['embedding_dim'],
+            'hypersphere_radius': 1.0,  # Normalized embeddings typically have unit radius
+            'coordinate_system': 'hyperspherical',
+            'timestamp': int(time.time() * 1000)  # Current timestamp in milliseconds
+        }
+        
+        # Add additional geometry information if available from the manager
+        if hasattr(self.hpc_sig_manager, 'get_geometry_info'):
+            additional_info = self.hpc_sig_manager.get_geometry_info(model_version)
+            geometry_info.update(additional_info)
+            
+        return geometry_info
 
     async def handle_websocket(self, websocket):
         logger.info(f"New connection from {websocket.remote_address}")
@@ -64,6 +87,13 @@ class HPCServer:
                     elif data['type'] == 'stats':
                         stats = self.get_stats()
                         await websocket.send(json.dumps(stats))
+
+                    elif data['type'] == 'get_geometry':
+                        # Handle geometry request
+                        model_version = data.get('model_version', 'latest')
+                        geometry_info = self.get_geometry(model_version)
+                        logger.info(f"Sending geometry information for model version {model_version}")
+                        await websocket.send(json.dumps(geometry_info))
 
                     else:
                         # Unknown message type
@@ -159,6 +189,26 @@ class HPCClient:
         except Exception as e:
             logger.error(f"Error getting stats: {str(e)}")
             return {'type': 'error', 'error': str(e)}
+
+    async def get_geometry(self, model_version="latest"):
+        """Get hypersphere geometry information.
+        
+        Args:
+            model_version: Version of the model to get geometry for (default: "latest")
+            
+        Returns:
+            Dict containing geometry information
+        """
+        if not self.connected:
+            await self.connect()
+
+        request = {
+            "type": "get_geometry",
+            "model_version": model_version
+        }
+        await self.websocket.send(json.dumps(request))
+        response = await self.websocket.recv()
+        return json.loads(response)
 
 if __name__ == '__main__':
     server = HPCServer()

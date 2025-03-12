@@ -1,0 +1,66 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "debug": false,
+    "reload": false,
+    "workers": 1
+  },
+  "api": {
+    "prefix": "/api",
+    "version": "v1",
+    "rate_limit": 100,
+    "timeout": 60
+  },
+  "memory": {
+    "storage_path": "/app/memory",
+    "embedding_dim": 384,
+    "enable_migration": true,
+    "migration_interval": 300,
+    "hierarchical_significance_threshold": 0.3,
+    "relationship_significance_boost": 0.95
+  },
+  "dream": {
+    "processing_interval": 60,
+    "max_concurrent_dreams": 2,
+    "minimum_memory_count": 5,
+    "dream_significance_boost": 0.2
+  },
+  "model": {
+    "models": {
+      "qwen2.5-7b-instruct": {
+        "purposes": ["general", "reasoning", "creative"],
+        "context_length": 8192,
+        "strength": 0.8,
+        "speed": 0.7,
+        "resource_usage": {"memory": 0.7, "cpu": 0.7}
+      },
+      "gemma2-9b-it": {
+        "purposes": ["reasoning", "analysis", "dreaming"],
+        "context_length": 8192,
+        "strength": 0.85,
+        "speed": 0.6,
+        "resource_usage": {"memory": 0.8, "cpu": 0.8}
+      },
+      "all-MiniLM-L6-v2": {
+        "purposes": ["embedding"],
+        "context_length": 512,
+        "strength": 0.7,
+        "speed": 0.95,
+        "resource_usage": {"memory": 0.2, "cpu": 0.2}
+      }
+    },
+    "default_model": "qwen2.5-7b-instruct",
+    "embedding_model": "all-MiniLM-L6-v2",
+    "dream_model": "gemma2-9b-it"
+  },
+  "connections": {
+    "tensor_server": "ws://nemo_sig_v3:5001",
+    "hpc_server": "ws://nemo_sig_v3:5005",
+    "llm_api": "http://localhost:1234/v1/chat/completions",
+    "ping_interval": 30.0,
+    "retry_limit": 5,
+    "retry_delay": 2.0,
+    "timeout": 10.0
+  }
+}

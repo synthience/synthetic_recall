@@ -227,6 +227,9 @@ class LucidiaWorldModel:
         # Concept network for understanding relationships between ideas
         self.concept_network = defaultdict(dict)
         
+        # Concept definitions dictionary to store detailed concept information
+        self.concept_definitions = {}
+        
         # Initialize with core concepts
         self._initialize_concept_network()
         
@@ -1368,6 +1371,68 @@ class LucidiaWorldModel:
             "stability": 0.9  # Initial stability of the relationship
         })
 
+    def _add_entity_relationship(self, entity1: str, entity2: str, relationship_type: str, strength: float) -> None:
+        """
+        Add a relationship between two entities.
+        
+        Args:
+            entity1: First entity ID
+            entity2: Second entity ID
+            relationship_type: Type of relationship
+            strength: Strength of the relationship (0.0 to 1.0)
+        """
+        # Check if both entities exist and pre-register if needed
+        if entity1 not in self.entity_registry:
+            self.logger.info(f"Pre-registering missing entity before creating relationship: {entity1}")
+            self.register_entity(
+                entity_id=entity1,
+                entity_type="undefined",
+                attributes={"auto_registered": True, "needs_definition": True},
+                confidence=0.5
+            )
+            
+        if entity2 not in self.entity_registry:
+            self.logger.info(f"Pre-registering missing entity before creating relationship: {entity2}")
+            self.register_entity(
+                entity_id=entity2,
+                entity_type="undefined",
+                attributes={"auto_registered": True, "needs_definition": True},
+                confidence=0.5
+            )
+        
+        # Now we can safely add the relationship
+        # Add relationship to first entity
+        if entity2 not in self.entity_registry[entity1]["relationships"]:
+            self.entity_registry[entity1]["relationships"][entity2] = []
+        
+        self.entity_registry[entity1]["relationships"][entity2].append({
+            "type": relationship_type,
+            "strength": strength,
+            "added": datetime.now().isoformat()
+        })
+        
+        # Add reverse relationship with appropriate type
+        reverse_types = {
+            "instance_of": "has_instance",
+            "has_instance": "instance_of",
+            "created_by": "created",
+            "created": "created_by",
+            "part_of": "has_part",
+            "has_part": "part_of",
+            "related_to": "related_to"
+        }
+        
+        reverse_type = reverse_types.get(relationship_type, "related_to")
+        
+        if entity1 not in self.entity_registry[entity2]["relationships"]:
+            self.entity_registry[entity2]["relationships"][entity1] = []
+        
+        self.entity_registry[entity2]["relationships"][entity1].append({
+            "type": reverse_type,
+            "strength": strength,
+            "added": datetime.now().isoformat()
+        })
+
     def register_entity(self, entity_id: str, entity_type: str, attributes: Dict[str, Any], confidence: float) -> str:
         """
         Register or update an entity in the knowledge base.
@@ -1461,68 +1526,6 @@ class LucidiaWorldModel:
         
         if "relation_to_ai" in attributes and entity_id != "Artificial Intelligence":
             self._add_entity_relationship(entity_id, "Artificial Intelligence", "related_to", 0.85)
-
-    def _add_entity_relationship(self, entity1: str, entity2: str, relationship_type: str, strength: float) -> None:
-        """
-        Add a relationship between two entities.
-        
-        Args:
-            entity1: First entity ID
-            entity2: Second entity ID
-            relationship_type: Type of relationship
-            strength: Strength of the relationship (0.0 to 1.0)
-        """
-        # Check if both entities exist and pre-register if needed
-        if entity1 not in self.entity_registry:
-            self.logger.info(f"Pre-registering missing entity before creating relationship: {entity1}")
-            self.register_entity(
-                entity_id=entity1,
-                entity_type="undefined",
-                attributes={"auto_registered": True, "needs_definition": True},
-                confidence=0.5
-            )
-            
-        if entity2 not in self.entity_registry:
-            self.logger.info(f"Pre-registering missing entity before creating relationship: {entity2}")
-            self.register_entity(
-                entity_id=entity2,
-                entity_type="undefined",
-                attributes={"auto_registered": True, "needs_definition": True},
-                confidence=0.5
-            )
-        
-        # Now we can safely add the relationship
-        # Add relationship to first entity
-        if entity2 not in self.entity_registry[entity1]["relationships"]:
-            self.entity_registry[entity1]["relationships"][entity2] = []
-        
-        self.entity_registry[entity1]["relationships"][entity2].append({
-            "type": relationship_type,
-            "strength": strength,
-            "added": datetime.now().isoformat()
-        })
-        
-        # Add reverse relationship with appropriate type
-        reverse_types = {
-            "instance_of": "has_instance",
-            "has_instance": "instance_of",
-            "created_by": "created",
-            "created": "created_by",
-            "part_of": "has_part",
-            "has_part": "part_of",
-            "related_to": "related_to"
-        }
-        
-        reverse_type = reverse_types.get(relationship_type, "related_to")
-        
-        if entity1 not in self.entity_registry[entity2]["relationships"]:
-            self.entity_registry[entity2]["relationships"][entity1] = []
-        
-        self.entity_registry[entity2]["relationships"][entity1].append({
-            "type": reverse_type,
-            "strength": strength,
-            "added": datetime.now().isoformat()
-        })
 
     def get_entity(self, entity_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -2549,3 +2552,183 @@ class LucidiaWorldModel:
         analysis["priority_gaps"].sort(key=lambda x: x["priority_score"], reverse=True)
         
         return analysis
+
+    async def get_relationships(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Get relationships between concepts and entities from the world model.
+        
+        This method extracts relationships from both the concept network and entity registry,
+        and formats them for import into the knowledge graph.
+        
+        Args:
+            limit: Maximum number of relationships to return
+            
+        Returns:
+            List of relationship dictionaries with source_id, target_id, type, and strength
+        """
+        self.logger.info(f"Retrieving up to {limit} relationships from world model")
+        relationships = []
+        
+        try:
+            # Part 1: Extract relationships from the concept network
+            self.logger.debug("Extracting relationships from concept network")
+            for source_concept, related_concepts in self.concept_network.items():
+                # For each related concept, get its relationships
+                for target_concept, relations in related_concepts.items():
+                    # A concept may have multiple relationship types with another concept
+                    for relation in relations:
+                        # Create a standardized relationship entry
+                        relationship = {
+                            "source_id": source_concept,
+                            "target_id": target_concept,
+                            "type": relation.get("type", "related_to"),
+                            "strength": relation.get("strength", 0.5),
+                            "created": relation.get("added", datetime.now().isoformat()),
+                            "verification": relation.get("verification", "world_model"),
+                            "stability": relation.get("stability", 0.7),
+                            "source_type": "concept",
+                            "target_type": "concept"
+                        }
+                        relationships.append(relationship)
+                        
+                        # Stop if we've reached the limit
+                        if len(relationships) >= limit:
+                            self.logger.info(f"Retrieved {len(relationships)} relationships (limited to {limit})")
+                            return relationships
+            
+            # Part 2: Extract relationships from the entity registry
+            self.logger.debug("Extracting relationships from entity registry")
+            for source_entity, entity_data in self.entity_registry.items():
+                if "relationships" in entity_data:
+                    for target_entity, relations in entity_data["relationships"].items():
+                        for relation in relations:
+                            # Create a standardized relationship entry for entities
+                            relationship = {
+                                "source_id": source_entity,
+                                "target_id": target_entity,
+                                "type": relation.get("type", "related_to"),
+                                "strength": relation.get("strength", 0.5),
+                                "created": relation.get("added", datetime.now().isoformat()),
+                                "verification": "world_model",
+                                "stability": 0.8,  # Entities typically have more stable relationships
+                                "source_type": "entity",
+                                "target_type": "entity"
+                            }
+                            relationships.append(relationship)
+                            
+                            # Stop if we've reached the limit
+                            if len(relationships) >= limit:
+                                self.logger.info(f"Retrieved {len(relationships)} relationships (limited to {limit})")
+                                return relationships
+            
+            self.logger.info(f"Retrieved {len(relationships)} relationships from world model")
+            return relationships
+            
+        except Exception as e:
+            self.logger.error(f"Error retrieving relationships from world model: {e}")
+            return []
+
+    async def get_core_concepts(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Get core concepts from the world model.
+        
+        This method extracts important concepts from the concept network
+        for import into the knowledge graph.
+        
+        Args:
+            limit: Maximum number of concepts to return
+            
+        Returns:
+            List of concept dictionaries with id, definition, confidence, and domain
+        """
+        self.logger.info(f"Retrieving up to {limit} core concepts from world model")
+        concepts = []
+        
+        try:
+            # Get concepts sorted by their relationship count (network centrality)
+            concept_relevance = {}
+            
+            # Calculate a simple relevance score based on network centrality
+            for concept_id, related_concepts in self.concept_network.items():
+                concept_relevance[concept_id] = len(related_concepts)
+                
+            # Sort concepts by relevance
+            sorted_concepts = sorted(concept_relevance.items(), key=lambda x: x[1], reverse=True)
+            
+            # Select top concepts up to the limit
+            top_concepts = [concept_id for concept_id, _ in sorted_concepts[:limit]]
+            
+            # Format concept information for knowledge graph
+            for concept_id in top_concepts:
+                if concept_id in self.concept_definitions:
+                    concept_info = {
+                        "id": concept_id,
+                        "definition": self.concept_definitions.get(concept_id, {}).get("definition", ""),
+                        "confidence": self.concept_definitions.get(concept_id, {}).get("confidence", 0.7),
+                        "domain": self.concept_definitions.get(concept_id, {}).get("domain", "general_knowledge"),
+                        "properties": self.concept_definitions.get(concept_id, {}).get("properties", {}),
+                        "importance": len(self.concept_network.get(concept_id, {}))
+                    }
+                    concepts.append(concept_info)
+            
+            self.logger.info(f"Retrieved {len(concepts)} core concepts from world model")
+            return concepts
+            
+        except Exception as e:
+            self.logger.error(f"Error retrieving core concepts from world model: {e}")
+            return []
+    
+    async def get_core_entities(self, limit: int = 30) -> List[Dict[str, Any]]:
+        """
+        Get core entities from the world model.
+        
+        This method extracts important entities from the entity registry
+        for import into the knowledge graph.
+        
+        Args:
+            limit: Maximum number of entities to return
+            
+        Returns:
+            List of entity dictionaries with id, name, description, confidence, and domain
+        """
+        self.logger.info(f"Retrieving up to {limit} core entities from world model")
+        entities = []
+        
+        try:
+            # Calculate entity importance based on relationship count
+            entity_importance = {}
+            for entity_id, entity_data in self.entity_registry.items():
+                # Count relationships as a measure of importance
+                relationship_count = sum(len(relations) for relations in entity_data.get("relationships", {}).values())
+                # Factor in confidence
+                confidence = entity_data.get("confidence", 0.5)
+                # Combine for overall importance score
+                entity_importance[entity_id] = relationship_count * confidence
+            
+            # Sort entities by importance
+            sorted_entities = sorted(entity_importance.items(), key=lambda x: x[1], reverse=True)
+            
+            # Select top entities up to the limit
+            top_entities = [entity_id for entity_id, _ in sorted_entities[:limit]]
+            
+            # Format entity information for knowledge graph
+            for entity_id in top_entities:
+                if entity_id in self.entity_registry:
+                    entity_data = self.entity_registry[entity_id]
+                    entity_info = {
+                        "id": entity_id,
+                        "name": entity_id,  # Use ID as name if not specified
+                        "description": entity_data.get("description", ""),
+                        "confidence": entity_data.get("confidence", 0.7),
+                        "domain": entity_data.get("domain", "general_knowledge"),
+                        "entity_type": entity_data.get("entity_type", "unknown"),
+                        "attributes": entity_data.get("attributes", {})
+                    }
+                    entities.append(entity_info)
+            
+            self.logger.info(f"Retrieved {len(entities)} core entities from world model")
+            return entities
+            
+        except Exception as e:
+            self.logger.error(f"Error retrieving core entities from world model: {e}")
+            return []

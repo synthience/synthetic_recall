@@ -1,0 +1,106 @@
+{
+    "version": "1.0.0",
+    "memory": {
+        "storage_path": "./data/memory",
+        "embedding_dim": 1024,
+        "chunk_size": 1000,
+        "max_chunk_overlap": 200
+    },
+    "models": {
+        "default_model": "qwen2.5-7b-instruct",
+        "dream_model": "qwen_qwq-32b",
+        "embedding_model": "e5-large-v2",
+        "model_profiles": [
+            {
+                "name": "qwen2.5-7b-instruct",
+                "purposes": ["general", "reasoning", "analysis", "reflection"],
+                "context_length": 8192,
+                "strength": 0.7,
+                "speed": 0.8,
+                "resource_usage": {
+                    "cpu": 0.4,
+                    "memory": 0.5,
+                    "gpu": 0.5
+                }
+            },
+            {
+                "name": "qwen_qwq-32b",
+                "purposes": ["dreaming", "creative", "memory"],
+                "context_length": 16384,
+                "strength": 0.9,
+                "speed": 0.5,
+                "resource_usage": {
+                    "cpu": 0.7,
+                    "memory": 0.8,
+                    "gpu": 0.9
+                }
+            }
+        ],
+        "model_selection": {
+            "automatic": true,
+            "switch_cooldown": 60,
+            "resource_thresholds": {
+                "cpu_high": 80,
+                "cpu_low": 40,
+                "memory_high": 80,
+                "memory_low": 40,
+                "gpu_high": 85,
+                "gpu_low": 50
+            },
+            "purpose_mappings": {
+                "general": "qwen2.5-7b-instruct",
+                "dreaming": "qwen_qwq-32b",
+                "creative": "qwen_qwq-32b",
+                "reasoning": "qwen2.5-7b-instruct",
+                "analysis": "qwen2.5-7b-instruct",
+                "reflection": "qwen2.5-7b-instruct",
+                "memory": "qwen_qwq-32b"
+            }
+        }
+    },
+    "servers": {
+        "tensor_server": {
+            "host": "0.0.0.0",
+            "port": 5001,
+            "ping_interval": 30.0
+        },
+        "hpc_server": {
+            "host": "0.0.0.0",
+            "port": 5005,
+            "ping_interval": 30.0
+        },
+        "dream_api": {
+            "host": "0.0.0.0",
+            "port": 8080,
+            "workers": 4
+        }
+    },
+    "knowledge_graph": {
+        "max_nodes": 1000,
+        "significance_threshold": 0.3
+    },
+    "parameters": {
+        "creativity": 0.7,
+        "coherence": 0.8,
+        "relevance": 0.9,
+        "specificity": 0.6,
+        "duration": 30
+    },
+    "resource_monitor": {
+        "enabled": true,
+        "check_interval": 60,
+        "detail_interval": 300,
+        "auto_optimize": true,
+        "optimization_interval": 3600,
+        "processes_to_monitor": ["python", "llm_server", "embedding_server", "tensor_server"],
+        "component_priorities": {
+            "memory_system": 10,
+            "llm_service": 9,
+            "dream_processor": 8,
+            "knowledge_graph": 7,
+            "reflection_engine": 6,
+            "embedding_service": 5,
+            "api_server": 4
+        }
+    }
+}

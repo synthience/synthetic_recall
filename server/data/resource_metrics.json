@@ -1,22 +1,22 @@
 {
   "current": {
-    "cpu": 0.0,
-    "memory": 43.4,
+    "cpu": 3.9,
+    "memory": 25.1,
     "disk": 48.6,
     "gpu": 0.0,
     "network": {
-      "sent": 253654,
-      "received": 18602576,
-      "time": 1741659360.2041094
+      "sent": 507528,
+      "received": 18742179,
+      "time": 1741734017.4226856
     }
   },
   "averages": {
-    "cpu_avg_5min": 0.0,
-    "cpu_avg_15min": 0.0,
-    "cpu_avg_60min": 0.0,
-    "memory_avg_5min": 43.4,
-    "memory_avg_15min": 43.4,
-    "memory_avg_60min": 43.4
+    "cpu_avg_5min": 3.9,
+    "cpu_avg_15min": 3.9,
+    "cpu_avg_60min": 3.9,
+    "memory_avg_5min": 25.1,
+    "memory_avg_15min": 25.1,
+    "memory_avg_60min": 25.1
   },
   "process_stats": {
     "python.exe": {
@@ -26,8 +26,8 @@
     },
     "python": {
       "cpu": 0.0,
-      "memory": 413306880,
-      "updated_at": 1741659360.2048502
+      "memory": 415662080,
+      "updated_at": 1741734017.4337385
     }
   },
   "model_performance": {
@@ -106,6 +106,14 @@
       "response_times": {},
       "token_rates": {},
       "timestamp": 1741659360.2049224
+    },
+    "2025-03-11-23": {
+      "cpu_avg": 3.9,
+      "memory_avg": 25.1,
+      "disk_avg": 48.6,
+      "response_times": {},
+      "token_rates": {},
+      "timestamp": 1741734017.4342575
     }
   },
   "daily_metrics": {
@@ -117,22 +125,22 @@
       "timestamp": 1741640151.052737
     },
     "2025-03-11": {
-      "cpu_avg": 0.05,
-      "memory_avg": 36.2,
+      "cpu_avg": 1.3333333333333333,
+      "memory_avg": 32.5,
       "disk_avg": 48.6,
-      "hours_recorded": 2,
-      "timestamp": 1741659360.204936
+      "hours_recorded": 3,
+      "timestamp": 1741734017.4343097
     }
   },
   "resource_allocation": {
     "memory": {
-      "memory_system": 2624637889.306123,
-      "llm_service": 2657453101.9755106,
-      "dream_processor": 2019179674.644898,
-      "knowledge_graph": 1917777159.3142858,
-      "reflection_engine": 1547939187.9836736,
-      "embedding_service": 1312318944.6530614,
-      "api_server": 1009589837.322449
+      "memory_system": 2624638558.0408163,
+      "llm_service": 2657453703.836735,
+      "dream_processor": 2019180209.632653,
+      "knowledge_graph": 1917777627.4285712,
+      "reflection_engine": 1547939589.2244897,
+      "embedding_service": 1312319279.0204082,
+      "api_server": 1009590104.8163265
     },
     "cpu": {
       "memory_system": 192.75510204081633,

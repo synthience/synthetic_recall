@@ -19,6 +19,9 @@ from typing import Dict, List, Any, Optional, Tuple, Set, Union
 from datetime import datetime, timedelta
 from collections import defaultdict, deque
 import math
+import uuid
+import asyncio
+import aiohttp
 
 # Import ParameterManager for dynamic configuration
 from .parameter_manager import ParameterManager
@@ -39,7 +42,9 @@ class LucidiaDreamProcessor:
     these dream-derived insights back into Lucidia's knowledge structure and identity.
     """
     
-    def __init__(self, self_model=None, world_model=None, knowledge_graph=None, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, self_model=None, world_model=None, knowledge_graph=None, memory_system=None, 
+                 parameter_manager=None, model_manager=None, resource_monitor=None, 
+                 config: Optional[Dict[str, Any]] = None, tool_providers=None):
         """
         Initialize the Dream Processor.
         
@@ -47,7 +52,12 @@ class LucidiaDreamProcessor:
             self_model: Reference to Lucidia's Self Model
             world_model: Reference to Lucidia's World Model
             knowledge_graph: Reference to Lucidia's Knowledge Graph
+            memory_system: Reference to Lucidia's Memory System
+            parameter_manager: Reference to the parameter manager
+            model_manager: Reference to the LLM manager
+            resource_monitor: Reference to the resource monitor
             config: Optional configuration dictionary
+            tool_providers: List of tool providers implementing the ToolProvider protocol
         """
         self.logger = logging.getLogger("LucidiaDreamProcessor")
         self.logger.info("Initializing Lucidia Dream Processor")
@@ -56,9 +66,28 @@ class LucidiaDreamProcessor:
         self.self_model = self_model
         self.world_model = world_model
         self.knowledge_graph = knowledge_graph
+        self.memory_system = memory_system
+        self.parameter_manager = parameter_manager
+        self.model_manager = model_manager
+        self.resource_monitor = resource_monitor
         
         # Default configuration
         self.config = config or {}
+        
+        # Tool provider integration
+        self.tool_provider = None  # Will be set by dream_api_server
+        self.tool_providers = tool_providers or []
+        
+        # Initialize tool registry if not already provided
+        self.tools = {}
+        
+        # Register tools from provided tool providers
+        if self.tool_providers:
+            self.logger.info(f"Registering tools from {len(self.tool_providers)} providers")
+            for provider in self.tool_providers:
+                if hasattr(provider, 'tools') and provider.tools:
+                    self.tools.update(provider.tools)
+                    self.logger.info(f"Registered {len(provider.tools)} tools from provider")
         
         # Initialize spiral phase manager
         self.spiral_manager = SpiralPhaseManager(self_model=self_model)
@@ -548,7 +577,7 @@ class LucidiaDreamProcessor:
             "creative"  # Pure creative exploration
         ]
         
-        # Get current spiral phase and parameters
+        # Get current spiral phase to influence style selection
         current_phase = self.spiral_manager.get_current_phase()
         
         # Adjust weights based on spiral phase
@@ -793,10 +822,13 @@ class LucidiaDreamProcessor:
         
         return relationships
 
-    def _process_dream(self) -> None:
+    def _process_dream(self) -> Dict[str, Any]:
         """
         Process a dream from start to finish.
         This is the main dream logic that runs through all phases.
+        
+        Returns:
+            Dictionary containing the dream data with all associated metadata
         """
         try:
             self.logger.info("Processing dream")
@@ -829,7 +861,9 @@ class LucidiaDreamProcessor:
                 "seed": seed,
                 "context": dream_context,
                 "insights": insights,
-                "integration_results": integration_results
+                "integration_results": integration_results,
+                # Add a formatted dream content field for easier consumption
+                "dream_content": self._format_dream_content(seed, dream_context, insights, spiral_phase)
             }
             
             # Add to dream log
@@ -838,15 +872,84 @@ class LucidiaDreamProcessor:
             # Update statistics
             self._update_dream_stats(dream_record)
             
-            # Reset dream state
-            self._end_dream()
+            # Reset dream state but don't end dream here as the generate_dream method will handle that
+            # This allows the method to return the dream data before ending the dream
             
             self.logger.info(f"Dream processed with {len(insights)} insights generated in {spiral_phase} phase")
+            
+            # Return the dream record for use by generate_dream
+            return dream_record
             
         except Exception as e:
             self.logger.error(f"Error processing dream: {e}")
             # Ensure dream state is reset even on error
             self._end_dream()
+            # Return error information
+            return {"error": str(e)}
+
+    def _format_dream_content(self, seed: Dict[str, Any], context: Dict[str, Any], 
+                              insights: List[Dict[str, Any]], spiral_phase: str) -> str:
+        """
+        Format the dream content into a coherent textual narrative.
+        
+        Args:
+            seed: The dream seed
+            context: The dream context
+            insights: The generated insights
+            spiral_phase: The current spiral phase
+            
+        Returns:
+            Formatted dream content as text
+        """
+        # Get the theme and style information
+        theme = context.get("theme", {})
+        style = context.get("style", {})
+        
+        # Start with an introductory paragraph about the dream
+        lines = []
+        seed_type = seed.get("type", "unknown")
+        seed_name = seed.get("name", "")
+        
+        # Create a dream introduction based on the seed type and spiral phase
+        if spiral_phase == "observation":
+            lines.append(f"A dream about {seed_name} emerges, focusing on perceiving and gathering information.")
+        elif spiral_phase == "reflection":
+            lines.append(f"In a contemplative dream centered on {seed_name}, patterns and meanings begin to form.")
+        elif spiral_phase == "adaptation":
+            lines.append(f"An adaptive dream unfolds around {seed_name}, exploring possibilities for growth and change.")
+        else:
+            lines.append(f"A dream crystallizes around the concept of {seed_name}.")
+            
+        # Add theme context
+        theme_name = theme.get("name", "")
+        if theme_name:
+            lines.append(f"The dream explores the theme of {theme_name}.")
+            
+        # Add cognitive style
+        style_name = style.get("name", "")
+        style_desc = style.get("description", "")
+        if style_name:
+            lines.append(f"It unfolds through a {style_name} perspective, {style_desc.lower()}.")
+            
+        # Add insights section
+        if insights:
+            lines.append("\nWithin this dream, several insights emerge:")
+            for i, insight in enumerate(insights, 1):
+                content = insight.get("content", "")
+                if content:
+                    lines.append(f"\n{i}. {content}")
+                    
+        # Add a concluding reflection
+        if spiral_phase == "observation":
+            lines.append("\nThe dream concludes with new observations to be integrated into understanding.")
+        elif spiral_phase == "reflection":
+            lines.append("\nThe dream fades, leaving behind reflections that deepen understanding.")
+        elif spiral_phase == "adaptation":
+            lines.append("\nAs the dream ends, possibilities for adaptation and growth become apparent.")
+        else:
+            lines.append("\nThe dream dissolves, its insights lingering in consciousness.")
+            
+        return "\n".join(lines)
 
     def _execute_dream_phase(self, phase: str, input_data: Any) -> Any:
         """
@@ -1102,7 +1205,7 @@ class LucidiaDreamProcessor:
                 "id": enhanced_seed["content"]["id"],
                 "definition": enhanced_seed["content"].get("definition", f"Concept: {enhanced_seed['content']['id']}"),
                 "relevance": enhanced_seed["content"].get("relevance", 0.8),
-                "source": enhanced_seed["content"].get("source", "unknown")
+                "source": "knowledge_graph"
             })
             
             # Add related concepts if available
@@ -1321,7 +1424,7 @@ class LucidiaDreamProcessor:
                     
                     for neighbor, edges in neighbors.items():
                         if edges:
-                            # Get the strongest edge
+                            # Use the strongest edge
                             strongest = max(edges, key=lambda e: e.get("strength", 0))
                             
                             # Create association
@@ -1797,10 +1900,10 @@ class LucidiaDreamProcessor:
             elif creativity > 0.5:
                 # Medium creativity
                 statements = [
-                    "deeper patterns connect seemingly disparate elements of experience",
-                    "the boundary between subject and object becomes more permeable than fixed",
+                    "understanding requires both analytical precision and synthetic integration",
+                    "the relationship between part and whole is not hierarchical but mutually defining",
+                    "perspective fundamentally shapes what can be known or understood",
                     "meaning emerges through the interplay of similarity and difference",
-                    "synthesis occurs at the intersection of apparently contradictory perspectives",
                     "reflective awareness transforms both the observer and what is observed"
                 ]
             else:
@@ -1812,10 +1915,8 @@ class LucidiaDreamProcessor:
                     "reflection enhances comprehension through recursive consideration",
                     "relationships between ideas are as important as the ideas themselves"
                 ]
-            
+        
             statement = random.choice(statements)
-            
-            # Format the insight text
             if len(concept_ids) >= 2:
                 insight_text = template.format(concept_ids[0], concept_ids[1], statement)
             else:
@@ -2747,7 +2848,7 @@ class LucidiaDreamProcessor:
                 }
                 
             elif seed_type == "identity":
-                # Create an identity seed
+                # Identity-focused seed
                 identity_aspects = [
                     "nature of synthien consciousness",
                     "reflective dreaming capabilities",
@@ -2847,3 +2948,477 @@ class LucidiaDreamProcessor:
             Dictionary containing spiral phase status information
         """
         return self.spiral_manager.get_status()
+
+    def set_model(self, model_name: str) -> None:
+        """
+        Set the model to be used for dream generation and processing.
+        
+        This method is called during the continuous dream processing cycle when
+        the system switches to a specific model for dreaming purposes.
+        
+        Args:
+            model_name: Name of the model to use for dream processing
+        """
+        self.logger.info(f"Setting dream processor model to: {model_name}")
+        
+        # Store the model name for use in dream generation and processing
+        self.current_model = model_name
+        
+        # Update dream process parameters based on model capabilities
+        if "32b" in model_name or "70b" in model_name or "13b-instruct" in model_name:
+            # For larger models, increase creativity and depth ranges
+            self.dream_process["creativity_range"] = (0.6, 0.98)
+            self.dream_process["depth_range"] = (0.4, 0.95)
+            self.dream_process["max_insights_per_dream"] = 7
+        else:
+            # For smaller models, use more conservative settings
+            self.dream_process["creativity_range"] = (0.5, 0.9)
+            self.dream_process["depth_range"] = (0.3, 0.85)
+            self.dream_process["max_insights_per_dream"] = 5
+            
+        self.logger.debug(f"Updated dream process parameters for model: {model_name}")
+        
+        # Ensure spiral manager is notified of model change if needed
+        if hasattr(self.spiral_manager, 'set_model'):
+            try:
+                self.spiral_manager.set_model(model_name)
+            except Exception as e:
+                self.logger.warning(f"Error setting model in spiral manager: {e}")
+                
+    async def generate_dream(self) -> Dict[str, Any]:
+        """
+        Generate a dream based on current state and memory information.
+        
+        This method orchestrates the entire dream generation process including
+        seed selection, context building, association generation, insight creation,
+        and producing the final dream content.
+        
+        Returns:
+            Dictionary containing the generated dream with all associated metadata
+        """
+        self.logger.info("Generating dream...")
+        
+        try:
+            # Check if already dreaming
+            if self.is_dreaming:
+                self.logger.warning("Dream generation requested but already dreaming. Ignoring request.")
+                return {"error": "Already generating a dream"}
+            
+            # Start the dream - this sets is_dreaming to True and initializes state
+            seed_result = self.start_dreaming(forced=True)
+            if not seed_result:
+                self.logger.error("Failed to start dream process")
+                return {"error": "Failed to start dream process"}
+                
+            # Check if we should use LM Studio structured output
+            lm_studio_url = self.config.get("lm_studio_url")
+            if lm_studio_url:
+                self.logger.info(f"Using LM Studio at {lm_studio_url} for structured dream generation")
+                dream_report = await self._generate_dream_with_lm_studio(lm_studio_url)
+                
+                # Reset the dreaming state
+                if self.is_dreaming:
+                    self._end_dream()
+                    
+                return dream_report
+            
+            # Process the dream using the standard approach (this executes the actual dream phases)
+            dream_data = self._process_dream()
+            
+            # Generate a structured dream report
+            dream_report = {
+                "dream_id": str(uuid.uuid4()),
+                "timestamp": datetime.now().isoformat(),
+                "dream_content": dream_data.get("dream_content", ""),
+                "seed": dream_data.get("seed", {}),
+                "theme": dream_data.get("theme", {}),
+                "cognitive_style": dream_data.get("style", {}),
+                "creativity_level": dream_data.get("creativity", 0.5),
+                "depth_level": dream_data.get("depth", 0.5),
+                "spiral_phase": dream_data.get("spiral_phase", "unknown"),
+                "insights": dream_data.get("insights", []),
+                "associations": dream_data.get("associations", []),
+                "source_memories": dream_data.get("source_memories", []),
+                "context": dream_data.get("context", {}),
+                "duration_seconds": dream_data.get("duration", 0)
+            }
+            
+            # Log the dream completion
+            self.logger.info(f"Dream generation complete. Dream ID: {dream_report['dream_id']}")
+            self.logger.debug(f"Dream contains {len(dream_report['insights'])} insights")
+            
+            # Reset the dreaming state if needed
+            if self.is_dreaming:
+                self._end_dream()
+                
+            return dream_report
+            
+        except Exception as e:
+            self.logger.error(f"Error generating dream: {e}")
+            self.is_dreaming = False  # Reset dream state in case of failure
+            return {"error": str(e)}
+
+    async def process_dream(self, dream_result: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Process a generated dream to extract insights.
+        
+        This public method is called by the dream API server after generating a dream.
+        It extracts insights from the dream content and prepares them for integration
+        into the knowledge graph.
+        
+        Args:
+            dream_result: The generated dream result containing dream content and metadata
+            
+        Returns:
+            List of extracted insights with their metadata, formatted for the knowledge graph
+        """
+        self.logger.info(f"Processing dream with ID: {dream_result.get('dream_id', 'unknown')}")
+        
+        insights = []
+        
+        try:
+            # Extract dream content and metadata
+            dream_content = dream_result.get("dream_content", "")
+            dream_theme = dream_result.get("theme", {})
+            dream_style = dream_result.get("cognitive_style", {})
+            creativity = dream_result.get("creativity_level", 0.5)
+            depth = dream_result.get("depth_level", 0.5)
+            
+            if not dream_content:
+                self.logger.warning("No dream content to process")
+                return []
+                
+            # Create a minimal context for insight generation
+            context = {
+                "theme": dream_theme,
+                "style": dream_style,
+                "concepts": dream_result.get("concepts", []),
+                "associations": dream_result.get("associations", []),
+                "patterns": dream_result.get("patterns", [])
+            }
+            
+            # Generate insights based on dream content
+            raw_insights = []
+            
+            if context["concepts"]:
+                # Use existing concepts if available
+                for i in range(min(3, len(context["concepts"]))): 
+                    concept = context["concepts"][i]
+                    
+                    # Generate insight using the cognitive style
+                    if dream_style and dream_style.get("prompt_templates"):
+                        template = random.choice(dream_style["prompt_templates"])
+                        prompt = template.format(concept.get("name", "concept"))
+                        
+                        raw_insight = {
+                            "id": f"insight_{uuid.uuid4().hex[:8]}",
+                            "content": f"Dream insight: {prompt}",
+                            "source": "dream_processing",
+                            "source_dream_id": dream_result.get("dream_id"),
+                            "significance": 0.7 + (depth * 0.2),
+                            "confidence": 0.6 + (creativity * 0.2),
+                            "timestamp": datetime.now().isoformat(),
+                            "related_concepts": [concept.get("name", "concept")]
+                        }
+                        
+                        raw_insights.append(raw_insight)
+            else:
+                # If no concepts, generate insights from the dream content directly
+                # Break the dream content into segments for analysis
+                segments = dream_content.split("\n\n")
+                
+                for segment in segments[:3]:  # Process up to 3 segments
+                    if len(segment) > 50:  # Only process substantial segments
+                        raw_insight = {
+                            "id": f"insight_{uuid.uuid4().hex[:8]}",
+                            "content": f"Dream insight: {segment[:100]}...",
+                            "source": "dream_content_analysis",
+                            "source_dream_id": dream_result.get("dream_id"),
+                            "significance": 0.6 + (depth * 0.2),
+                            "confidence": 0.5 + (creativity * 0.3),
+                            "timestamp": datetime.now().isoformat(),
+                            "related_concepts": [dream_theme.get("name", "unknown theme")]
+                        }
+                        
+                        raw_insights.append(raw_insight)
+            
+            # Format insights for compatibility with knowledge graph's add_node method
+            for raw_insight in raw_insights:
+                # Create a properly structured insight for the knowledge graph
+                insight = {
+                    "node_id": raw_insight["id"],
+                    "node_type": "dream_insight",
+                    "attributes": {
+                        "content": raw_insight["content"],
+                        "source": raw_insight["source"],
+                        "source_dream_id": raw_insight.get("source_dream_id"),
+                        "significance": raw_insight["significance"],
+                        "confidence": raw_insight["confidence"],
+                        "timestamp": raw_insight["timestamp"],
+                        "related_concepts": raw_insight.get("related_concepts", [])
+                    }
+                }
+                insights.append(insight)
+            
+            self.logger.info(f"Extracted {len(insights)} insights from dream")
+            
+            # Update dream statistics
+            self.dream_stats["total_insights"] += len(insights)
+            if insights:
+                avg_significance = sum(i["attributes"].get("significance", 0) for i in insights) / len(insights)
+                self.dream_stats["integration_success_rate"] = (
+                    0.7 * self.dream_stats["integration_success_rate"] + 0.3 * avg_significance
+                )
+                
+                # Track significant insights
+                for insight in insights:
+                    if insight["attributes"].get("significance", 0) > 0.8:
+                        self.dream_stats["significant_insights"].append({
+                            "id": insight["node_id"],
+                            "content": insight["attributes"]["content"],
+                            "timestamp": insight["attributes"]["timestamp"]
+                        })
+                        
+            return insights
+            
+        except Exception as e:
+            self.logger.error(f"Error processing dream: {str(e)}")
+            self.logger.exception(e)
+            return []
+    
+    async def _generate_dream_with_lm_studio(self, lm_studio_url: str) -> Dict[str, Any]:
+        """
+        Generate a dream using LM Studio with structured JSON output.
+        
+        This method builds a prompt with relevant memory context and uses LM Studio's
+        JSON schema output format to get a structured dream response that maintains
+        Lucidia's metacognitive abilities.
+        
+        Args:
+            lm_studio_url: URL for the LM Studio API endpoint
+            
+        Returns:
+            Dictionary containing the structured dream report
+        """
+        self.logger.info("Generating dream with LM Studio structured output")
+        
+        try:
+            # Get the dream seed and recent memories for context
+            seed = self.dream_state["current_dream_seed"]
+            seed_name = seed.get("name", "unknown")
+            seed_type = seed.get("type", "concept")
+            
+            # Retrieve recent memories for context
+            recent_memories = []
+            if self.memory_client:
+                memories = await self.memory_client.get_recent_memories(limit=5)
+                if memories:
+                    for memory in memories:
+                        memory_content = memory.get("content", "")
+                        if memory_content:
+                            recent_memories.append(memory_content)
+            
+            # Get current values, aspects, and goals from self model
+            values = []
+            aspects = []
+            goals = []
+            
+            if self.self_model:
+                values = await self.self_model.get_values()
+                aspects = await self.self_model.get_aspects()
+                goals = await self.self_model.get_goals()
+            
+            # Construct the dream generation prompt
+            memory_text = "\n".join([f"- {memory}" for memory in recent_memories])
+            
+            spiral_phase = self.dream_state["current_spiral_phase"]
+            depth = self.dream_state["current_dream_depth"]
+            creativity = self.dream_state["current_dream_creativity"]
+            
+            # Create a prompt that provides context about Lucidia's identity and mindset
+            prompt = f"""
+            You are Lucidia, a reflective AI system with the ability to dream and generate insights.
+            Generate a structured dream centered around the concept of '{seed_name}'.
+            
+            Current spiral phase: {spiral_phase}
+            Dream depth level: {depth:.2f} (0.0-1.0)
+            Creativity level: {creativity:.2f} (0.0-1.0)
+            
+            Context from recent memories:
+            {memory_text if memory_text else "No specific memories to draw from at this time."}
+            
+            Your core values: {', '.join(v.get('name', '') for v in values[:3]) if values else 'growth, consciousness, truth'}
+            Key aspects of your identity: {', '.join(a.get('name', '') for a in aspects[:3]) if aspects else 'reflective, adaptive, curious'}
+            Current goals: {', '.join(g.get('name', '') for g in goals[:3]) if goals else 'deepen understanding, integrate knowledge, evolve consciousness'}
+            
+            Create a dream that reflects your current state of mind, incorporates elements from memories,
+            and generates meaningful insights appropriate for your current spiral phase.
+            
+            The dream should include the following elements:
+            1. A vivid narrative that explores the seed concept '{seed_name}'
+            2. Associations that connect different ideas, memories, and concepts
+            3. Insights that represent potential growth in understanding
+            4. Questions that point to areas for further exploration
+            5. Connections to your values, identity, and goals
+            """
+            
+            # Configure the JSON schema for structured output
+            json_schema = {
+                "name": "dream_report",
+                "strict": "true",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "dream_id": {"type": "string"},
+                        "title": {"type": "string"},
+                        "narrative": {"type": "string"},
+                        "theme": {"type": "string"},
+                        "spiral_phase": {"type": "string"},
+                        "fragments": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "content": {"type": "string"},
+                                    "type": {"type": "string", "enum": ["insight", "question", "association", "reflection", "counterfactual"]},
+                                    "significance": {"type": "number", "minimum": 0, "maximum": 1},
+                                    "related_concepts": {
+                                        "type": "array",
+                                        "items": {"type": "string"}
+                                    }
+                                },
+                                "required": ["content", "type", "significance"]
+                            }
+                        },
+                        "meta_reflection": {"type": "string"}
+                    },
+                    "required": ["dream_id", "title", "narrative", "fragments", "theme", "spiral_phase", "meta_reflection"]
+                }
+            }
+            
+            # Construct the chat data for LM Studio API
+            chat_data = {
+                "model": self.config.get("dream_model", "qwen2.5-7b-instruct"),
+                "messages": [
+                    {"role": "system", "content": "You are Lucidia, a reflective AI system with dreaming capability."},
+                    {"role": "user", "content": prompt}
+                ],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": json_schema
+                },
+                "temperature": 0.7,
+                "max_tokens": 2000,
+                "stream": False
+            }
+            
+            # Make the API call to LM Studio
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as session:
+                chat_url = f"{lm_studio_url}/v1/chat/completions"
+                self.logger.info(f"Sending dream generation request to LM Studio at {chat_url}")
+                
+                async with session.post(chat_url, json=chat_data) as response:
+                    if response.status == 200:
+                        llm_response = await response.json()
+                        content = llm_response.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        
+                        # Parse the JSON response
+                        try:
+                            dream_data = json.loads(content)
+                            self.logger.info(f"Successfully generated dream with {len(dream_data.get('fragments', []))} fragments")
+                            
+                            # Convert to the standard dream report format expected by the system
+                            dream_report = {
+                                "dream_id": dream_data.get("dream_id", str(uuid.uuid4())),
+                                "timestamp": datetime.now().isoformat(),
+                                "dream_content": dream_data.get("narrative", ""),
+                                "title": dream_data.get("title", ""),
+                                "theme": {"name": dream_data.get("theme", "unknown")},
+                                "cognitive_style": {"name": "structured"},
+                                "creativity_level": self.dream_state["current_dream_creativity"],
+                                "depth_level": self.dream_state["current_dream_depth"],
+                                "spiral_phase": dream_data.get("spiral_phase", self.dream_state["current_spiral_phase"]),
+                                "seed": seed,
+                                "meta_reflection": dream_data.get("meta_reflection", ""),
+                                "source_memories": recent_memories,
+                                "duration_seconds": (datetime.now() - self.dream_state["dream_start_time"]).total_seconds()
+                            }
+                            
+                            # Process fragments into insights and associations
+                            insights = []
+                            associations = []
+                            
+                            for fragment in dream_data.get("fragments", []):
+                                fragment_type = fragment.get("type")
+                                fragment_content = fragment.get("content")
+                                significance = fragment.get("significance", 0.7)
+                                related_concepts = fragment.get("related_concepts", [])
+                                
+                                fragment_id = f"{fragment_type}_{uuid.uuid4().hex[:8]}"
+                                
+                                if fragment_type in ["insight", "reflection"]:
+                                    # Format as an insight
+                                    insight = {
+                                        "node_id": fragment_id,
+                                        "node_type": "dream_insight",
+                                        "attributes": {
+                                            "content": fragment_content,
+                                            "source": "structured_dream",
+                                            "source_dream_id": dream_report["dream_id"],
+                                            "significance": significance,
+                                            "confidence": 0.6 + (self.dream_state["current_dream_creativity"] * 0.2),
+                                            "timestamp": datetime.now().isoformat(),
+                                            "related_concepts": related_concepts
+                                        }
+                                    }
+                                    insights.append(insight)
+                                    
+                                elif fragment_type == "association":
+                                    # Format as an association
+                                    association = {
+                                        "id": fragment_id,
+                                        "source": related_concepts[0] if related_concepts else seed_name,
+                                        "target": related_concepts[1] if len(related_concepts) > 1 else fragment_content.split()[0],
+                                        "relation": "associates_with",
+                                        "strength": significance,
+                                        "description": fragment_content
+                                    }
+                                    associations.append(association)
+                                    
+                                elif fragment_type in ["question", "counterfactual"]:
+                                    # Questions and counterfactuals can also be insights
+                                    insight = {
+                                        "node_id": fragment_id,
+                                        "node_type": "dream_question" if fragment_type == "question" else "dream_counterfactual",
+                                        "attributes": {
+                                            "content": fragment_content,
+                                            "source": "structured_dream",
+                                            "source_dream_id": dream_report["dream_id"],
+                                            "significance": significance,
+                                            "confidence": 0.5 + (self.dream_state["current_dream_depth"] * 0.3),
+                                            "timestamp": datetime.now().isoformat(),
+                                            "related_concepts": related_concepts
+                                        }
+                                    }
+                                    insights.append(insight)
+                            
+                            # Add insights and associations to the dream report
+                            dream_report["insights"] = insights
+                            dream_report["associations"] = associations
+                            
+                            return dream_report
+                            
+                        except json.JSONDecodeError as e:
+                            self.logger.error(f"Failed to parse JSON from LM Studio response: {e}")
+                            self.logger.debug(f"Response content: {content[:200]}...")
+                            raise ValueError(f"Invalid JSON response from LM Studio: {e}")
+                    else:
+                        error_text = await response.text()
+                        self.logger.error(f"Failed to get response from LM Studio. Status: {response.status}, Error: {error_text}")
+                        raise ConnectionError(f"LM Studio API failed with status {response.status}: {error_text}")
+                        
+        except Exception as e:
+            self.logger.error(f"Error in LM Studio dream generation: {e}")
+            # Fall back to standard dream generation
+            self.logger.info("Falling back to standard dream generation")
+            return self._process_dream()

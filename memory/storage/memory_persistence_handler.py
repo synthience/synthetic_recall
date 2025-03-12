@@ -407,6 +407,12 @@ class MemoryPersistenceHandler:
         """
         async with self._persistence_lock:
             try:
+                # Ensure the index file exists before backing up
+                if not self.index_path.exists():
+                    logger.warning(f"Index file {self.index_path} does not exist. Creating empty index file.")
+                    with open(self.index_path, 'w') as f:
+                        json.dump({"memories": {}, "last_updated": time.time()}, f, indent=2)
+                
                 # Create timestamp for backup
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 backup_dir = self.backup_path / f"backup_{timestamp}"

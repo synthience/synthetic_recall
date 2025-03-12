@@ -1,0 +1,27 @@
+{
+  "status": "success",
+  "title": "Structured Dream Report",
+  "fragments": [
+    {
+      "content": "Test memory 0 for reflection",
+      "type": "insight",
+      "confidence": 0.86
+    },
+    {
+      "content": "Test memory 1 for reflection",
+      "type": "question",
+      "confidence": 0.73
+    },
+    {
+      "content": "Test memory 2 for reflection",
+      "type": "hypothesis",
+      "confidence": 0.2
+    }
+  ],
+  "metadata": {
+    "depth": 0.5,
+    "creativity": 0.5,
+    "temperature": 0.85,
+    "memory_count": 3
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "eb5e474f-0f72-49b2-bda9-7b60e5b7d44e",
+  "content": "The Lucidia memory system consists of Short-Term Memory (STM), Long-Term Memory (LTM), and Memory Processing Layer (MPL).",
+  "embedding": null,
+  "timestamp": 1741659119.7734427,
+  "significance": 0.925,
+  "metadata": {
+    "category": "memory_system",
+    "source": "architecture_document",
+    "creation_context": "system_design",
+    "tags": [
+      "hierarchical_memory",
+      "memory_layers"
+    ]
+  },
+  "access_count": 1,
+  "last_access": 1741659124.7957673
+}

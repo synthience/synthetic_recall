@@ -1,0 +1,27 @@
+{
+  "status": "success",
+  "title": "Dream Analysis Report",
+  "fragments": [
+    {
+      "content": "Recent conversation with the user initiating a /dream command.",
+      "type": "insight",
+      "confidence": 0.9
+    },
+    {
+      "content": "The high significance of this memory (0.9) suggests it may be important for ongoing analysis or decision-making processes.",
+      "type": "insight",
+      "confidence": 0.75
+    },
+    {
+      "content": "The creation time aligns with the current date, indicating recent interaction and relevance to current state of mind or environment.",
+      "type": "insight",
+      "confidence": 0.8
+    }
+  ],
+  "metadata": {
+    "depth": 0.7,
+    "creativity": 0.5,
+    "temperature": 0.85,
+    "memory_count": 1
+  }
+}

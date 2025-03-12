@@ -1,0 +1,64 @@
+sequenceDiagram
+    participant Client
+    participant DPA as Dream Parameter Adapter
+    participant PM as Parameter Manager
+    participant DP as Dream Processor
+    
+    %% Parameter Update Operation
+    Main->>DPA: update_parameter(path, value, transition_period)
+    activate DPA
+    
+    DPA->>PM: update_parameter(path, value, transition_period, context, user_id)
+    activate PM
+    
+    %% Parameter Validation and Processing
+    PM->>PM: Validate parameter path
+    PM->>PM: Check parameter bounds
+    PM->>PM: Calculate final value (considering limits, smoothing, etc.)
+    PM->>PM: Store parameter change (history)
+    
+    PM-->>DPA: Return new value and transition details
+    deactivate PM
+    
+    %% Notify Dream Processor
+    DPA->>DPA: on_parameter_changed(parameter_path, new_value, change_record)
+    DPA->>DP: Update config
+    DP->>DP: Apply parameter changes
+    
+    DPA-->>Main: Notify parameter change complete
+    deactivate DPA
+    
+    %% Get Parameter Value
+    Main->>PM: get_parameter(path, context, user_id)
+    activate PM
+    PM->>PM: Validate parameter path
+    PM->>PM: Retrieve current value
+    PM-->>Main: Return current value
+    deactivate PM
+    
+    %% Get Parameter History
+    Main->>PM: get_parameter_history(path, context, user_id, limit)
+    activate PM
+    PM->>PM: Validate parameter path
+    PM->>PM: Retrieve change history
+    PM-->>Main: Return parameter change history
+    deactivate PM
+    
+    %% Set Parameter Bounds
+    Main->>PM: set_parameter_bounds(path, min_value, max_value, context, user_id)
+    activate PM
+    PM->>PM: Validate parameter path
+    PM->>PM: Validate bounds
+    PM->>PM: Store bounds
+    PM-->>Main: Return success
+    deactivate PM
+    
+    %% Reset Parameter
+    Main->>PM: reset_parameter(path, context, user_id)
+    activate PM
+    PM->>PM: Validate parameter path
+    PM->>PM: Validate context
+    PM->>PM: Reset to default value
+    PM->>PM: Log reset action
+    PM-->>Main: Return success
+    deactivate PM

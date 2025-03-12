@@ -1,0 +1,1218 @@
+2025-03-10 18:49:51,728 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_184951
+2025-03-10 18:49:51,879 - asyncio - ERROR - Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x0000024BC35DAA20>
+2025-03-10 18:54:03,333 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_185403
+2025-03-10 18:54:03,357 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 18:54:03,357 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8081/health in 1.03s (attempt 1/3)
+2025-03-10 18:54:04,399 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 18:54:04,399 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8081/health in 2.09s (attempt 2/3)
+2025-03-10 18:54:06,503 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 18:54:09,981 - LucidiaReflectionCLI - ERROR - Failed to connect to Dream API at http://localhost:8081
+2025-03-10 18:54:10,022 - asyncio - ERROR - Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x000001EBE11BA7E0>
+2025-03-10 18:57:04,541 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_185704
+2025-03-10 18:57:04,558 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 18:57:04,559 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8081/health in 1.07s (attempt 1/3)
+2025-03-10 18:57:05,648 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 18:57:05,648 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8081/health in 2.17s (attempt 2/3)
+2025-03-10 18:57:07,830 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 18:57:12,795 - LucidiaReflectionCLI - ERROR - Failed to connect to Dream API at http://localhost:8081
+2025-03-10 18:57:12,847 - asyncio - ERROR - Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x000002ADE4894FE0>
+2025-03-10 18:57:24,127 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_185724
+2025-03-10 18:57:24,140 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 18:57:24,140 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8081/health in 1.06s (attempt 1/3)
+2025-03-10 18:57:25,210 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 18:57:25,211 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8081/health in 2.15s (attempt 2/3)
+2025-03-10 18:57:27,381 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 18:57:30,247 - LucidiaReflectionCLI - ERROR - Failed to connect to Dream API at http://localhost:8081
+2025-03-10 18:57:30,292 - asyncio - ERROR - Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x0000020C7F334F20>
+2025-03-10 18:57:44,441 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_185744
+2025-03-10 18:57:44,459 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 18:57:44,459 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8081/health in 1.07s (attempt 1/3)
+2025-03-10 18:57:45,544 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 18:57:45,546 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8081/health in 2.04s (attempt 2/3)
+2025-03-10 18:57:47,603 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 18:57:52,986 - LucidiaReflectionCLI - ERROR - Error connecting to services: 
+2025-03-10 19:04:33,096 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_190433
+2025-03-10 19:04:33,111 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 19:04:33,112 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8081/health in 1.04s (attempt 1/3)
+2025-03-10 19:04:34,175 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 19:04:34,175 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8081/health in 2.10s (attempt 2/3)
+2025-03-10 19:04:36,287 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 19:04:40,598 - LucidiaReflectionCLI - ERROR - Failed to connect to Dream API at http://localhost:8081
+2025-03-10 19:04:40,600 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:06:37,567 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_190637
+2025-03-10 19:06:37,581 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 19:06:37,581 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8081/health in 1.06s (attempt 1/3)
+2025-03-10 19:06:38,664 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 19:06:38,664 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8081/health in 2.06s (attempt 2/3)
+2025-03-10 19:06:40,729 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8081/health failed: Server disconnected
+2025-03-10 19:08:01,747 - LucidiaReflectionCLI - ERROR - Error connecting to services: 
+2025-03-10 19:08:01,748 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:08:08,728 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_190808
+2025-03-10 19:08:08,730 - LucidiaReflectionCLI - ERROR - Request to http://0.0.0.0:8080/health failed: Cannot connect to host 0.0.0.0:8080 ssl:default [The format of the specified network name is invalid]
+2025-03-10 19:08:08,730 - LucidiaReflectionCLI - INFO - Retrying request to http://0.0.0.0:8080/health in 1.08s (attempt 1/3)
+2025-03-10 19:08:09,821 - LucidiaReflectionCLI - ERROR - Request to http://0.0.0.0:8080/health failed: Cannot connect to host 0.0.0.0:8080 ssl:default [The format of the specified network name is invalid]
+2025-03-10 19:08:09,821 - LucidiaReflectionCLI - INFO - Retrying request to http://0.0.0.0:8080/health in 2.16s (attempt 2/3)
+2025-03-10 19:08:11,987 - LucidiaReflectionCLI - ERROR - Request to http://0.0.0.0:8080/health failed: Cannot connect to host 0.0.0.0:8080 ssl:default [The format of the specified network name is invalid]
+2025-03-10 19:09:04,434 - LucidiaReflectionCLI - ERROR - Error connecting to services: 
+2025-03-10 19:09:04,434 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:09:05,195 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_190905
+2025-03-10 19:09:05,217 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:09:05,219 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:09:09,331 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_190909
+2025-03-10 19:09:09,348 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:09:09,350 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:09:31,847 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_190931
+2025-03-10 19:09:31,863 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:09:31,868 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/parameters/config returned status 404
+2025-03-10 19:09:31,869 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-10 19:09:31,870 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:09:53,712 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_190953
+2025-03-10 19:09:53,727 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:09:53,731 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/dream/start returned status 404
+2025-03-10 19:09:53,731 - LucidiaReflectionCLI - ERROR - Failed to start dream session
+2025-03-10 19:09:53,732 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:12:26,885 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_191226
+2025-03-10 19:12:26,887 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 19:12:26,903 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:12:26,905 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:12:36,275 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_191236
+2025-03-10 19:12:36,276 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 19:12:36,287 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:12:36,290 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:12:46,452 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_191246
+2025-03-10 19:12:46,453 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 19:12:46,467 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:12:46,469 - LucidiaReflectionCLI - INFO - Starting dream session with params: {'duration': 10, 'depth': 0.5, 'creativity': 0.5, 'memories': []}
+2025-03-10 19:12:46,472 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/sessions/start returned status 404
+2025-03-10 19:12:46,473 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-10 19:12:46,473 - LucidiaReflectionCLI - ERROR - Invalid response: {'detail': 'Not Found'}
+2025-03-10 19:12:46,474 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:25:09,915 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_192509
+2025-03-10 19:25:09,915 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 19:25:10,753 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:25:10,754 - LucidiaReflectionCLI - INFO - Starting dream session with params: {'duration': 10, 'depth': 0.5, 'creativity': 0.5, 'memories': []}
+2025-03-10 19:25:10,754 - LucidiaReflectionCLI - ERROR - Error starting dream session: name 'uuid' is not defined
+2025-03-10 19:25:10,757 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:26:32,022 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_192632
+2025-03-10 19:26:32,023 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 19:26:32,046 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:26:32,047 - LucidiaReflectionCLI - INFO - Starting dream session with params: {'duration': 10, 'depth': 0.5, 'creativity': 0.5, 'memories': []}
+2025-03-10 19:26:32,047 - LucidiaReflectionCLI - INFO - Starting local dream session: local_480b0ec9
+2025-03-10 19:26:32,052 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/memories/significant?limit=5 returned status 404
+2025-03-10 19:26:32,052 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-10 19:26:32,068 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 19:26:32,068 - LucidiaReflectionCLI - ERROR - Error generating reflection: 'str' object has no attribute 'get'
+2025-03-10 19:26:32,072 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:26:32,073 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 19:28:17,854 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_192817
+2025-03-10 19:28:17,854 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 19:28:17,866 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:28:17,866 - LucidiaReflectionCLI - INFO - Starting dream session with params: {'duration': 10, 'depth': 0.5, 'creativity': 0.5, 'memories': []}
+2025-03-10 19:28:17,867 - LucidiaReflectionCLI - INFO - Starting local dream session: local_1a513996
+2025-03-10 19:28:17,869 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/memories/significant?limit=5 returned status 404
+2025-03-10 19:28:17,869 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-10 19:28:17,875 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 19:28:17,875 - LucidiaReflectionCLI - ERROR - Error generating reflection: 'str' object has no attribute 'get'
+2025-03-10 19:28:17,880 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:28:17,881 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 19:29:11,225 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_192911
+2025-03-10 19:29:11,226 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 19:29:11,239 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:29:11,240 - LucidiaReflectionCLI - INFO - Starting dream session with params: {'duration': 10, 'depth': 0.5, 'creativity': 0.5, 'memories': []}
+2025-03-10 19:29:11,240 - LucidiaReflectionCLI - INFO - Starting local dream session: local_0939dd21
+2025-03-10 19:29:11,243 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/memories/significant?limit=5 returned status 404
+2025-03-10 19:29:11,243 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-10 19:29:11,251 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 19:29:11,251 - LucidiaReflectionCLI - ERROR - Error generating reflection: 'str' object has no attribute 'get'
+2025-03-10 19:29:11,256 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:29:11,258 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 19:30:05,115 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_193005
+2025-03-10 19:30:05,115 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 19:30:05,127 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:30:05,129 - LucidiaReflectionCLI - INFO - Starting dream session with params: {'duration': 10, 'depth': 0.5, 'creativity': 0.5, 'memories': []}
+2025-03-10 19:30:05,129 - LucidiaReflectionCLI - INFO - Starting local dream session: local_478984b2
+2025-03-10 19:30:05,132 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/memories/significant?limit=5 returned status 404
+2025-03-10 19:30:05,132 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-10 19:30:05,138 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 19:30:05,139 - LucidiaReflectionCLI - ERROR - Error generating reflection: 'str' object has no attribute 'get'
+2025-03-10 19:30:05,143 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:30:05,144 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 19:32:37,665 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_193237
+2025-03-10 19:32:37,665 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 19:32:37,676 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:32:37,677 - LucidiaReflectionCLI - INFO - Starting dream session with params: {'duration': 10, 'depth': 0.5, 'creativity': 0.5, 'memories': []}
+2025-03-10 19:32:37,677 - LucidiaReflectionCLI - INFO - Starting local dream session: local_1cb3426a
+2025-03-10 19:32:37,679 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/memories/significant?limit=5 returned status 404
+2025-03-10 19:32:37,679 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-10 19:32:37,680 - LucidiaReflectionCLI - WARNING - Invalid memories returned: <class 'dict'>, creating dummy memories
+2025-03-10 19:32:37,680 - LucidiaReflectionCLI - WARNING - No memories available for reflection, creating dummy memories
+2025-03-10 19:32:37,685 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 19:32:37,685 - LucidiaReflectionCLI - INFO - Generating reflection with depth=0.5, creativity=0.5...
+2025-03-10 19:32:37,907 - LucidiaReflectionCLI - ERROR - LM Studio returned error: 400
+2025-03-10 19:32:37,909 - LucidiaReflectionCLI - INFO - Saved reflection to session_data\session_20250310_193237\local_1cb3426a_reflection.json
+2025-03-10 19:32:37,912 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:32:37,912 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 19:33:17,133 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_193317
+2025-03-10 19:33:17,133 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 19:33:17,144 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:33:17,145 - LucidiaReflectionCLI - INFO - Starting dream session with params: {'duration': 10, 'depth': 0.5, 'creativity': 0.5, 'memories': []}
+2025-03-10 19:33:17,145 - LucidiaReflectionCLI - INFO - Starting local dream session: local_9c3657fa
+2025-03-10 19:33:17,148 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/memories/significant?limit=5 returned status 404
+2025-03-10 19:33:17,148 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-10 19:33:17,148 - LucidiaReflectionCLI - WARNING - Invalid memories returned: <class 'dict'>, creating dummy memories
+2025-03-10 19:33:17,148 - LucidiaReflectionCLI - WARNING - No memories available for reflection, creating dummy memories
+2025-03-10 19:33:17,154 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 19:33:17,154 - LucidiaReflectionCLI - INFO - Generating reflection with depth=0.5, creativity=0.5...
+2025-03-10 19:33:17,175 - LucidiaReflectionCLI - ERROR - LM Studio returned error: 400 - Response body: {"error":"Error rendering prompt with jinja template: Error: Parser Error: Expected closing statement token. OpenSquareBracket !== CloseStatement."}
+2025-03-10 19:33:17,177 - LucidiaReflectionCLI - INFO - Saved reflection to session_data\session_20250310_193317\local_9c3657fa_reflection.json
+2025-03-10 19:33:17,180 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:33:17,180 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 19:33:34,499 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_193334
+2025-03-10 19:33:34,499 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 19:33:34,513 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:33:34,515 - LucidiaReflectionCLI - INFO - Starting dream session with params: {'duration': 10, 'depth': 0.5, 'creativity': 0.5, 'memories': []}
+2025-03-10 19:33:34,515 - LucidiaReflectionCLI - INFO - Starting local dream session: local_be1894ec
+2025-03-10 19:33:34,517 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/memories/significant?limit=5 returned status 404
+2025-03-10 19:33:34,518 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-10 19:33:34,518 - LucidiaReflectionCLI - WARNING - Invalid memories returned: <class 'dict'>, creating dummy memories
+2025-03-10 19:33:34,519 - LucidiaReflectionCLI - WARNING - No memories available for reflection, creating dummy memories
+2025-03-10 19:33:34,525 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 19:33:34,525 - LucidiaReflectionCLI - INFO - Generating reflection with depth=0.5, creativity=0.5...
+2025-03-10 19:33:39,761 - LucidiaReflectionCLI - INFO - Generated reflection with 3 fragments
+2025-03-10 19:33:39,763 - LucidiaReflectionCLI - INFO - Saved reflection to session_data\session_20250310_193334\local_be1894ec_reflection.json
+2025-03-10 19:33:39,765 - LucidiaReflectionCLI - ERROR - Error starting dream session: name 'Columns' is not defined
+2025-03-10 19:33:39,766 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:33:39,766 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 19:42:02,446 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_194202
+2025-03-10 19:42:02,446 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 19:42:02,466 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:42:02,468 - LucidiaReflectionCLI - INFO - Starting dream session with params: {'duration': 10, 'depth': 0.5, 'creativity': 0.5, 'memories': []}
+2025-03-10 19:42:02,468 - LucidiaReflectionCLI - INFO - Starting local dream session: local_925eb573
+2025-03-10 19:42:02,468 - LucidiaReflectionCLI - INFO - Retrieving 5 significant memories from Dream API
+2025-03-10 19:42:02,489 - LucidiaReflectionCLI - INFO - Retrieved 0 significant memories
+2025-03-10 19:42:02,489 - LucidiaReflectionCLI - WARNING - No memories available for reflection, creating dummy memories
+2025-03-10 19:42:02,495 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 19:42:02,495 - LucidiaReflectionCLI - INFO - Generating reflection with depth=0.5, creativity=0.5...
+2025-03-10 19:42:06,923 - LucidiaReflectionCLI - INFO - Generated reflection with 3 fragments
+2025-03-10 19:42:06,927 - LucidiaReflectionCLI - INFO - Saved reflection to session_data\session_20250310_194202\local_925eb573_reflection.json
+2025-03-10 19:42:06,932 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:42:06,933 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 19:44:43,425 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_194443
+2025-03-10 19:44:43,425 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 19:44:43,438 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 19:44:43,438 - LucidiaReflectionCLI - INFO - Starting dream session with params: {'duration': 10, 'depth': 0.5, 'creativity': 0.5, 'memories': []}
+2025-03-10 19:44:43,438 - LucidiaReflectionCLI - INFO - Starting local dream session: local_13a6cb78
+2025-03-10 19:44:43,439 - LucidiaReflectionCLI - INFO - Retrieving 5 significant memories from Dream API
+2025-03-10 19:44:43,443 - LucidiaReflectionCLI - INFO - Retrieved 0 significant memories
+2025-03-10 19:44:43,443 - LucidiaReflectionCLI - WARNING - No memories available for reflection, creating dummy memories
+2025-03-10 19:44:43,448 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 19:44:43,448 - LucidiaReflectionCLI - INFO - Generating reflection with depth=0.5, creativity=0.5...
+2025-03-10 19:44:48,515 - LucidiaReflectionCLI - INFO - Generated reflection with 2 fragments
+2025-03-10 19:44:48,517 - LucidiaReflectionCLI - INFO - Saved reflection to session_data\session_20250310_194443\local_13a6cb78_reflection.json
+2025-03-10 19:44:48,521 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 19:44:48,522 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 20:07:18,422 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_200718
+2025-03-10 20:07:18,422 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:07:18,436 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:07:18,439 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/parameters/config returned status 404
+2025-03-10 20:07:18,439 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-10 20:07:18,440 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/parameters/config returned status 404
+2025-03-10 20:07:18,440 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-10 20:07:18,443 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:10:04,038 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_201004
+2025-03-10 20:10:04,039 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:10:04,052 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:10:04,055 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/parameters/config returned status 404
+2025-03-10 20:10:04,055 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-10 20:10:04,056 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/parameters/config returned status 404
+2025-03-10 20:10:04,056 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-10 20:10:04,059 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:11:36,999 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_201136
+2025-03-10 20:11:36,999 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:11:37,011 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:11:37,019 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:11:37,019 - LucidiaReflectionCLI - ERROR - Error in main
+Traceback (most recent call last):
+  File "C:\Users\danny\OneDrive\Documents\AI_Conversations\lucid-recall-dist\lucid-recall-dist\lucidia_cli.py", line 2262, in main
+    await client.display_parameters()
+  File "C:\Users\danny\OneDrive\Documents\AI_Conversations\lucid-recall-dist\lucid-recall-dist\lucidia_cli.py", line 1295, in display_parameters
+    print_param_tree(params)
+  File "C:\Users\danny\OneDrive\Documents\AI_Conversations\lucid-recall-dist\lucid-recall-dist\lucidia_cli.py", line 1288, in print_param_tree
+    print_param_tree(data, full_path, indent + 1)
+  File "C:\Users\danny\OneDrive\Documents\AI_Conversations\lucid-recall-dist\lucid-recall-dist\lucidia_cli.py", line 1255, in print_param_tree
+    value = data.get('value', 'undefined')
+            ^^^^^^^^
+AttributeError: 'float' object has no attribute 'get'
+2025-03-10 20:14:31,754 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_201431
+2025-03-10 20:14:31,754 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:14:31,766 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:14:31,774 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:14:31,774 - LucidiaReflectionCLI - ERROR - Error in main
+Traceback (most recent call last):
+  File "C:\Users\danny\OneDrive\Documents\AI_Conversations\lucid-recall-dist\lucid-recall-dist\lucidia_cli.py", line 2262, in main
+    await client.display_parameters()
+  File "C:\Users\danny\OneDrive\Documents\AI_Conversations\lucid-recall-dist\lucid-recall-dist\lucidia_cli.py", line 1295, in display_parameters
+    print_param_tree(params)
+  File "C:\Users\danny\OneDrive\Documents\AI_Conversations\lucid-recall-dist\lucid-recall-dist\lucidia_cli.py", line 1288, in print_param_tree
+    print_param_tree(data, full_path, indent + 1)
+  File "C:\Users\danny\OneDrive\Documents\AI_Conversations\lucid-recall-dist\lucid-recall-dist\lucidia_cli.py", line 1255, in print_param_tree
+    value = data.get('value', 'undefined')
+            ^^^^^^^^
+AttributeError: 'float' object has no attribute 'get'
+2025-03-10 20:16:20,786 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_201620
+2025-03-10 20:16:20,786 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:16:20,799 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:16:20,815 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:16:53,408 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_201653
+2025-03-10 20:16:53,408 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:16:53,420 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:16:53,469 - LucidiaReflectionCLI - INFO - Updated parameter memory.batch_size: {'success': True, 'path': 'memory.batch_size', 'updated': True, 'previous_value': None, 'new_value': 100}
+2025-03-10 20:16:53,472 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:17:08,024 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_201708
+2025-03-10 20:17:08,024 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:17:08,037 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:17:08,051 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:19:47,479 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_201947
+2025-03-10 20:19:47,479 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:19:47,491 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:19:47,553 - LucidiaReflectionCLI - INFO - Updated parameter memory.batch_size: {'success': True, 'path': 'memory.batch_size', 'updated': True, 'previous_value': None, 'new_value': 100}
+2025-03-10 20:19:47,557 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:19:59,963 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_201959
+2025-03-10 20:19:59,964 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:19:59,978 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:19:59,996 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:22:08,293 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_202208
+2025-03-10 20:22:08,293 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:22:08,305 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:22:08,362 - LucidiaReflectionCLI - INFO - Updated parameter memory.batch_size: {'success': True, 'path': 'memory.batch_size', 'updated': True, 'previous_value': None, 'new_value': 64}
+2025-03-10 20:22:08,364 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:22:21,092 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_202221
+2025-03-10 20:22:21,093 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:22:21,106 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:22:21,122 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:23:59,181 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_202359
+2025-03-10 20:23:59,181 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:23:59,191 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:23:59,207 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:24:12,285 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_202412
+2025-03-10 20:24:12,285 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:24:12,297 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:24:12,344 - LucidiaReflectionCLI - INFO - Updated parameter memory.batch_size: {'success': True, 'path': 'memory.batch_size', 'updated': True, 'previous_value': None, 'new_value': 64}
+2025-03-10 20:24:12,347 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:24:16,915 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_202416
+2025-03-10 20:24:16,915 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:24:16,925 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:24:16,940 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:24:56,237 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_202456
+2025-03-10 20:24:56,237 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:24:56,249 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:24:56,297 - LucidiaReflectionCLI - INFO - Updated parameter memory.batch_size: {'success': True, 'path': 'memory.batch_size', 'updated': True, 'previous_value': None, 'new_value': 128}
+2025-03-10 20:24:56,301 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:25:09,551 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_202509
+2025-03-10 20:25:09,552 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:25:09,562 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:25:09,578 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:27:29,978 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_202729
+2025-03-10 20:27:29,979 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:27:29,990 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:27:30,044 - LucidiaReflectionCLI - INFO - Updated parameter memory.batch_size: {'success': True, 'path': 'memory.batch_size', 'updated': True, 'previous_value': None, 'new_value': 200}
+2025-03-10 20:27:30,046 - LucidiaReflectionCLI - INFO - Updated local configuration file: lucidia_config.json
+2025-03-10 20:27:30,048 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:27:43,415 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_202743
+2025-03-10 20:27:43,415 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:27:43,428 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:27:43,443 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:28:24,551 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_202824
+2025-03-10 20:28:24,552 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:28:24,568 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:28:24,589 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:29:06,841 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_202906
+2025-03-10 20:29:06,842 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:29:06,854 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:29:06,905 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8080/api/dream/parameters/config/memory.batch_size failed with status 500: {"detail":"Failed to update parameter: 404: Parameter memory.batch_size not found"}
+2025-03-10 20:29:06,906 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8080/api/dream/parameters/config/memory.batch_size in 1.05s (attempt 1/3)
+2025-03-10 20:29:08,012 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8080/api/dream/parameters/config/memory.batch_size failed with status 500: {"detail":"Failed to update parameter: 404: Parameter memory.batch_size not found"}
+2025-03-10 20:29:08,013 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8080/api/dream/parameters/config/memory.batch_size in 2.12s (attempt 2/3)
+2025-03-10 20:29:10,185 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8080/api/dream/parameters/config/memory.batch_size failed with status 500: {"detail":"Failed to update parameter: 404: Parameter memory.batch_size not found"}
+2025-03-10 20:29:21,083 - LucidiaReflectionCLI - ERROR - Error updating parameter memory.batch_size: 
+2025-03-10 20:29:21,086 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:30:42,756 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_203042
+2025-03-10 20:30:42,758 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:30:42,767 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:30:42,813 - LucidiaReflectionCLI - INFO - Updated parameter memory.batch_size: {'success': True, 'path': 'memory.batch_size', 'updated': True, 'previous_value': 50, 'new_value': 250, 'status': 'success', 'transaction_id': 'param_1741638642_memory_batch_size'}
+2025-03-10 20:30:42,815 - LucidiaReflectionCLI - INFO - Updated local configuration file: lucidia_config.json
+2025-03-10 20:30:42,818 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:30:54,297 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_203054
+2025-03-10 20:30:54,297 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:30:54,306 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:30:54,330 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:31:35,875 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_203135
+2025-03-10 20:31:35,875 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:31:35,887 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:31:35,910 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:31:51,430 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_203151
+2025-03-10 20:31:51,431 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:31:51,441 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:31:51,495 - LucidiaReflectionCLI - INFO - Updated parameter memory.batch_size: {'success': True, 'path': 'memory.batch_size', 'updated': True, 'previous_value': 250, 'new_value': 300, 'status': 'success', 'transaction_id': 'param_1741638711_memory_batch_size'}
+2025-03-10 20:31:51,497 - LucidiaReflectionCLI - INFO - Updated local configuration file: lucidia_config.json
+2025-03-10 20:31:51,499 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:32:05,644 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_203205
+2025-03-10 20:32:05,644 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:32:05,657 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:32:05,677 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:37:21,001 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_203721
+2025-03-10 20:37:21,002 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 20:37:21,014 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 20:38:01,945 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 20:38:01,945 - LucidiaReflectionCLI - INFO - Generating reflection with depth=0.7, creativity=0.5...
+2025-03-10 20:38:07,460 - LucidiaReflectionCLI - INFO - Generated reflection with 3 fragments
+2025-03-10 20:41:17,677 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 20:41:17,677 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 21:27:21,197 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_212721
+2025-03-10 21:27:21,197 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 21:27:21,216 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 21:27:21,259 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 21:32:31,430 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_213231
+2025-03-10 21:32:31,430 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 21:32:31,445 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 21:32:48,553 - LucidiaReflectionCLI - INFO - Expanded query 'mega' to include: ['mega']
+2025-03-10 21:32:53,368 - LucidiaReflectionCLI - INFO - Expanded query 'name' to include: ['name', 'identity', 'title', 'label', 'handle', 'alias', 'moniker']
+2025-03-10 21:34:06,160 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 21:34:14,656 - LucidiaReflectionCLI - INFO - Expanded query 'name' to include: ['name', 'identity', 'title', 'label', 'handle', 'alias', 'moniker']
+2025-03-10 21:40:34,416 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 21:40:34,416 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 21:41:28,010 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_214128
+2025-03-10 21:41:28,010 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 21:41:28,022 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 21:42:25,719 - LucidiaReflectionCLI - INFO - Expanded query 'mega' to include: ['mega']
+2025-03-10 21:42:53,636 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 21:43:01,105 - LucidiaReflectionCLI - INFO - Expanded query 'name' to include: ['name', 'identity', 'title', 'label', 'handle', 'alias', 'moniker']
+2025-03-10 21:47:24,473 - LucidiaReflectionCLI - INFO - Expanded query 'name' to include: ['name', 'identity', 'title', 'label', 'handle', 'alias', 'moniker']
+2025-03-10 21:47:37,786 - LucidiaReflectionCLI - INFO - Expanded query 'mega' to include: ['mega']
+2025-03-10 21:51:18,597 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 21:51:18,597 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 21:51:22,776 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_215122
+2025-03-10 21:51:22,777 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 21:51:22,787 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 21:51:25,785 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 21:51:29,047 - LucidiaReflectionCLI - INFO - Expanded query 'name' to include: ['name', 'identity', 'title', 'label', 'handle', 'alias', 'moniker']
+2025-03-10 21:55:55,433 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 21:55:55,433 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 21:56:52,207 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_215652
+2025-03-10 21:56:52,207 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 21:56:52,220 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 21:57:31,594 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 21:57:31,846 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-10 21:57:31,848 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-10 21:57:38,747 - LucidiaReflectionCLI - INFO - Expanded query 'name' to include: ['name', 'identity', 'title', 'label', 'handle', 'alias', 'moniker']
+2025-03-10 22:01:51,323 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 22:01:51,323 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 22:03:15,210 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_220315
+2025-03-10 22:03:15,212 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 22:03:15,224 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 22:03:45,707 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 22:03:46,121 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-10 22:03:46,123 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-10 22:05:16,546 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 22:05:16,547 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 22:07:01,922 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_220701
+2025-03-10 22:07:01,923 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 22:07:01,934 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 22:07:16,528 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 22:07:16,855 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.2
+2025-03-10 22:07:16,856 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-10 22:08:49,973 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 22:08:49,974 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 22:11:34,823 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_221134
+2025-03-10 22:11:34,823 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 22:11:34,841 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 22:11:38,456 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 22:11:38,775 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-10 22:11:38,777 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-10 22:11:41,778 - LucidiaReflectionCLI - INFO - Expanded query 'name' to include: ['name', 'identity', 'title', 'label', 'handle', 'alias', 'moniker']
+2025-03-10 22:13:00,957 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 22:13:00,957 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 22:16:51,948 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_221651
+2025-03-10 22:16:51,949 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 22:16:51,973 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 22:16:56,930 - LucidiaReflectionCLI - INFO - Expanded query 'name' to include: ['name', 'identity', 'title', 'label', 'handle', 'alias', 'moniker']
+2025-03-10 22:16:59,776 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 22:16:59,918 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-10 22:16:59,919 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-10 22:17:05,842 - LucidiaReflectionCLI - INFO - Expanded query 'mega' to include: ['mega']
+2025-03-10 22:20:34,442 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 22:20:34,442 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 22:20:38,418 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_222038
+2025-03-10 22:20:38,418 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 22:20:38,434 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 22:21:36,848 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 22:21:36,954 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-10 22:21:36,956 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-10 22:32:30,986 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 22:32:30,986 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 22:32:42,077 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_223242
+2025-03-10 22:32:42,078 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 22:32:42,094 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 22:32:47,043 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 22:32:47,148 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-10 22:32:47,149 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-10 22:33:55,959 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 22:33:55,960 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 22:40:09,048 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_224009
+2025-03-10 22:40:09,049 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 22:40:09,065 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 22:41:17,845 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 22:44:04,562 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_224404
+2025-03-10 22:44:04,562 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 22:44:04,579 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 22:44:09,839 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 22:44:09,974 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-10 22:44:09,975 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-10 22:45:46,860 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 22:45:46,860 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 23:04:29,702 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_230429
+2025-03-10 23:04:29,702 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 23:04:29,718 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 23:04:51,045 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 23:04:51,379 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-10 23:04:51,381 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-10 23:11:01,859 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-10 23:11:01,859 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-10 23:12:11,801 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 23:12:11,802 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 23:12:57,924 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_231257
+2025-03-10 23:12:57,926 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 23:12:57,940 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 23:13:27,168 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 23:13:27,415 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-10 23:13:27,416 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-10 23:16:11,848 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 23:16:11,849 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 23:17:09,298 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_231709
+2025-03-10 23:17:09,298 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 23:17:09,310 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 23:17:28,229 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 23:17:28,539 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-10 23:17:28,540 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-10 23:17:30,888 - LucidiaReflectionCLI - INFO - Expanded query 'name' to include: ['name', 'identity', 'title', 'label', 'handle', 'alias', 'moniker']
+2025-03-10 23:17:35,207 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 23:17:35,207 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 23:19:11,621 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_231911
+2025-03-10 23:19:11,622 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 23:19:11,633 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 23:20:25,430 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 23:30:41,011 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_233041
+2025-03-10 23:30:41,011 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 23:30:41,026 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 23:30:45,755 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 23:30:46,092 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-10 23:30:46,092 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-10 23:31:32,620 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 23:31:32,620 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-10 23:45:07,913 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250310_234507
+2025-03-10 23:45:07,915 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-10 23:45:07,938 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-10 23:45:18,644 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-10 23:45:19,013 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.2
+2025-03-10 23:45:19,014 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-10 23:46:50,610 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-10 23:46:50,611 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-11 00:20:41,855 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_002041
+2025-03-11 00:20:41,857 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 00:20:41,880 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 00:21:01,616 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-11 00:21:01,953 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.1
+2025-03-11 00:21:01,955 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-11 00:23:09,779 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 00:23:09,779 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-11 00:52:29,253 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_005229
+2025-03-11 00:52:29,254 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 00:52:29,270 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 00:52:59,263 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-11 00:52:59,558 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-11 00:52:59,559 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-11 00:53:10,702 - LucidiaReflectionCLI - INFO - Expanded query 'name' to include: ['name', 'identity', 'title', 'label', 'handle', 'alias', 'moniker']
+2025-03-11 00:58:56,367 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 00:58:56,368 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-11 20:54:39,518 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_205439
+2025-03-11 20:55:15,553 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_205515
+2025-03-11 20:55:15,553 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 20:55:15,567 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 20:55:15,567 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 20:55:15,568 - LucidiaReflectionCLI - ERROR - Error in main
+Traceback (most recent call last):
+  File "C:\Users\danny\OneDrive\Documents\AI_Conversations\lucid-recall-dist\lucid-recall-dist\lucidia_cli.py", line 2460, in main
+    await client.show_dashboard()
+          ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'LucidiaReflectionClient' object has no attribute 'show_dashboard'
+2025-03-11 20:56:51,506 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_205651
+2025-03-11 20:56:51,507 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 20:56:51,517 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 20:56:51,527 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 20:56:51,530 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 20:56:51,530 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:56:51,530 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 20:56:51,532 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 20:56:51,533 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:56:51,533 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 20:56:51,535 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 20:56:51,535 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:56:51,535 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 20:56:56,541 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 20:56:56,543 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 20:56:56,543 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:56:56,543 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 20:56:56,545 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 20:56:56,545 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:56:56,545 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 20:56:56,547 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 20:56:56,547 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:56:56,547 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 20:57:01,554 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 20:57:01,556 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 20:57:01,557 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:01,560 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 20:57:01,562 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 20:57:01,563 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:01,563 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 20:57:01,565 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 20:57:01,565 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:01,565 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 20:57:06,579 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 20:57:06,581 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 20:57:06,581 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:06,581 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 20:57:06,583 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 20:57:06,583 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:06,583 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 20:57:06,584 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 20:57:06,585 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:06,585 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 20:57:11,604 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 20:57:11,605 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 20:57:11,606 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:11,606 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 20:57:11,607 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 20:57:11,607 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:11,608 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 20:57:11,609 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 20:57:11,609 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:11,609 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 20:57:16,627 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 20:57:16,629 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 20:57:16,629 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:16,629 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 20:57:16,631 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 20:57:16,631 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:16,631 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 20:57:16,635 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 20:57:16,635 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:16,635 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 20:57:21,643 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 20:57:21,645 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 20:57:21,645 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:21,645 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 20:57:21,648 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 20:57:21,648 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:21,648 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 20:57:21,650 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 20:57:21,650 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:21,650 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 20:57:26,658 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 20:57:26,660 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 20:57:26,661 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:26,661 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 20:57:26,663 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 20:57:26,663 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:26,663 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 20:57:26,665 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 20:57:26,665 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:26,665 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 20:57:31,673 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 20:57:31,674 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 20:57:31,675 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:31,675 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 20:57:31,676 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 20:57:31,677 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:31,677 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 20:57:31,678 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 20:57:31,678 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:31,679 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 20:57:36,685 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 20:57:36,687 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 20:57:36,687 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:36,688 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 20:57:36,689 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 20:57:36,689 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:36,689 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 20:57:36,691 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 20:57:36,691 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:36,691 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 20:57:41,709 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 20:57:41,711 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 20:57:41,712 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:41,712 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 20:57:41,713 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 20:57:41,714 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:41,714 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 20:57:41,715 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 20:57:41,715 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:41,716 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 20:57:46,733 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 20:57:46,734 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 20:57:46,735 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:46,735 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 20:57:46,737 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 20:57:46,737 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:46,737 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 20:57:46,738 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 20:57:46,739 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:46,739 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 20:57:51,746 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 20:57:51,748 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 20:57:51,748 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:51,748 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 20:57:51,750 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 20:57:51,750 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:51,750 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 20:57:51,751 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 20:57:51,751 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 20:57:51,751 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 20:57:53,988 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 21:00:41,141 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_210041
+2025-03-11 21:00:41,141 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 21:00:41,152 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 21:00:41,161 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:00:41,163 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 21:00:41,163 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:00:41,163 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:00:41,165 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:00:41,165 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:00:41,165 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:00:41,166 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:00:41,167 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:00:41,167 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:00:46,185 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:00:46,187 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 21:00:46,187 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:00:46,187 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:00:46,188 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:00:46,188 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:00:46,189 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:00:46,190 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:00:46,191 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:00:46,191 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:00:51,199 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:00:51,201 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 21:00:51,201 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:00:51,201 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:00:51,204 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:00:51,204 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:00:51,204 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:00:51,205 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:00:51,206 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:00:51,206 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:00:56,211 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:00:56,213 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 21:00:56,214 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:00:56,214 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:00:56,215 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:00:56,215 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:00:56,215 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:00:56,217 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:00:56,217 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:00:56,217 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:01:01,222 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:01:01,224 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 21:01:01,224 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:01:01,224 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:01:01,226 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:01:01,226 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:01:01,226 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:01:01,228 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:01:01,228 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:01:01,228 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:01:06,239 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:01:06,242 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/stats returned status 404
+2025-03-11 21:01:06,242 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:01:06,242 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:01:06,244 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:01:06,244 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:01:06,244 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:01:06,246 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:01:06,246 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:01:06,246 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:01:07,905 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 21:02:13,768 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_210213
+2025-03-11 21:02:13,768 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 21:02:13,779 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 21:02:13,788 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:02:13,800 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:02:13,802 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:02:13,802 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:02:13,802 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:02:13,804 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:02:13,804 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:02:13,805 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:02:18,809 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:02:18,813 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:02:18,815 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:02:18,815 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:02:18,815 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:02:18,817 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:02:18,817 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:02:18,817 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:02:21,708 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 21:05:56,348 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_210556
+2025-03-11 21:05:56,349 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 21:05:56,360 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8080/api/dream/health failed: Server disconnected
+2025-03-11 21:05:56,360 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8080/api/dream/health in 1.07s (attempt 1/3)
+2025-03-11 21:05:57,448 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8080/api/dream/health failed: Server disconnected
+2025-03-11 21:05:57,449 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8080/api/dream/health in 2.15s (attempt 2/3)
+2025-03-11 21:05:59,614 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8080/api/dream/health failed: Server disconnected
+2025-03-11 21:06:36,561 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 21:06:36,570 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:06:36,579 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:06:36,581 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:06:36,581 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:06:36,581 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:06:36,583 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:06:36,583 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:06:36,583 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:06:41,588 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:06:41,594 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:06:41,596 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:06:41,596 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:06:41,596 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:06:41,598 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:06:41,598 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:06:41,598 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:06:46,606 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:06:46,610 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:06:46,612 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:06:46,612 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:06:46,613 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:06:46,614 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:06:46,614 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:06:46,614 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:06:51,625 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:06:51,630 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:06:51,632 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:06:51,632 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:06:51,633 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:06:51,634 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:06:51,635 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:06:51,635 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:06:56,647 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:06:56,652 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:06:56,654 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:06:56,654 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:06:56,654 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:06:56,656 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:06:56,656 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:06:56,656 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:07:01,661 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:07:01,666 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:07:01,668 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:07:01,668 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:07:01,668 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:07:01,670 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:07:01,670 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:07:01,671 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:07:06,684 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:07:06,688 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:07:06,690 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:07:06,690 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:07:06,691 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:07:06,692 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:07:06,692 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:07:06,692 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:07:11,711 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:07:11,716 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:07:11,718 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:07:11,718 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:07:11,719 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:07:11,720 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:07:11,720 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:07:11,721 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:07:16,733 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:07:16,737 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:07:16,739 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:07:16,739 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:07:16,739 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:07:16,741 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:07:16,741 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:07:16,741 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:07:21,757 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:07:21,762 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:07:21,763 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:07:21,764 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:07:21,764 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:07:21,765 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:07:21,766 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:07:21,766 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:07:26,779 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:07:26,783 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:07:26,784 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:07:26,784 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:07:26,785 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:07:26,786 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:07:26,786 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:07:26,787 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:07:30,938 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 21:15:44,476 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_211544
+2025-03-11 21:15:44,476 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 21:15:44,486 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 21:15:44,497 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:15:44,507 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:15:44,509 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:15:44,510 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:15:44,510 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:15:44,511 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:15:44,512 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:15:44,512 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:15:49,527 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:15:49,532 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:15:49,534 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:15:49,534 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:15:49,534 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:15:49,536 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:15:49,536 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:15:49,536 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:15:54,542 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:15:54,547 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:15:54,548 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:15:54,549 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:15:54,549 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:15:54,550 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:15:54,550 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:15:54,551 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:15:55,380 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 21:34:00,503 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_213400
+2025-03-11 21:34:00,504 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 21:34:00,517 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 21:34:00,526 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:34:00,537 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:34:00,539 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:34:00,539 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:34:00,539 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:34:00,542 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:34:00,542 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:34:00,543 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:34:05,564 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:34:05,569 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:34:05,571 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:34:05,571 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:34:05,571 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:34:05,572 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:34:05,572 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:34:05,573 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:34:10,584 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:34:10,588 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:34:10,590 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:34:10,590 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:34:10,590 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:34:10,591 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:34:10,592 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:34:10,592 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:34:15,605 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:34:15,609 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:34:15,611 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/spiral-phase returned status 404
+2025-03-11 21:34:15,611 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:34:15,611 - LucidiaReflectionCLI - INFO - Current spiral phase: None
+2025-03-11 21:34:15,613 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/knowledge-graph returned status 404
+2025-03-11 21:34:15,613 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 21:34:15,613 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 0 nodes, 0 edges
+2025-03-11 21:34:16,387 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 21:38:37,892 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_213837
+2025-03-11 21:38:37,893 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 21:38:37,905 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 21:38:37,913 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:38:37,927 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:38:37,929 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:38:37,936 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:38:42,944 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:38:42,951 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:38:42,954 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:38:42,964 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:38:47,973 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:38:47,977 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:38:47,979 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:38:47,985 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:38:52,995 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:38:53,000 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:38:53,002 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:38:53,009 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:38:58,015 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:38:58,021 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:38:58,023 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:38:58,028 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:39:03,049 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:39:03,054 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:39:03,056 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:39:03,063 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:39:08,075 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:39:08,079 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:39:08,082 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:39:08,089 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:39:13,107 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:39:13,112 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:39:13,114 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:39:13,124 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:39:18,132 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:39:18,136 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:39:18,138 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:39:18,146 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:39:23,154 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:39:23,158 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:39:23,161 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:39:23,168 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:39:28,179 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:39:28,184 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:39:28,186 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:39:28,193 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:39:33,201 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:39:33,205 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:39:33,207 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:39:33,214 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:39:38,224 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:39:38,229 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:39:38,231 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:39:38,238 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:39:43,248 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:39:43,254 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:39:43,256 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:39:43,266 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:39:48,283 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:39:48,288 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:39:48,289 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:39:48,298 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:39:53,306 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:39:53,311 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:39:53,313 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:39:53,319 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:39:58,331 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:39:58,335 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:39:58,337 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:39:58,344 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:40:03,357 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:40:03,363 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:40:03,366 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:40:03,375 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:40:08,387 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:40:08,392 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:40:08,394 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:40:08,401 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:40:08,783 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 21:56:46,776 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_215646
+2025-03-11 21:56:46,776 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 21:56:46,789 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 21:56:46,799 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:56:46,806 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:56:46,808 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:56:46,815 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:56:51,825 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:56:51,830 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:56:51,833 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:56:51,840 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:56:56,845 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:56:56,849 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:56:56,852 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:56:56,859 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:57:01,881 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:57:01,886 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:57:01,889 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:57:01,897 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:57:05,066 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 21:59:27,875 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_215927
+2025-03-11 21:59:27,875 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 21:59:27,886 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 21:59:27,895 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:59:27,900 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:59:27,903 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:59:27,911 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:59:32,923 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 21:59:32,928 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 21:59:32,930 - LucidiaReflectionCLI - INFO - Current spiral phase: unknown
+2025-03-11 21:59:32,937 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 21:59:35,661 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 22:24:21,064 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_222421
+2025-03-11 22:24:21,064 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 22:24:21,075 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 22:24:21,085 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 22:24:21,096 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 22:24:21,099 - LucidiaReflectionCLI - INFO - Current spiral phase: observation
+2025-03-11 22:24:21,105 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 22:24:26,114 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 22:24:26,120 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 22:24:26,123 - LucidiaReflectionCLI - INFO - Current spiral phase: observation
+2025-03-11 22:24:26,133 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 22:24:31,142 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-11 22:24:31,147 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-11 22:24:31,149 - LucidiaReflectionCLI - INFO - Current spiral phase: observation
+2025-03-11 22:24:31,156 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 81 nodes, 133 edges
+2025-03-11 22:24:33,766 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 22:29:49,333 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_222949
+2025-03-11 22:29:49,334 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 22:29:49,345 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 22:29:56,516 - LucidiaReflectionCLI - INFO - Expanded query 'name' to include: ['name', 'identity', 'title', 'label', 'handle', 'alias', 'moniker']
+2025-03-11 22:32:00,923 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 23:34:21,312 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_233421
+2025-03-11 23:34:21,314 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 23:34:21,332 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/health returned status 404
+2025-03-11 23:34:21,332 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 23:34:21,332 - LucidiaReflectionCLI - ERROR - Failed to connect to Dream API
+2025-03-11 23:34:21,335 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 23:41:05,185 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_234105
+2025-03-11 23:41:05,186 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 23:41:05,200 - LucidiaReflectionCLI - WARNING - Request to http://localhost:8080/api/dream/health returned status 404
+2025-03-11 23:41:05,200 - LucidiaReflectionCLI - ERROR - Failed to get parameters: 404
+2025-03-11 23:41:05,200 - LucidiaReflectionCLI - ERROR - Failed to connect to Dream API
+2025-03-11 23:41:05,203 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 23:42:57,848 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_234257
+2025-03-11 23:42:57,849 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 23:42:57,863 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 23:42:57,866 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 23:42:57,866 - LucidiaReflectionCLI - ERROR - Error in main
+Traceback (most recent call last):
+  File "C:\Users\danny\OneDrive\Documents\AI_Conversations\lucid-recall-dist\lucid-recall-dist\lucidia_cli.py", line 2519, in main
+    await client.start_chat_session(
+    ...<3 lines>...
+    )
+  File "C:\Users\danny\OneDrive\Documents\AI_Conversations\lucid-recall-dist\lucid-recall-dist\lucidia_cli.py", line 1644, in start_chat_session
+    user_input = await async_input("[bold blue]You:[/bold blue] ")
+                       ^^^^^^^^^^^
+NameError: name 'async_input' is not defined
+2025-03-11 23:44:15,213 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_234415
+2025-03-11 23:44:15,213 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 23:44:15,224 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 23:44:34,292 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-11 23:44:34,559 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.2
+2025-03-11 23:44:34,560 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-11 23:50:12,669 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 23:50:12,669 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-11 23:50:26,493 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_235026
+2025-03-11 23:50:26,493 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 23:50:26,505 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 23:50:46,216 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-11 23:50:46,441 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.2
+2025-03-11 23:50:46,442 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-11 23:54:15,378 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 23:54:15,378 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-11 23:55:04,492 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_235504
+2025-03-11 23:55:04,492 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 23:55:04,504 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 23:55:10,544 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-11 23:55:10,764 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-11 23:55:10,766 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-11 23:56:05,628 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 23:56:05,628 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-11 23:56:12,940 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250311_235612
+2025-03-11 23:56:12,940 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-11 23:56:12,951 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-11 23:56:18,069 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-11 23:56:18,346 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-11 23:56:18,347 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-11 23:56:31,541 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.2
+2025-03-11 23:56:31,542 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-11 23:57:25,119 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-11 23:57:25,119 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-12 00:12:03,575 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250312_001203
+2025-03-12 00:12:03,575 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-12 00:12:03,587 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-12 00:12:27,007 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-12 00:12:27,007 - LucidiaReflectionCLI - INFO - Generating reflection with depth=0.7, creativity=0.5...
+2025-03-12 00:12:28,777 - LucidiaReflectionCLI - INFO - Generated reflection with 1 fragments
+2025-03-12 00:13:14,285 - LucidiaReflectionCLI - INFO - Generating reflection with depth=0.7, creativity=0.5...
+2025-03-12 00:13:16,634 - LucidiaReflectionCLI - INFO - Generated reflection with 2 fragments
+2025-03-12 00:14:07,844 - LucidiaReflectionCLI - INFO - Using local LLM significance: 0.0
+2025-03-12 00:14:07,849 - LucidiaReflectionCLI - WARNING - Skipping Dream API memory creation - Docker not available
+2025-03-12 00:33:45,130 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-12 00:33:45,131 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-12 00:33:55,849 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250312_003355
+2025-03-12 00:33:55,850 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-12 00:33:55,865 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-12 00:34:00,356 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-12 00:34:00,356 - LucidiaReflectionCLI - INFO - Generating reflection with depth=0.7, creativity=0.5...
+2025-03-12 00:34:03,707 - LucidiaReflectionCLI - INFO - Generated reflection with 3 fragments
+2025-03-12 00:41:46,355 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-12 00:41:46,355 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-12 00:51:36,128 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250312_005136
+2025-03-12 00:51:36,128 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-12 00:51:36,141 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-12 00:51:45,761 - LucidiaReflectionCLI - INFO - Expanded query 'hello lucidia' to include: ['hello lucidia']
+2025-03-12 00:52:44,011 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-12 03:36:01,829 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250312_033601
+2025-03-12 03:36:01,829 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-12 03:36:01,850 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-12 03:36:16,296 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-12 03:36:16,296 - LucidiaReflectionCLI - INFO - Generating reflection with depth=0.7, creativity=0.5...
+2025-03-12 03:36:22,585 - LucidiaReflectionCLI - INFO - Generated reflection with 4 fragments
+2025-03-12 03:43:54,756 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-12 03:43:54,756 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-12 04:40:38,955 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250312_044038
+2025-03-12 04:40:38,956 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-12 04:40:38,976 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-12 04:41:14,219 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-12 04:55:00,325 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250312_045500
+2025-03-12 04:55:00,326 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-12 04:55:00,346 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-12 04:55:47,149 - LucidiaReflectionCLI - INFO - Connected to LM Studio. Available models: 2
+2025-03-12 04:55:47,150 - LucidiaReflectionCLI - INFO - Generating reflection with depth=0.7, creativity=0.5...
+2025-03-12 04:55:55,731 - LucidiaReflectionCLI - INFO - Generated reflection with 4 fragments
+2025-03-12 04:55:55,732 - LucidiaReflectionCLI - INFO - 
+REFLECTION: The Echo of Greetings
+Session ID: unknown
+Metadata: {
+  "depth": 0.7,
+  "creativity": 0.5,
+  "temperature": 0.85,
+  "memory_count": 1
+}
+Fragments: 4
+2025-03-12 04:55:55,733 - LucidiaReflectionCLI - INFO - Fragment 1 (Insight): User greeted with 'hello' twice, prompting an empathetic response focused on memory and self-improvement. (confidence: 0.80)
+2025-03-12 04:55:55,733 - LucidiaReflectionCLI - INFO - Fragment 2 (Question): Why does the user repeat 'hello'? Could it indicate uncertainty or seeking deeper connection beyond basic interaction? (confidence: 0.70)
+2025-03-12 04:55:55,733 - LucidiaReflectionCLI - INFO - Fragment 3 (Hypothesis): Hypothesis: The repetition of greetings may signal a desire for structured guidance, leading to the creation of a megaprompt. (confidence: 0.65)
+2025-03-12 04:55:55,733 - LucidiaReflectionCLI - INFO - Fragment 4 (Counterfactual): If the user had not repeated 'hello', would they still have created a megaprompt? Counterfactual suggests repetition might be catalyst for deeper engagement requests. (confidence: 0.60)
+2025-03-12 04:59:03,116 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-12 04:59:03,117 - LucidiaReflectionCLI - INFO - Disconnected from LM Studio
+2025-03-12 05:00:35,760 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250312_050035
+2025-03-12 05:00:35,761 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-12 05:00:35,780 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-12 05:00:35,791 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-12 05:00:35,823 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-12 05:00:35,827 - LucidiaReflectionCLI - INFO - Current spiral phase: observation
+2025-03-12 05:00:35,837 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8080/api/knowledge-graph failed with status 500: {"detail":"Error getting knowledge graph data: object dict can't be used in 'await' expression"}
+2025-03-12 05:00:35,837 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8080/api/knowledge-graph in 1.00s (attempt 1/3)
+2025-03-12 05:00:36,854 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8080/api/knowledge-graph failed with status 500: {"detail":"Error getting knowledge graph data: object dict can't be used in 'await' expression"}
+2025-03-12 05:00:36,854 - LucidiaReflectionCLI - INFO - Retrying request to http://localhost:8080/api/knowledge-graph in 2.03s (attempt 2/3)
+2025-03-12 05:00:38,903 - LucidiaReflectionCLI - ERROR - Request to http://localhost:8080/api/knowledge-graph failed with status 500: {"detail":"Error getting knowledge graph data: object dict can't be used in 'await' expression"}
+2025-03-12 05:01:29,119 - LucidiaReflectionCLI - INFO - Disconnected from Dream API
+2025-03-12 05:08:33,359 - LucidiaReflectionCLI - INFO - Initialized Lucidia Reflection CLI with session ID: session_20250312_050833
+2025-03-12 05:08:33,359 - LucidiaReflectionCLI - INFO - Connecting to Dream API...
+2025-03-12 05:08:33,374 - LucidiaReflectionCLI - INFO - Connected to Dream API: healthy
+2025-03-12 05:08:33,382 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-12 05:08:33,398 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-12 05:08:33,401 - LucidiaReflectionCLI - INFO - Current spiral phase: observation
+2025-03-12 05:08:33,412 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 83 nodes, 133 edges
+2025-03-12 05:08:38,425 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-12 05:08:38,433 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-12 05:08:38,436 - LucidiaReflectionCLI - INFO - Current spiral phase: observation
+2025-03-12 05:08:38,445 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 83 nodes, 133 edges
+2025-03-12 05:08:43,459 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-12 05:08:43,469 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-12 05:08:43,472 - LucidiaReflectionCLI - INFO - Current spiral phase: observation
+2025-03-12 05:08:43,484 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 83 nodes, 133 edges
+2025-03-12 05:08:48,500 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-12 05:08:48,511 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-12 05:08:48,514 - LucidiaReflectionCLI - INFO - Current spiral phase: observation
+2025-03-12 05:08:48,528 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 83 nodes, 133 edges
+2025-03-12 05:08:53,543 - LucidiaReflectionCLI - INFO - System health: healthy
+2025-03-12 05:08:53,552 - LucidiaReflectionCLI - INFO - Retrieved memory stats: 0 memories
+2025-03-12 05:08:53,555 - LucidiaReflectionCLI - INFO - Current spiral phase: observation
+2025-03-12 05:08:53,564 - LucidiaReflectionCLI - INFO - Retrieved knowledge graph: 83 nodes, 133 edges
+2025-03-12 05:08:53,575 - LucidiaReflectionCLI - INFO - Disconnected from Dream API

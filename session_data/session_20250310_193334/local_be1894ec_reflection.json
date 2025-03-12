@@ -1,0 +1,27 @@
+{
+  "status": "success",
+  "title": "Echoes of Test Memories",
+  "fragments": [
+    {
+      "content": "Test memory 0 for reflection",
+      "type": "insight",
+      "confidence": 95.61
+    },
+    {
+      "content": "Significance variance between memories suggests prioritization patterns.",
+      "type": "question",
+      "confidence": 4.13
+    },
+    {
+      "content": "Are test memories part of a learning sequence?",
+      "type": "hypothesis",
+      "confidence": 82.95
+    }
+  ],
+  "metadata": {
+    "depth": 0.5,
+    "creativity": 0.5,
+    "temperature": 0.85,
+    "memory_count": 3
+  }
+}

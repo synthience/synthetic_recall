@@ -126,6 +126,16 @@ class TensorServer:
                             'embeddings': embeddings.tolist(),
                             **metadata
                         }
+                    
+                    elif data['type'] == 'embed_only':
+                        # Generate embedding without storing memory
+                        embeddings = self.model.encode(data['text'])
+                        
+                        response = {
+                            'type': 'embeddings',
+                            'embeddings': embeddings.tolist(),
+                            'timestamp': time.time()
+                        }
                         
                     elif data['type'] == 'search':
                         # Generate query embedding

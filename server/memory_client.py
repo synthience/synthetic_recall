@@ -7,6 +7,7 @@ import time
 import websockets
 from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
+import torch
 
 from memory.lucidia_memory_system.core.memory_entry import MemoryEntry
 
@@ -18,12 +19,14 @@ class EnhancedMemoryClient:
     handling communication with the tensor and HPC servers.
     """
     
-    def __init__(self, config: Dict[str, Any] = None):
+    def __init__(self, config: Dict[str, Any] = None, memory_system: Any = None, memory_bridge: Any = None):
         """
         Initialize the enhanced memory client.
         
         Args:
             config: Configuration dictionary
+            memory_system: Optional memory system instance
+            memory_bridge: Optional memory bridge instance for connecting flat and hierarchical memory
         """
         self.logger = logging.getLogger("EnhancedMemoryClient")
         self.config = config or {}
@@ -61,7 +64,14 @@ class EnhancedMemoryClient:
             "cache_misses": 0
         }
         
-        self.logger.info("Enhanced memory client initialized")
+        # Store the memory system reference
+        self.memory_system = memory_system
+        
+        # Store the memory bridge reference
+        self.memory_bridge = memory_bridge
+        
+        self.logger.info("Enhanced Memory Client initialized with memory systems: " + 
+                        f"Flat: {memory_system is not None}, Bridge: {memory_bridge is not None}")
     
     async def initialize(self) -> None:
         """Initialize the memory client connections."""
@@ -216,49 +226,191 @@ class EnhancedMemoryClient:
             self.stats["total_requests"] += 1
             self.stats["embedding_requests"] += 1
             
-            # Get tensor connection
-            tensor_conn = await self.get_tensor_connection()
-            
-            # Prepare request
-            request = {
-                "type": "embed",
-                "text": content,
-                "client_id": "memory_client",
-                "message_id": f"mem_{int(time.time() * 1000)}",
-                "timestamp": time.time()
-            }
-            
-            # Send request and get response
-            await tensor_conn.send(json.dumps(request))
-            response = await tensor_conn.recv()
-            response_data = json.loads(response)
-            
-            if "type" in response_data and response_data["type"] == "error":
-                self.logger.error(f"Error embedding memory: {response_data.get('error')}")
-                self.stats["failed_requests"] += 1
-                return None
-            
-            # Extract memory data
-            memory_id = response_data.get("id", f"memory_{int(time.time())}")
-            timestamp = response_data.get("timestamp", time.time())
-            significance = response_data.get("significance", 0.5)
-            
-            # Create memory entry
-            memory = MemoryEntry(
-                id=memory_id,
-                content=content,
-                memory_type=memory_type,
-                created_at=timestamp,
-                significance=significance,
-                metadata=metadata or {}
-            )
-            
-            # Add to cache
-            self._add_to_cache(memory)
-            
-            self.stats["successful_requests"] += 1
-            return memory
-            
+            # Check if we have the memory bridge for integrated storage
+            if self.memory_bridge:
+                self.logger.info("Using memory bridge for integrated memory storage")
+                
+                # Get tensor connection for embedding generation
+                tensor_conn = await self.get_tensor_connection()
+                
+                # Prepare request for embedding generation only
+                request = {
+                    "type": "embed_only",  # Use a different type to avoid storing in the tensor server
+                    "text": content,
+                    "client_id": "memory_client",
+                    "message_id": f"mem_{int(time.time() * 1000)}",
+                    "timestamp": time.time()
+                }
+                
+                # Send request and get response with embedding
+                await tensor_conn.send(json.dumps(request))
+                response = await tensor_conn.recv()
+                response_data = json.loads(response)
+                
+                if "type" in response_data and response_data["type"] == "error":
+                    self.logger.error(f"Error generating embedding: {response_data.get('message', 'Unknown error')}")
+                    raise Exception(f"Error generating embedding: {response_data.get('message', 'Unknown error')}")
+                
+                # Extract embedding
+                embedding = response_data.get("embedding")
+                if embedding is None:
+                    self.logger.error("No embedding received from tensor server")
+                    raise Exception("No embedding received from tensor server")
+                
+                # Get HPC connection for significance calculation
+                hpc_conn = await self.get_hpc_connection()
+                
+                # Prepare request for significance calculation
+                request = {
+                    "type": "calculate_significance",
+                    "content": content,
+                    "client_id": "memory_client",
+                    "message_id": f"sig_{int(time.time() * 1000)}",
+                    "timestamp": time.time()
+                }
+                
+                # Send request and get response with significance
+                await hpc_conn.send(json.dumps(request))
+                response = await hpc_conn.recv()
+                response_data = json.loads(response)
+                
+                # Extract significance (or use default if not provided)
+                significance = response_data.get("significance", 0.5)
+                
+                # Add categories based on memory type and metadata
+                categories = [memory_type]
+                if metadata and "categories" in metadata:
+                    categories.extend(metadata.get("categories", []))
+                
+                # Combine metadata
+                combined_metadata = metadata or {}
+                combined_metadata["memory_type"] = memory_type
+                combined_metadata["timestamp"] = time.time()
+                
+                # Store memory in both systems through the bridge
+                memory_id = await self.memory_bridge.store_memory(
+                    content=content,
+                    significance=significance,
+                    metadata=combined_metadata,
+                    categories=categories,
+                    embedding=embedding
+                )
+                
+                # Create memory entry for return
+                memory_entry = MemoryEntry(
+                    id=memory_id,
+                    content=content,
+                    embedding=torch.tensor(embedding) if embedding else None,
+                    metadata=combined_metadata,
+                    timestamp=time.time(),
+                    memory_type=memory_type,
+                    significance=significance
+                )
+                
+                # Add to cache
+                self._add_to_cache(memory_entry)
+                
+                self.stats["successful_requests"] += 1
+                return memory_entry
+            # Check if we have direct access to the memory system
+            elif self.memory_system:
+                self.logger.info("Using direct memory system access for adding memory")
+                
+                # Get tensor connection for embedding generation
+                tensor_conn = await self.get_tensor_connection()
+                
+                # Prepare request for embedding generation only
+                request = {
+                    "type": "embed_only",  # Use a different type to avoid storing in the tensor server
+                    "text": content,
+                    "client_id": "memory_client",
+                    "message_id": f"mem_{int(time.time() * 1000)}",
+                    "timestamp": time.time()
+                }
+                
+                # Send request and get response with embedding
+                await tensor_conn.send(json.dumps(request))
+                response = await tensor_conn.recv()
+                response_data = json.loads(response)
+                
+                if "type" in response_data and response_data["type"] == "error":
+                    self.logger.error(f"Error embedding memory: {response_data.get('error')}")
+                    self.stats["failed_requests"] += 1
+                    return None
+                
+                # Get embedding from response
+                embedding = torch.tensor(response_data.get("embeddings", []))
+                
+                # Store in unified memory system
+                memory_data = await self.memory_system.add_memory(
+                    text=content,
+                    embedding=embedding
+                )
+                
+                # Extract memory data
+                memory_id = memory_data.get("id")
+                timestamp = memory_data.get("timestamp", time.time())
+                significance = memory_data.get("significance", 0.5)
+                
+                # Create memory entry
+                memory = MemoryEntry(
+                    id=memory_id,
+                    content=content,
+                    memory_type=memory_type,
+                    created_at=timestamp,
+                    significance=significance,
+                    metadata=metadata or {}
+                )
+                
+                # Add to cache
+                self._add_to_cache(memory)
+                
+                self.stats["successful_requests"] += 1
+                return memory
+            else:
+                # Use existing logic with tensor server
+                tensor_conn = await self.get_tensor_connection()
+                
+                # Prepare request
+                request = {
+                    "type": "embed",
+                    "text": content,
+                    "client_id": "memory_client",
+                    "message_id": f"mem_{int(time.time() * 1000)}",
+                    "timestamp": time.time()
+                }
+                
+                # Send request and get response
+                await tensor_conn.send(json.dumps(request))
+                response = await tensor_conn.recv()
+                response_data = json.loads(response)
+                
+                if "type" in response_data and response_data["type"] == "error":
+                    self.logger.error(f"Error embedding memory: {response_data.get('error')}")
+                    self.stats["failed_requests"] += 1
+                    return None
+                
+                # Extract memory data
+                memory_id = response_data.get("id", f"memory_{int(time.time())}")
+                timestamp = response_data.get("timestamp", time.time())
+                significance = response_data.get("significance", 0.5)
+                
+                # Create memory entry
+                memory = MemoryEntry(
+                    id=memory_id,
+                    content=content,
+                    memory_type=memory_type,
+                    created_at=timestamp,
+                    significance=significance,
+                    metadata=metadata or {}
+                )
+                
+                # Add to cache
+                self._add_to_cache(memory)
+                
+                self.stats["successful_requests"] += 1
+                return memory
+                
         except Exception as e:
             self.logger.error(f"Error adding memory: {e}")
             self.stats["failed_requests"] += 1
@@ -385,55 +537,190 @@ class EnhancedMemoryClient:
             self.stats["total_requests"] += 1
             self.stats["search_requests"] += 1
             
-            # Get tensor connection
-            tensor_conn = await self.get_tensor_connection()
-            
-            # Prepare request
-            request = {
-                "type": "search",
-                "text": query,
-                "limit": limit,
-                "threshold": threshold,
-                "client_id": "memory_client",
-                "message_id": f"search_{int(time.time() * 1000)}",
-                "timestamp": time.time()
-            }
-            
-            # Send request and get response
-            await tensor_conn.send(json.dumps(request))
-            response = await tensor_conn.recv()
-            response_data = json.loads(response)
-            
-            if "type" in response_data and response_data["type"] == "error":
-                self.logger.error(f"Error searching memories: {response_data.get('error')}")
-                self.stats["failed_requests"] += 1
-                return []
-            
-            # Extract results
-            results = []
-            for result in response_data.get("results", []):
-                memory_data = result.get("memory", {})
+            # Check if we have the memory bridge for integrated storage
+            if self.memory_bridge:
+                self.logger.info("Using memory bridge for integrated memory search")
                 
-                memory = MemoryEntry(
-                    id=memory_data.get("id", f"unknown_{int(time.time())}"),
-                    content=memory_data.get("content", ""),
-                    memory_type=memory_data.get("type", "general"),
-                    created_at=memory_data.get("timestamp", time.time()),
-                    significance=memory_data.get("significance", 0.5),
-                    metadata=memory_data.get("metadata", {})
+                # Get tensor connection for embedding generation
+                tensor_conn = await self.get_tensor_connection()
+                
+                # Prepare request for embedding generation
+                request = {
+                    "type": "embed_only",
+                    "text": query,
+                    "client_id": "memory_client",
+                    "message_id": f"search_{int(time.time() * 1000)}",
+                    "timestamp": time.time()
+                }
+                
+                # Send request and get response with embeddings
+                await tensor_conn.send(json.dumps(request))
+                response = await tensor_conn.recv()
+                response_data = json.loads(response)
+                
+                if "type" in response_data and response_data["type"] == "error":
+                    self.logger.error(f"Error generating query embedding: {response_data.get('message', 'Unknown error')}")
+                    raise Exception(f"Error generating query embedding: {response_data.get('message', 'Unknown error')}")
+                
+                # Extract embedding
+                query_embedding = response_data.get("embedding")
+                if query_embedding is None:
+                    self.logger.error("No embedding received from tensor server")
+                    raise Exception("No embedding received from tensor server")
+                
+                # Search in both systems through the bridge
+                results = await self.memory_bridge.search_memories(
+                    query_embedding=query_embedding,
+                    limit=limit,
+                    threshold=threshold
                 )
                 
-                # Add to cache
-                self._add_to_cache(memory)
+                # Convert to memory entries
+                search_results = []
+                for result in results:
+                    memory_data = result["memory"]
+                    similarity = result["similarity"]
+                    
+                    if similarity < threshold:
+                        continue
+                    
+                    memory = MemoryEntry(
+                        id=memory_data.get("id"),
+                        content=memory_data.get("content"),
+                        created_at=memory_data.get("timestamp"),
+                        significance=memory_data.get("significance", 0.0),
+                        memory_type="general"
+                    )
+                    
+                    # Add to cache
+                    self._add_to_cache(memory)
+                    
+                    search_results.append({
+                        "memory": memory,
+                        "similarity": similarity
+                    })
                 
-                results.append({
-                    "memory": memory,
-                    "similarity": result.get("similarity", 0.0)
-                })
-            
-            self.stats["successful_requests"] += 1
-            return results
-            
+                self.stats["successful_requests"] += 1
+                return search_results
+            # Check if we have direct access to the memory system
+            elif self.memory_system:
+                self.logger.info("Using direct memory system access for searching memories")
+                
+                # Get tensor connection for embedding generation only
+                tensor_conn = await self.get_tensor_connection()
+                
+                # Prepare request for embedding generation
+                request = {
+                    "type": "embed_only",
+                    "text": query,
+                    "client_id": "memory_client",
+                    "message_id": f"search_{int(time.time() * 1000)}",
+                    "timestamp": time.time()
+                }
+                
+                # Send request and get response with embeddings
+                await tensor_conn.send(json.dumps(request))
+                response = await tensor_conn.recv()
+                response_data = json.loads(response)
+                
+                if "type" in response_data and response_data["type"] == "error":
+                    self.logger.error(f"Error generating query embedding: {response_data.get('error')}")
+                    self.stats["failed_requests"] += 1
+                    return []
+                
+                # Get embeddings from response
+                query_embedding = torch.tensor(response_data.get("embeddings", []))
+                
+                # Search in unified memory system
+                results = await self.memory_system.search_memories(
+                    query_embedding=query_embedding,
+                    limit=limit
+                )
+                
+                # Convert to memory entries
+                search_results = []
+                for result in results:
+                    memory_data = result["memory"]
+                    similarity = result["similarity"]
+                    
+                    if similarity < threshold:
+                        continue
+                    
+                    memory = MemoryEntry(
+                        id=memory_data.get("id"),
+                        content=memory_data.get("text"),
+                        created_at=memory_data.get("timestamp"),
+                        significance=memory_data.get("significance", 0.0),
+                        memory_type="general"
+                    )
+                    
+                    # Add to cache
+                    self._add_to_cache(memory)
+                    
+                    search_results.append({
+                        "memory": memory,
+                        "similarity": similarity
+                    })
+                
+                self.stats["successful_requests"] += 1
+                return search_results
+            else:
+                # Use existing logic with tensor server
+                # Get tensor connection
+                tensor_conn = await self.get_tensor_connection()
+                
+                # Prepare request
+                request = {
+                    "type": "search",
+                    "text": query,
+                    "limit": limit,
+                    "client_id": "memory_client",
+                    "message_id": f"search_{int(time.time() * 1000)}",
+                    "timestamp": time.time()
+                }
+                
+                # Send request and get response
+                await tensor_conn.send(json.dumps(request))
+                response = await tensor_conn.recv()
+                response_data = json.loads(response)
+                
+                if "type" in response_data and response_data["type"] == "error":
+                    self.logger.error(f"Error searching memories: {response_data.get('error')}")
+                    self.stats["failed_requests"] += 1
+                    return []
+                
+                # Process search results
+                search_results = []
+                results = response_data.get("results", [])
+                
+                for result in results:
+                    memory_id = result.get("id")
+                    text = result.get("text")
+                    similarity = result.get("similarity", 0.0)
+                    significance = result.get("significance", 0.0)
+                    
+                    if similarity < threshold:
+                        continue
+                    
+                    memory = MemoryEntry(
+                        id=memory_id,
+                        content=text,
+                        created_at=time.time(),  # We don't get timestamp from API
+                        significance=significance,
+                        memory_type="general"
+                    )
+                    
+                    # Add to cache
+                    self._add_to_cache(memory)
+                    
+                    search_results.append({
+                        "memory": memory,
+                        "similarity": similarity
+                    })
+                
+                self.stats["successful_requests"] += 1
+                return search_results
+                
         except Exception as e:
             self.logger.error(f"Error searching memories: {e}")
             self.stats["failed_requests"] += 1

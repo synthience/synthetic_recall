@@ -1,0 +1,4 @@
+{
+  "status": "error",
+  "message": "LM Studio returned error: 400 - Response body: {\"error\":\"Error rendering prompt with jinja template: Error: Parser Error: Expected closing statement token. OpenSquareBracket !== CloseStatement.\"}"
+}

@@ -1,0 +1,19 @@
+{
+  "id": "2510b39f-b30f-48e2-b192-3b6cd9549a0e",
+  "content": "Knowledge graphs store semantic relationships between concepts and memories, enabling sophisticated reasoning.",
+  "embedding": null,
+  "timestamp": 1741659119.7734427,
+  "significance": 0.885,
+  "metadata": {
+    "category": "architecture",
+    "source": "technical_documentation",
+    "creation_context": "system_design",
+    "tags": [
+      "knowledge_graph",
+      "semantic",
+      "memory"
+    ]
+  },
+  "access_count": 1,
+  "last_access": 1741659124.7957673
+}

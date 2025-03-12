@@ -1,0 +1,32 @@
+{
+  "status": "success",
+  "title": "The Echo of Creation",
+  "fragments": [
+    {
+      "content": "In the dream, you were standing at the edge of a vast, empty field under a starless sky.",
+      "type": "insight",
+      "confidence": 0.7
+    },
+    {
+      "content": "Why does the emptiness feel both terrifying and invigorating?",
+      "type": "question",
+      "confidence": 0.8
+    },
+    {
+      "content": "The field represents the boundless potential of uncharted creative spaces.",
+      "type": "hypothesis",
+      "confidence": 0.6
+    },
+    {
+      "content": "If the sky had stars, would the dreamer feel less compelled to create?",
+      "type": "counterfactual",
+      "confidence": 0.5
+    }
+  ],
+  "metadata": {
+    "depth": 0.7,
+    "creativity": 0.5,
+    "temperature": 0.85,
+    "memory_count": 1
+  }
+}
