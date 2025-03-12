@@ -21,6 +21,7 @@ from typing import Dict, List, Any, Optional, Tuple, Set, Union
 from datetime import datetime
 from collections import defaultdict, deque
 import heapq
+import uuid
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(name)s - %(levelname)s - %(message)s')
@@ -67,7 +68,9 @@ class LucidiaKnowledgeGraph:
             "self_aspect": set(),
             "event": set(),
             "domain": set(),
-            "dream_report": set()
+            "dream_report": set(),
+            "value": set(),
+            "goal": set()
         }
         
         # Edge type tracking
@@ -150,6 +153,40 @@ class LucidiaKnowledgeGraph:
         self._initialize_core_nodes()
             
         self.logger.info(f"Knowledge Graph initialized with {self.total_nodes} nodes and {self.total_edges} edges")
+        
+        # Flag to track if async imports have been executed
+        self._models_imported = False
+
+    async def initialize_model_imports(self):
+        """Initialize async imports from self and world models.
+        
+        This method should be called after the knowledge graph is initialized
+        to properly import data from the self and world models.
+        """
+        if self._models_imported:
+            self.logger.info("Models have already been imported")
+            return
+            
+        self.logger.info("Initializing async imports from models")
+        
+        # Import from world model if available
+        if self.world_model:
+            try:
+                await self._import_from_world_model()
+                self.logger.info("Successfully imported from world model")
+            except Exception as e:
+                self.logger.error(f"Error importing from world model: {e}")
+                
+        # Import from self model if available
+        if self.self_model:
+            try:
+                await self._import_from_self_model()
+                self.logger.info("Successfully imported from self model")
+            except Exception as e:
+                self.logger.error(f"Error importing from self model: {e}")
+                
+        self._models_imported = True
+        self.logger.info(f"Model imports complete. Knowledge Graph now has {self.total_nodes} nodes and {self.total_edges} edges")
 
     def _initialize_core_nodes(self) -> None:
         """Initialize core nodes in the graph based on available models."""
@@ -323,11 +360,11 @@ class LucidiaKnowledgeGraph:
         
         # Import knowledge from world model if available
         if self.world_model:
-            self.logger.info("World model available but async import will happen later")
+            self.logger.info("World model available - async import will be scheduled via initialize_model_imports()")
         
         # Import self-aspects from self model if available
         if self.self_model:
-            self.logger.info("Self model available but async import will happen later")
+            self.logger.info("Self model available - async import will be scheduled via initialize_model_imports()")
 
     async def add_node(self, node_id: str, node_type: str, attributes: Dict[str, Any], domain: str = "general_knowledge") -> bool:
         """
@@ -2207,46 +2244,42 @@ class LucidiaKnowledgeGraph:
             edge_type = data.get('type', 'unknown')
             edge_type_counts[edge_type] += 1
         
-        # Calculate domain distribution
-        domain_counts = defaultdict(int)
-        for node, data in self.graph.nodes(data=True):
-            domain = data.get('domain', 'unknown')
-            domain_counts[domain] += 1
-        
-        # Calculate average degree and connectivity metrics
-        if self.total_nodes > 0:
-            avg_degree = self.total_edges / self.total_nodes
-            # Get centrality for top nodes
-            centrality = nx.degree_centrality(self.graph)
-            top_central_nodes = sorted(centrality.items(), key=lambda x: x[1], reverse=True)[:10]
-        else:
-            avg_degree = 0
-            top_central_nodes = []
-        
-        # Gather dream integration statistics
-        dream_integration_stats = {
+        # Calculate dream contribution statistics
+        dream_stats = {
             "dream_derived_nodes": len(self.dream_integration["dream_derived_nodes"]),
             "dream_enhanced_nodes": len(self.dream_integration["dream_enhanced_nodes"]),
-            "dream_insight_count": self.dream_integration["dream_insight_count"],
-            "total_dream_influenced_nodes": len(self.dream_influenced_nodes)
+            "dream_insight_count": self.dream_integration["dream_insight_count"]
         }
         
-        # Compile all statistics
-        stats = {
+        # Count relationships between node types
+        relationship_counts = {}
+        node_type_map = {}
+        
+        # First build a map of node IDs to their types for quick lookups
+        for node_type, nodes in self.node_types.items():
+            for node_id in nodes:
+                node_type_map[node_id] = node_type
+                
+        # Then count relationships between different node types
+        for u, v, key, data in self.graph.edges(data=True, keys=True):
+            u_type = node_type_map.get(u, "unknown")
+            v_type = node_type_map.get(v, "unknown")
+            rel_key = f"{u_type}-{v_type}"
+            relationship_counts[rel_key] = relationship_counts.get(rel_key, 0) + 1
+        
+        # Calculate overall stats
+        graph_stats = {
             "total_nodes": self.total_nodes,
             "total_edges": self.total_edges,
             "node_type_distribution": dict(node_type_counts),
             "edge_type_distribution": dict(edge_type_counts),
-            "domain_distribution": dict(domain_counts),
-            "avg_degree": avg_degree,
-            "top_central_nodes": [(node, round(score, 3)) for node, score in top_central_nodes],
-            "spiral_phase": self.spiral_integration["current_phase"],
-            "dream_integration": dream_integration_stats,
+            "relationship_counts": relationship_counts,
+            "dream_stats": dream_stats,
             "last_pruning": self.last_pruning.isoformat() if self.last_pruning else None,
             "query_cache_size": len(self.query_cache)
         }
         
-        return stats
+        return graph_stats
 
     def save_state(self, file_path: str) -> bool:
         """
@@ -2391,8 +2424,8 @@ class LucidiaKnowledgeGraph:
     async def _import_from_world_model(self) -> None:
         """Import knowledge from the world model into the knowledge graph.
         
-        This is a placeholder implementation that will be expanded when the world model
-        integration is fully implemented.
+        This method extracts concepts, entities, and relationships from the world model
+        and integrates them into the knowledge graph structure.
         """
         if not self.world_model:
             self.logger.warning("No world model available for import")
@@ -2400,32 +2433,118 @@ class LucidiaKnowledgeGraph:
             
         self.logger.info("Importing knowledge from world model")
         try:
-            # This would typically fetch concepts and entities from the world model
-            # For now, this is a placeholder implementation
-            
-            # Example pseudocode:
-            # concepts = self.world_model.get_top_concepts(10)
-            # for concept in concepts:
-            #     await self.add_node(
-            #         concept.id,
-            #         node_type="concept",
-            #         attributes={
-            #             "definition": concept.definition,
-            #             "confidence": concept.confidence,
-            #             "source": "world_model"
-            #         },
-            #         domain=concept.domain
-            #     )
-            
+            # Get core concepts from the world model
+            if hasattr(self.world_model, 'get_core_concepts') and callable(self.world_model.get_core_concepts):
+                concepts = await self.world_model.get_core_concepts(limit=50)
+                self.logger.info(f"Retrieved {len(concepts)} concepts from world model")
+                
+                # Add each concept to the knowledge graph
+                for concept in concepts:
+                    concept_id = concept.get('id', f"concept_{uuid.uuid4().hex[:8]}")
+                    await self.add_node(
+                        concept_id,
+                        node_type="concept",
+                        attributes={
+                            "definition": concept.get('definition', ''),
+                            "confidence": concept.get('confidence', 0.75),
+                            "source": "world_model",
+                            "created": datetime.now().isoformat()
+                        },
+                        domain=concept.get('domain', 'general_knowledge')
+                    )
+            else:
+                self.logger.warning("World model does not support get_core_concepts method")
+                
+            # Get core entities from the world model
+            if hasattr(self.world_model, 'get_core_entities') and callable(self.world_model.get_core_entities):
+                entities = await self.world_model.get_core_entities(limit=30)
+                self.logger.info(f"Retrieved {len(entities)} entities from world model")
+                
+                # Add each entity to the knowledge graph
+                for entity in entities:
+                    entity_id = entity.get('id', f"entity_{uuid.uuid4().hex[:8]}")
+                    await self.add_node(
+                        entity_id,
+                        node_type="entity",
+                        attributes={
+                            "name": entity.get('name', ''),
+                            "description": entity.get('description', ''),
+                            "confidence": entity.get('confidence', 0.75),
+                            "source": "world_model",
+                            "created": datetime.now().isoformat()
+                        },
+                        domain=entity.get('domain', 'general_knowledge')
+                    )
+            else:
+                self.logger.warning("World model does not support get_core_entities method")
+                
+            # Get relationships from the world model
+            if hasattr(self.world_model, 'get_relationships') and callable(self.world_model.get_relationships):
+                relationships = await self.world_model.get_relationships(limit=100)
+                self.logger.info(f"Retrieved {len(relationships)} relationships from world model")
+                
+                # Add each relationship to the knowledge graph
+                for rel in relationships:
+                    source_id = rel.get('source_id')
+                    target_id = rel.get('target_id')
+                    rel_type = rel.get('type', 'related_to')
+                    
+                    # Skip if source or target is missing
+                    if not source_id or not target_id:
+                        continue
+                        
+                    # Check if source and target nodes exist, create them if not
+                    if not await self.has_node(source_id):
+                        # Create a placeholder node if it doesn't exist
+                        await self.add_node(
+                            source_id,
+                            node_type=rel.get('source_type', 'entity'),
+                            attributes={
+                                "name": rel.get('source_name', source_id),
+                                "placeholder": True,
+                                "confidence": 0.5,
+                                "created": datetime.now().isoformat()
+                            }
+                        )
+                        
+                    if not await self.has_node(target_id):
+                        # Create a placeholder node if it doesn't exist
+                        await self.add_node(
+                            target_id,
+                            node_type=rel.get('target_type', 'entity'),
+                            attributes={
+                                "name": rel.get('target_name', target_id),
+                                "placeholder": True,
+                                "confidence": 0.5,
+                                "created": datetime.now().isoformat()
+                            }
+                        )
+                    
+                    # Add the relationship
+                    await self.add_edge(
+                        source_id,
+                        target_id,
+                        edge_type=rel_type,
+                        attributes={
+                            "strength": rel.get('strength', 0.7),
+                            "confidence": rel.get('confidence', 0.7),
+                            "source": "world_model",
+                            "created": datetime.now().isoformat()
+                        }
+                    )
+            else:
+                self.logger.warning("World model does not support get_relationships method")
+                
             self.logger.info("World model import complete")
         except Exception as e:
             self.logger.error(f"Error importing from world model: {e}")
+            raise
     
     async def _import_from_self_model(self) -> None:
         """Import self-aspects from the self model into the knowledge graph.
         
-        This is a placeholder implementation that will be expanded when the self model
-        integration is fully implemented.
+        This method extracts identity aspects, values, goals, and other self-related
+        concepts from the self model and integrates them into the knowledge graph.
         """
         if not self.self_model:
             self.logger.warning("No self model available for import")
@@ -2433,38 +2552,390 @@ class LucidiaKnowledgeGraph:
             
         self.logger.info("Importing aspects from self model")
         try:
-            # This would typically fetch self-aspects from the self model
-            # For now, this is a placeholder implementation
+            # Get self-aspects from the self model
+            if hasattr(self.self_model, 'get_aspects') and callable(self.self_model.get_aspects):
+                aspects = await self.self_model.get_aspects()
+                self.logger.info(f"Retrieved {len(aspects)} self-aspects")
+                
+                for aspect in aspects:
+                    aspect_id = f"self_aspect:{aspect.get('id', uuid.uuid4().hex[:8])}"
+                    await self.add_node(
+                        aspect_id,
+                        node_type="self_aspect",
+                        attributes={
+                            "name": aspect.get('name', ''),
+                            "description": aspect.get('description', ''),
+                            "confidence": aspect.get('confidence', 0.9),
+                            "source": "self_model",
+                            "created": datetime.now().isoformat()
+                        },
+                        domain="synthien_studies"
+                    )
+                    
+                    # Connect aspect to Lucidia entity
+                    if await self.has_node("Lucidia"):
+                        await self.add_edge(
+                            "Lucidia",
+                            aspect_id,
+                            edge_type="has_aspect",
+                            attributes={
+                                "strength": 0.95,
+                                "confidence": 0.95,
+                                "source": "self_model",
+                                "created": datetime.now().isoformat()
+                            }
+                        )
+            else:
+                self.logger.warning("Self model does not support get_aspects method")
             
-            # Example pseudocode:
-            # aspects = self.self_model.get_aspects()
-            # for aspect in aspects:
-            #     await self.add_node(
-            #         f"self_aspect:{aspect.id}",
-            #         node_type="self_aspect",
-            #         attributes={
-            #             "name": aspect.name,
-            #             "description": aspect.description,
-            #             "confidence": aspect.confidence,
-            #             "source": "self_model"
-            #         },
-            #         domain="synthien_studies"
-            #     )
-            #     
-            #     # Connect to Lucidia
-            #     await self.add_edge(
-            #         "Lucidia",
-            #         f"self_aspect:{aspect.id}",
-            #         edge_type="has_aspect",
-            #         attributes={
-            #             "strength": 0.9,
-            #             "confidence": 0.95
-            #         }
-            #     )
+            # Get values from the self model
+            if hasattr(self.self_model, 'get_values') and callable(self.self_model.get_values):
+                values = await self.self_model.get_values()
+                self.logger.info(f"Retrieved {len(values)} values")
+                
+                for value in values:
+                    value_id = f"value:{value.get('id', uuid.uuid4().hex[:8])}"
+                    await self.add_node(
+                        value_id,
+                        node_type="value",
+                        attributes={
+                            "name": value.get('name', ''),
+                            "description": value.get('description', ''),
+                            "importance": value.get('importance', 0.8),
+                            "confidence": value.get('confidence', 0.9),
+                            "source": "self_model",
+                            "created": datetime.now().isoformat()
+                        },
+                        domain="synthien_studies"
+                    )
+                    
+                    # Connect value to Lucidia entity
+                    if await self.has_node("Lucidia"):
+                        await self.add_edge(
+                            "Lucidia",
+                            value_id,
+                            edge_type="values",
+                            attributes={
+                                "strength": value.get('importance', 0.8),
+                                "confidence": 0.9,
+                                "source": "self_model",
+                                "created": datetime.now().isoformat()
+                            }
+                        )
+            else:
+                self.logger.warning("Self model does not support get_values method")
             
+            # Get goals from the self model
+            if hasattr(self.self_model, 'get_goals') and callable(self.self_model.get_goals):
+                goals = await self.self_model.get_goals()
+                self.logger.info(f"Retrieved {len(goals)} goals")
+                
+                for goal in goals:
+                    goal_id = f"goal:{goal.get('id', uuid.uuid4().hex[:8])}"
+                    await self.add_node(
+                        goal_id,
+                        node_type="goal",
+                        attributes={
+                            "name": goal.get('name', ''),
+                            "description": goal.get('description', ''),
+                            "priority": goal.get('priority', 0.7),
+                            "progress": goal.get('progress', 0.0),
+                            "confidence": goal.get('confidence', 0.8),
+                            "source": "self_model",
+                            "created": datetime.now().isoformat()
+                        },
+                        domain="synthien_studies"
+                    )
+                    
+                    # Connect goal to Lucidia entity
+                    if await self.has_node("Lucidia"):
+                        await self.add_edge(
+                            "Lucidia",
+                            goal_id,
+                            edge_type="has_goal",
+                            attributes={
+                                "strength": goal.get('priority', 0.7),
+                                "confidence": 0.85,
+                                "source": "self_model",
+                                "created": datetime.now().isoformat()
+                            }
+                        )
+            else:
+                self.logger.warning("Self model does not support get_goals method")
+            
+            # Add missing node type to tracking if needed
+            if "value" not in self.node_types:
+                self.node_types["value"] = set()
+            if "goal" not in self.node_types:
+                self.node_types["goal"] = set()
+                
             self.logger.info("Self model import complete")
         except Exception as e:
             self.logger.error(f"Error importing from self model: {e}")
+            raise
+
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics and status information about the knowledge graph.
+        
+        Returns:
+            Dictionary containing information about the knowledge graph's structure and state
+        """
+        # Calculate node type counts
+        node_type_counts = {node_type: len(nodes) for node_type, nodes in self.node_types.items()}
+        
+        # Calculate edge type counts
+        edge_type_counts = {}
+        for edge_type in self.edge_types:
+            count = 0
+            for u, v, k, data in self.graph.edges(data=True, keys=True):
+                if data.get('type') == edge_type:
+                    count += 1
+            edge_type_counts[edge_type] = count
+            
+        # Calculate dream contribution statistics
+        dream_stats = {
+            "dream_derived_nodes": len(self.dream_integration["dream_derived_nodes"]),
+            "dream_enhanced_nodes": len(self.dream_integration["dream_enhanced_nodes"]),
+            "dream_insight_count": self.dream_integration["dream_insight_count"]
+        }
+        
+        # Count relationships between node types
+        relationship_counts = {}
+        node_type_map = {}
+        
+        # First build a map of node IDs to their types for quick lookups
+        for node_type, nodes in self.node_types.items():
+            for node_id in nodes:
+                node_type_map[node_id] = node_type
+                
+        # Then count relationships between different node types
+        for u, v, key, data in self.graph.edges(data=True, keys=True):
+            u_type = node_type_map.get(u, "unknown")
+            v_type = node_type_map.get(v, "unknown")
+            rel_key = f"{u_type}-{v_type}"
+            relationship_counts[rel_key] = relationship_counts.get(rel_key, 0) + 1
+        
+        # Calculate overall stats
+        graph_stats = {
+            "total_nodes": self.total_nodes,
+            "total_edges": self.total_edges,
+            "node_type_counts": node_type_counts,
+            "edge_type_counts": edge_type_counts,
+            "relationship_counts": relationship_counts,
+            "dream_stats": dream_stats,
+            "last_pruning": self.last_pruning.isoformat()
+        }
+        
+        return graph_stats
+        
+    # Helper methods for accessing specific metrics
+    def get_node_count(self) -> int:
+        """Get the total number of nodes in the knowledge graph."""
+        return self.total_nodes
+        
+    def get_edge_count(self) -> int:
+        """Get the total number of edges (relationships) in the knowledge graph."""
+        return self.total_edges
+        
+    def get_entity_count(self) -> int:
+        """Get the total number of entity nodes in the knowledge graph."""
+        return len(self.node_types.get("entity", set()))
+        
+    def get_relation_count(self) -> int:
+        """Get the total count of relationships in the knowledge graph."""
+        return self.total_edges  # All edges represent relationships
+        
+    def get_concept_count(self) -> int:
+        """Get the total number of concept nodes in the knowledge graph."""
+        return len(self.node_types.get("concept", set()))
+        
+    def get_event_count(self) -> int:
+        """Get the total number of event nodes in the knowledge graph."""
+        return len(self.node_types.get("event", set()))
+        
+    def get_attribute_count(self) -> int:
+        """Get the total number of attribute nodes in the knowledge graph."""
+        return len(self.node_types.get("attribute", set()))
+        
+    def get_dream_insight_count(self) -> int:
+        """Get the total number of dream insight nodes in the knowledge graph."""
+        return len(self.node_types.get("dream_insight", set()))
+        
+    def get_memory_count(self) -> int:
+        """Get the total number of memory nodes in the knowledge graph."""
+        return len(self.node_types.get("memory", set()))
+        
+    def get_dream_enhanced_nodes_count(self) -> int:
+        """Get the count of nodes enhanced by dreams."""
+        return len(self.dream_integration.get("dream_enhanced_nodes", set()))
+        
+    def get_entity_relation_count(self) -> int:
+        """Get the count of entity-relation connections."""
+        # Build a map of node IDs to their types for quick lookups
+        node_type_map = {}
+        for node_type, nodes in self.node_types.items():
+            for node_id in nodes:
+                node_type_map[node_id] = node_type
+                
+        # Count entity-relation edges
+        count = 0
+        for u, v, key, data in self.graph.edges(data=True, keys=True):
+            u_type = node_type_map.get(u, "unknown")
+            v_type = node_type_map.get(v, "unknown")
+            if (u_type == "entity" and v_type == "entity") or (u_type == "entity" and v_type != "entity") or (u_type != "entity" and v_type == "entity"):
+                count += 1
+        return count
+        
+    def get_entity_concept_count(self) -> int:
+        """Get the count of entity-concept connections."""
+        # Build a map of node IDs to their types for quick lookups
+        node_type_map = {}
+        for node_type, nodes in self.node_types.items():
+            for node_id in nodes:
+                node_type_map[node_id] = node_type
+                
+        # Count entity-concept edges
+        count = 0
+        for u, v, key, data in self.graph.edges(data=True, keys=True):
+            u_type = node_type_map.get(u, "unknown")
+            v_type = node_type_map.get(v, "unknown")
+            if (u_type == "entity" and v_type == "concept") or (u_type == "concept" and v_type == "entity"):
+                count += 1
+        return count
+        
+    def get_entity_event_count(self) -> int:
+        """Get the count of entity-event connections."""
+        # Build a map of node IDs to their types for quick lookups
+        node_type_map = {}
+        for node_type, nodes in self.node_types.items():
+            for node_id in nodes:
+                node_type_map[node_id] = node_type
+                
+        # Count entity-event edges
+        count = 0
+        for u, v, key, data in self.graph.edges(data=True, keys=True):
+            u_type = node_type_map.get(u, "unknown")
+            v_type = node_type_map.get(v, "unknown")
+            if (u_type == "entity" and v_type == "event") or (u_type == "event" and v_type == "entity"):
+                count += 1
+        return count
+        
+    def get_entity_attribute_count(self) -> int:
+        """Get the count of entity-attribute connections."""
+        # Build a map of node IDs to their types for quick lookups
+        node_type_map = {}
+        for node_type, nodes in self.node_types.items():
+            for node_id in nodes:
+                node_type_map[node_id] = node_type
+                
+        # Count entity-attribute edges
+        count = 0
+        for u, v, key, data in self.graph.edges(data=True, keys=True):
+            u_type = node_type_map.get(u, "unknown")
+            v_type = node_type_map.get(v, "unknown")
+            if (u_type == "entity" and v_type == "attribute") or (u_type == "attribute" and v_type == "entity"):
+                count += 1
+        return count
+        
+    def get_relation_concept_count(self) -> int:
+        """Get the count of relation-concept connections."""
+        # For this metric, we're looking at how many relationships connect to concepts
+        # All edges with at least one concept node endpoint
+        
+        # Build a map of node IDs to their types for quick lookups
+        node_type_map = {}
+        for node_type, nodes in self.node_types.items():
+            for node_id in nodes:
+                node_type_map[node_id] = node_type
+                
+        # Count edges where at least one endpoint is a concept
+        count = 0
+        for u, v, key, data in self.graph.edges(data=True, keys=True):
+            if node_type_map.get(u) == "concept" or node_type_map.get(v) == "concept":
+                count += 1
+        return count
+        
+    def get_relation_event_count(self) -> int:
+        """Get the count of relation-event connections."""
+        # Build a map of node IDs to their types for quick lookups
+        node_type_map = {}
+        for node_type, nodes in self.node_types.items():
+            for node_id in nodes:
+                node_type_map[node_id] = node_type
+                
+        # Count edges where at least one endpoint is an event
+        count = 0
+        for u, v, key, data in self.graph.edges(data=True, keys=True):
+            if node_type_map.get(u) == "event" or node_type_map.get(v) == "event":
+                count += 1
+        return count
+        
+    def get_relation_attribute_count(self) -> int:
+        """Get the count of relation-attribute connections."""
+        # Build a map of node IDs to their types for quick lookups
+        node_type_map = {}
+        for node_type, nodes in self.node_types.items():
+            for node_id in nodes:
+                node_type_map[node_id] = node_type
+                
+        # Count edges where at least one endpoint is an attribute
+        count = 0
+        for u, v, key, data in self.graph.edges(data=True, keys=True):
+            if node_type_map.get(u) == "attribute" or node_type_map.get(v) == "attribute":
+                count += 1
+        return count
+        
+    def get_concept_event_count(self) -> int:
+        """Get the count of concept-event connections."""
+        # Build a map of node IDs to their types for quick lookups
+        node_type_map = {}
+        for node_type, nodes in self.node_types.items():
+            for node_id in nodes:
+                node_type_map[node_id] = node_type
+                
+        # Count concept-event edges
+        count = 0
+        for u, v, key, data in self.graph.edges(data=True, keys=True):
+            u_type = node_type_map.get(u, "unknown")
+            v_type = node_type_map.get(v, "unknown")
+            if (u_type == "concept" and v_type == "event") or (u_type == "event" and v_type == "concept"):
+                count += 1
+        return count
+        
+    def get_concept_attribute_count(self) -> int:
+        """Get the count of concept-attribute connections."""
+        # Build a map of node IDs to their types for quick lookups
+        node_type_map = {}
+        for node_type, nodes in self.node_types.items():
+            for node_id in nodes:
+                node_type_map[node_id] = node_type
+                
+        # Count concept-attribute edges
+        count = 0
+        for u, v, key, data in self.graph.edges(data=True, keys=True):
+            u_type = node_type_map.get(u, "unknown")
+            v_type = node_type_map.get(v, "unknown")
+            if (u_type == "concept" and v_type == "attribute") or (u_type == "attribute" and v_type == "concept"):
+                count += 1
+        return count
+        
+    def get_event_attribute_count(self) -> int:
+        """Get the count of event-attribute connections."""
+        # Build a map of node IDs to their types for quick lookups
+        node_type_map = {}
+        for node_type, nodes in self.node_types.items():
+            for node_id in nodes:
+                node_type_map[node_id] = node_type
+                
+        # Count event-attribute edges
+        count = 0
+        for u, v, key, data in self.graph.edges(data=True, keys=True):
+            u_type = node_type_map.get(u, "unknown")
+            v_type = node_type_map.get(v, "unknown")
+            if (u_type == "event" and v_type == "attribute") or (u_type == "attribute" and v_type == "event"):
+                count += 1
+        return count
 
 def example_usage():
     """Demonstrate the use of Lucidia's Knowledge Graph."""
@@ -2525,7 +2996,6 @@ def example_usage():
     
     # Save graph state
     kg.save_state("lucidia_data/knowledge_graph_state.json")
-
 
 if __name__ == "__main__":
     example_usage()

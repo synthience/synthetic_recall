@@ -696,6 +696,74 @@ async def continuous_dream_processing():
                                     logger.info("Dream reflection complete")
                                 else:
                                     logger.info("No reflection was generated for the dream")
+                            
+                            # Log knowledge graph metrics after reflection
+                            if knowledge_graph:
+                                try:
+                                    # Get comprehensive stats from the knowledge graph
+                                    kg_stats = knowledge_graph.get_stats()
+                                    
+                                    # Log the knowledge graph metrics in a structured format
+                                    logger.info("\n==== KNOWLEDGE GRAPH METRICS AFTER REFLECTION ====")
+                                    
+                                    # 1. Core metrics
+                                    logger.info(f"Total Nodes: {kg_stats['total_nodes']}")
+                                    logger.info(f"Total Relationships: {kg_stats['total_edges']}")
+                                    
+                                    # 2. Node type distribution
+                                    logger.info("\nNode Types:")
+                                    node_types = kg_stats.get('node_type_counts', {})
+                                    for node_type, count in sorted(node_types.items(), key=lambda x: x[1], reverse=True):
+                                        if count > 0:
+                                            logger.info(f"  - {node_type.capitalize()}: {count}")
+                                    
+                                    # 3. Dream integration impact
+                                    dream_stats = kg_stats.get('dream_stats', {})
+                                    logger.info("\nDream Integration Impact:")
+                                    logger.info(f"  - Dream-derived nodes: {dream_stats.get('dream_derived_nodes', 0)}")
+                                    logger.info(f"  - Dream-enhanced nodes: {dream_stats.get('dream_enhanced_nodes', 0)}")
+                                    logger.info(f"  - Total dream insights: {dream_stats.get('dream_insight_count', 0)}")
+                                    
+                                    # 4. Key relationships between node types (show only non-zero values)
+                                    relationship_counts = kg_stats.get('relationship_counts', {})
+                                    if relationship_counts:
+                                        logger.info("\nKey Relationship Types:")
+                                        # Show only the most important relationships and those with non-zero values
+                                        key_relationships = [
+                                            ('entity-concept', 'Entity-Concept'), 
+                                            ('concept-concept', 'Concept-Concept'),
+                                            ('entity-entity', 'Entity-Entity'),
+                                            ('entity-attribute', 'Entity-Attribute'),
+                                            ('concept-attribute', 'Concept-Attribute'),
+                                            ('entity-event', 'Entity-Event'),
+                                            ('concept-event', 'Concept-Event'),
+                                            ('dream_insight-concept', 'Insight-Concept'),
+                                            ('dream_insight-entity', 'Insight-Entity')
+                                        ]
+                                        
+                                        for rel_key, rel_name in key_relationships:
+                                            count = relationship_counts.get(rel_key, 0)
+                                            if count > 0:
+                                                logger.info(f"  - {rel_name}: {count}")
+                                                
+                                        # Count other relationships
+                                        other_count = sum(count for rel, count in relationship_counts.items() 
+                                                          if rel not in [r[0] for r in key_relationships])
+                                        if other_count > 0:
+                                            logger.info(f"  - Other relationships: {other_count}")
+                                    
+                                    # 5. Edge type distribution (if present)
+                                    edge_types = kg_stats.get('edge_type_counts', {})
+                                    if edge_types:
+                                        logger.info("\nRelationship Types:")
+                                        # Show top 8 relationship types by count
+                                        for edge_type, count in sorted(edge_types.items(), key=lambda x: x[1], reverse=True)[:8]:
+                                            if count > 0:
+                                                logger.info(f"  - {edge_type}: {count}")
+                                except Exception as e:
+                                    logger.error(f"Error getting knowledge graph metrics: {e}")
+                                    import traceback
+                                    logger.error(traceback.format_exc())
                         else:
                             logger.warning("Dream generation failed or returned invalid results")
                             
