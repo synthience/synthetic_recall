@@ -207,7 +207,11 @@ class LucidiaSystem:
             logger.info(f"Attempting to connect to LM Studio at {lm_studio_url}")
             
             self.llm_client = LMStudioClient({
-                'lm_studio_url': lm_studio_url
+                'lm_studio_url': lm_studio_url,
+                'memory_integration': self.memory_integration,  # Add memory_integration for tool access
+                'self_model': self.self_model,  # Add self_model for self-reflection tools
+                'dream_processor': self.config.get('dream_processor'),  # For dream cycle tool
+                'knowledge_graph': self.config.get('knowledge_graph')  # For knowledge graph exploration
             })
             
             # Try to connect with more detailed error reporting
@@ -761,25 +765,42 @@ class LucidiaSystem:
             payload["temperature"] = max(0.5, min(1.0, payload["temperature"]))
             
             try:
-                if not self.llm_client or not hasattr(self.llm_client, 'generate'):
-                    logger.error("LLM client not initialized or missing generate method")
+                if not self.llm_client or not hasattr(self.llm_client, 'process_with_directive_detection'):
+                    logger.error("LLM client not initialized or missing process_with_directive_detection method")
                     return "I'm currently unable to access my language processing capabilities. Please check if LM Studio is running correctly."
                 
-                # Generate response with proper timeout handling
+                # Add current context and payload info to the context parameter
+                extended_context = context.copy() if context else {}
+                extended_context.update({
+                    "full_prompt": full_prompt,
+                    "system_prompt": system_prompt,
+                    "temperature": payload["temperature"],
+                    "max_tokens": payload["max_tokens"],
+                    "payload": payload  # Include the full payload for LLM generation
+                })
+                
+                # Generate response with proper timeout handling and directive detection
                 response = await asyncio.wait_for(
-                    self.llm_client.generate(payload),
-                    timeout=30.0  # Timeout after 30 seconds
+                    self.llm_client.process_with_directive_detection(user_input, extended_context),
+                    timeout=45.0  # Increased timeout to accommodate tool processing
                 )
                 
                 # Extract just the response text
                 response_text = response.get('response', '')
+                
+                # Handle empty responses
                 if not response_text:
                     logger.warning("Empty response from LLM")
                     return "I'm having trouble formulating a response. Let me try again with a different approach."
+                    
+                # Check if any tools were executed and log them
+                if 'tools_executed' in response and response['tools_executed']:
+                    tool_names = [tool.get('name', 'unknown') for tool in response['tools_executed']]
+                    logger.info(f"Executed tools during response generation: {', '.join(tool_names)}")
                 
                 # Use the enhanced middleware to potentially inject thoughts into the response
                 enhanced_result = await self.enhanced_middleware.process_interaction(
-                    user_input=user_input,
+                    user_input=user_input, 
                     response=response_text
                 )
                 
