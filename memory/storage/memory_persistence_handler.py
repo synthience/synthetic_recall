@@ -308,6 +308,71 @@ class MemoryPersistenceHandler:
             self.stats['failed_loads'] += 1
             return None
     
+    async def retrieve_memory(self, memory_id: str, memory_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve a memory by ID, optionally filtering by type.
+        This method is used by MemoryIntegration to load model data.
+        
+        Args:
+            memory_id: ID of the memory to retrieve
+            memory_type: Optional memory type to filter by
+            
+        Returns:
+            Memory data as a dictionary or None if not found
+        """
+        logger.debug(f"Retrieving memory {memory_id} of type {memory_type}")
+        
+        try:
+            # First check if memory exists in index
+            if memory_id not in self.memory_index:
+                # Check if this is a model ID stored in the models directory
+                model_path = self.storage_path / 'models' / f"{memory_id}.json"
+                if model_path.exists():
+                    # Load model data directly
+                    with open(model_path, 'r') as f:
+                        memory_data = json.load(f)
+                    logger.info(f"Loaded model memory {memory_id} directly from models directory")
+                    return memory_data
+                else:
+                    logger.warning(f"Memory {memory_id} not found in index or models directory")
+                    return None
+                
+            # If type filter is provided, check if it matches
+            if memory_type and self.memory_index[memory_id].get('type') != memory_type:
+                logger.warning(f"Memory {memory_id} exists but is not of type {memory_type}")
+                return None
+                
+            # Get file path from index
+            memory_info = self.memory_index[memory_id]
+            file_path = Path(memory_info['path'])
+            
+            # Check if file exists
+            if not file_path.exists():
+                # Try backup file
+                backup_path = file_path.with_suffix('.bak')
+                if backup_path.exists():
+                    file_path = backup_path
+                else:
+                    logger.warning(f"Memory file for {memory_id} not found at {file_path}")
+                    return None
+            
+            # Read memory file
+            with open(file_path, 'r') as f:
+                memory_data = json.load(f)
+                
+            # Update access count in the memory index
+            if 'access_count' in self.memory_index[memory_id]:
+                self.memory_index[memory_id]['access_count'] += 1
+            else:
+                self.memory_index[memory_id]['access_count'] = 1
+                
+            self.memory_index[memory_id]['last_access'] = time.time()
+            
+            return memory_data
+        except Exception as e:
+            logger.error(f"Error retrieving memory {memory_id}: {e}")
+            return None
+    
     async def delete_memory(self, memory_id: str) -> bool:
         """
         Delete a memory from disk.
@@ -584,6 +649,73 @@ class MemoryPersistenceHandler:
         except Exception as e:
             logger.error(f"Error updating memory access: {e}")
             return False
+    
+    async def store_memory(self, memory_data: Dict[str, Any], storage_key: str) -> bool:
+        """
+        Store a memory with a specific key. Used for storing model data and other
+        special memory types.
+        
+        Args:
+            memory_data: Dictionary containing memory data
+            storage_key: Key to store the memory under
+            
+        Returns:
+            Success status
+        """
+        async with self._persistence_lock:
+            self.stats['saves'] += 1
+            
+            try:
+                # Create storage directory if it doesn't exist
+                model_dir = self.storage_path / 'models'
+                model_dir.mkdir(exist_ok=True)
+                
+                # Determine file path
+                file_path = model_dir / f"{storage_key}.json"
+                temp_path = file_path.with_suffix('.tmp')
+                backup_path = file_path.with_suffix('.bak')
+                
+                # Safe write with atomic operations
+                if self.config['safe_write']:
+                    # Write to temp file first
+                    with open(temp_path, 'w') as f:
+                        json.dump(memory_data, f, indent=2)
+                        
+                    # Backup existing file if it exists
+                    if file_path.exists():
+                        try:
+                            shutil.copy2(file_path, backup_path)
+                        except Exception as e:
+                            logger.warning(f"Failed to backup memory file: {e}")
+                    
+                    # Atomic rename
+                    os.replace(temp_path, file_path)
+                    
+                else:
+                    # Direct write (not recommended)
+                    with open(file_path, 'w') as f:
+                        json.dump(memory_data, f, indent=2)
+                
+                # Update memory index
+                self.memory_index[storage_key] = {
+                    'path': str(file_path),
+                    'type': memory_data.get('memory_type', 'MODEL'),
+                    'timestamp': memory_data.get('timestamp', time.time()),
+                    'significance': memory_data.get('significance', 1.0)
+                }
+                
+                # Save index
+                await self._save_memory_index()
+                
+                self.stats['successful_saves'] += 1
+                logger.info(f"Successfully stored memory with key: {storage_key}")
+                
+                return True
+                
+            except Exception as e:
+                logger.error(f"Error storing memory with key {storage_key}: {e}")
+                self.stats['failed_saves'] += 1
+                return False
     
     def get_stats(self) -> Dict[str, Any]:
         """Get persistence handler statistics."""

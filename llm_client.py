@@ -57,6 +57,61 @@ class LMStudioClient:
             self.session = None
             logger.info("Disconnected from LM Studio")
     
+    async def generate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate a response from LM Studio API using the given payload.
+        
+        Args:
+            payload: The request payload to send to LM Studio API
+            
+        Returns:
+            Dict containing the response from LM Studio
+        """
+        try:
+            if not self.session:
+                await self.connect()
+            
+            logger.debug(f"Sending request to LM Studio with payload: {payload}")
+            
+            async with self.session.post(
+                f"{self.lm_studio_url}/v1/chat/completions", 
+                json=payload
+            ) as response:
+                if response.status != 200:
+                    error_msg = f"LM Studio returned error: {response.status}"
+                    try:
+                        error_body = await response.text()
+                        error_msg += f" - Response body: {error_body}"
+                    except Exception as e:
+                        error_msg += f" (Failed to read error body: {e})"
+                    logger.error(error_msg)
+                    return {"status": "error", "message": error_msg}
+                
+                result = await response.json()
+                
+                # Extract content from the response
+                choices = result.get("choices", [])
+                if not choices:
+                    error_msg = "No choices returned from LLM"
+                    logger.error(error_msg)
+                    return {"status": "error", "message": error_msg}
+                    
+                message = choices[0].get("message", {})
+                if not message:
+                    error_msg = "No message in LLM response"
+                    logger.error(error_msg)
+                    return {"status": "error", "message": error_msg}
+                    
+                content = message.get("content", "")
+                if not content:
+                    error_msg = "Empty content in LLM response"
+                    logger.error(error_msg)
+                    return {"status": "error", "message": error_msg}
+                
+                return {"status": "success", "response": content}
+        except Exception as e:
+            logger.error(f"Error generating response from LM Studio: {e}")
+            return {"status": "error", "message": f"Error generating response: {e}"}
+
     async def generate_reflection(self, memories: List[Dict[str, Any]], 
                                depth: float = 0.7, 
                                creativity: float = 0.5,

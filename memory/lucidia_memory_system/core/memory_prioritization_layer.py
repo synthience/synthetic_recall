@@ -483,3 +483,68 @@ class MemoryPrioritizationLayer:
         }
         
         return stats
+    
+    async def personal_info_search(self, query: str, context: Optional[Dict[str, Any]] = None, min_personal_significance: float = 0.3) -> List[Dict[str, Any]]:
+        """
+        Search for personal information in memory.
+        
+        This method looks for personal details like names, preferences, relationships,
+        and important facts about the user stored in memory.
+        
+        Args:
+            query: The search query or information category to look for
+            context: Optional additional context for the search
+            min_personal_significance: Minimum significance threshold for personal info
+            
+        Returns:
+            List of memories containing personal information
+        """
+        try:
+            logger.info(f"Searching for personal information related to: {query}")
+            context = context or {}
+            
+            # Define regex patterns for different types of personal information
+            patterns = {
+                'names': r'\b(?:my name is|I am|I\'m|call me)\s+([A-Z][a-z]+)\b',
+                'preferences': r'\b(?:I (?:like|love|enjoy|prefer|favorite))\s+(.+?)(?:\.|,|$)',
+                'relationships': r'\b(?:my (?:wife|husband|partner|girlfriend|boyfriend|mother|father|sister|brother|daughter|son|friend))\s+([A-Z][a-z]+)\b',
+                'personal_traits': r'\b(?:I am|I\'m)\s+(?!(?:\d+|a|an|the)\b)([^.,;!?]+)\b'
+            }
+            
+            # First check STM for recent personal information
+            stm_results = await self._check_stm(query, context)
+            
+            # Then check LTM with potentially more specific search parameters
+            ltm_query = f"personal {query}" if not query.startswith("personal") else query
+            ltm_results = await self._check_ltm(ltm_query, context)
+            
+            # Combine results with proper weighting
+            combined_results = self._merge_results(stm_results, ltm_results)
+            
+            # Add metadata about personal information type if we can detect it
+            for result in combined_results:
+                content = result.get('content', '')
+                for info_type, pattern in patterns.items():
+                    matches = re.findall(pattern, content)
+                    if matches:
+                        if 'personal_info' not in result:
+                            result['personal_info'] = {}
+                        result['personal_info'][info_type] = matches
+            
+            # Filter results to only include those with personal information
+            # and have significance above threshold
+            personal_results = [
+                r for r in combined_results 
+                if 'personal_info' in r and r.get('metadata', {}).get('significance', 0) >= min_personal_significance
+            ]
+            
+            # If we have specific personal results, return those
+            if personal_results:
+                return personal_results
+            
+            # Otherwise return all potentially relevant results
+            return combined_results
+            
+        except Exception as e:
+            logger.error(f"Error in personal_info_search: {e}")
+            return []

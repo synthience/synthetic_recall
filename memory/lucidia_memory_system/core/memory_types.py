@@ -22,6 +22,7 @@ class MemoryTypes(Enum):
     IMPORTANT = "important"      # High-significance memories that should be preserved
     EMOTIONAL = "emotional"      # Memories with emotional context
     SYSTEM = "system"            # System-level memories (configs, settings)
+    MODEL = "model"              # Model-related memories (self_model, world_model)
 
 @dataclass
 class MemoryEntry:

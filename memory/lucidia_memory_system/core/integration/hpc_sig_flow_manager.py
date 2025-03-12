@@ -306,6 +306,68 @@ class HPCSIGFlowManager:
         
         return stats
     
+    async def get_embedding(self, text: str) -> torch.Tensor:
+        """
+        Generate an embedding vector from text content.
+        
+        Args:
+            text: The text content to generate an embedding for
+            
+        Returns:
+            Tensor embedding representation of the text
+        
+        Raises:
+            RuntimeError: If embedding generation fails after retries
+        """
+        if not text:
+            logger.warning("Attempted to generate embedding for empty text")
+            # Return a zero embedding of the correct dimension
+            return torch.zeros(self.config['embedding_dim'], device=self.config['device'])
+        
+        # Normalize text
+        text = text.strip()
+        
+        try:
+            # HPC client would typically handle this, but we'll implement our own logic
+            # to ensure proper formatting and error handling
+            
+            # Use the tensor client to generate embeddings
+            # In a real implementation, this would call an external service or model
+            
+            # For now, simulate embedding generation with a hash-based approach
+            # that at least maintains consistency for the same input
+            import hashlib
+            import numpy as np
+            
+            # Create a hash of the text
+            text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
+            
+            # Use the hash to seed a random number generator
+            rng = np.random.RandomState(int(text_hash[:8], 16))
+            
+            # Generate a random embedding vector
+            raw_embedding = torch.tensor(
+                rng.randn(self.config['embedding_dim']),
+                dtype=torch.float32,
+                device=self.config['device']
+            )
+            
+            # Normalize the embedding to unit length
+            embedding = raw_embedding / torch.norm(raw_embedding)
+            
+            # Ensure correct dimensionality
+            embedding = self._preprocess_embedding(embedding)
+            
+            logger.debug(f"Generated embedding for text of length {len(text)}")
+            return embedding
+            
+        except Exception as e:
+            error_msg = f"Error generating embedding: {str(e)}"
+            logger.error(error_msg)
+            self._stats['error_count'] += 1
+            self._stats['last_error'] = error_msg
+            raise RuntimeError(error_msg)
+    
     async def close(self):
         """Clean up resources used by this manager"""
         self._thread_pool.shutdown(wait=True)

@@ -606,6 +606,18 @@
       "significance": 0.7
     }
   },
-  "last_updated": 1741756301.8925908,
-  "count": 121
+  "last_updated": 1741810420.643831,
+  "count": 121,
+  "self_model": {
+    "path": "memory/stored/models/self_model.json",
+    "type": "MODEL",
+    "timestamp": 1741810421.7299871,
+    "significance": 1.0
+  },
+  "world_model": {
+    "path": "memory/stored/models/world_model.json",
+    "type": "MODEL",
+    "timestamp": 1741810421.7939599,
+    "significance": 1.0
+  }
 }

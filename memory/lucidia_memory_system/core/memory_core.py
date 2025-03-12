@@ -304,7 +304,9 @@ class MemoryCore:
             if re.search(pattern, query.lower()):
                 # Boost significance threshold for personal data
                 personal_info_search = self.memory_prioritization.personal_info_search(
-                    query, limit, min_personal_significance=0.2
+                    query, 
+                    context={'limit': limit},
+                    min_personal_significance=min_significance
                 )
                 search_tasks.append(personal_info_search)
                 break
@@ -423,9 +425,9 @@ class MemoryCore:
                 'limit': limit,
                 'min_significance': min_significance
             })
-            if routed_results:
-                self.logger.debug(f"Fallback search: prioritization layer returned {len(routed_results)} results")
-                return routed_results
+            if routed_results and 'memories' in routed_results:
+                self.logger.debug(f"Fallback search: prioritization layer returned {len(routed_results['memories'])} results")
+                return routed_results['memories']
         except Exception as e:
             self.logger.warning(f"Error in prioritization routing during fallback search: {e}")
         

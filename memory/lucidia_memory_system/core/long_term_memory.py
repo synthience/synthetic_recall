@@ -390,6 +390,73 @@ class LongTermMemory:
             # Return top results
             return results[:limit]
     
+    async def keyword_search(self, query: str, limit: int = 5, min_significance: float = 0.0) -> List[Dict[str, Any]]:
+        """
+        Search for memories based on keyword matching.
+        
+        Args:
+            query: Text query containing keywords to search for
+            limit: Maximum number of results to return
+            min_significance: Minimum significance threshold
+            
+        Returns:
+            List of matching memories sorted by relevance
+        """
+        async with self._lock:
+            self.stats['keyword_retrievals'] = self.stats.get('keyword_retrievals', 0) + 1
+            
+            # Process query into keywords
+            keywords = set(query.lower().split())
+            if not keywords:
+                return []
+            
+            results = []
+            
+            # Search through all memories
+            for memory_id, memory in self.memories.items():
+                # Check significance threshold
+                if memory.get('significance', 0) < min_significance:
+                    continue
+                
+                # Extract content and convert to lowercase
+                content = memory.get('content', '').lower()
+                content_tokens = set(content.split())
+                
+                # Find matching keywords
+                matching_keywords = keywords.intersection(content_tokens)
+                if not matching_keywords:
+                    continue
+                
+                # Calculate match score based on number of matching keywords
+                keyword_score = len(matching_keywords) / len(keywords)
+                
+                # Calculate effective significance with decay
+                effective_significance = self._calculate_effective_significance(memory)
+                
+                # Combined relevance score
+                score = (keyword_score * 0.7) + (effective_significance * 0.3)
+                
+                # Add to results
+                results.append({
+                    'id': memory_id,
+                    'content': memory.get('content', ''),
+                    'timestamp': memory.get('timestamp', 0),
+                    'matching_keywords': list(matching_keywords),
+                    'significance': effective_significance,
+                    'score': score,
+                    'metadata': memory.get('metadata', {})
+                })
+            
+            # Sort by score
+            results.sort(key=lambda x: x['score'], reverse=True)
+            
+            # Update hit stats
+            if results:
+                self.stats['keyword_hits'] = self.stats.get('keyword_hits', 0) + 1
+            
+            # Return top results
+            return results[:limit]
+    
     def _boost_significance(self, memory: Dict[str, Any]) -> None:
         """
         Boost memory significance based on access patterns.
@@ -844,3 +911,42 @@ class LongTermMemory:
             'storage_utilization': len(self.memories) / self.config['max_memories'],
             'batch_persistence': batch_stats
         }
+    
+    async def update_access_timestamp(self, memory_id: str) -> bool:
+        """
+        Update the access timestamp for a memory.
+        
+        Args:
+            memory_id: ID of the memory to update
+            
+        Returns:
+            True if memory was found and updated, False otherwise
+        """
+        async with self._lock:
+            if memory_id not in self.memories:
+                logger.debug(f"Memory {memory_id} not found in LTM when updating access timestamp")
+                return False
+                
+            try:
+                # Update the access timestamp and count
+                current_time = time.time()
+                self.memories[memory_id]['last_access'] = current_time
+                self.memories[memory_id]['access_count'] = self.memories[memory_id].get('access_count', 0) + 1
+                
+                # Also update in metadata
+                if 'metadata' not in self.memories[memory_id]:
+                    self.memories[memory_id]['metadata'] = {}
+                    
+                self.memories[memory_id]['metadata']['last_access'] = current_time
+                self.memories[memory_id]['metadata']['access_count'] = self.memories[memory_id].get('access_count', 1)
+                
+                # Add to batch queue for persistence (update operation)
+                if self.config['enable_persistence']:
+                    await self._add_to_batch_queue(OperationType.UPDATE, memory_id, self.memories[memory_id])
+                    
+                logger.debug(f"Updated access timestamp for memory {memory_id} in LTM")
+                return True
+                
+            except Exception as e:
+                logger.error(f"Error updating access timestamp in LTM: {e}")
+                return False

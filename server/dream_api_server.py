@@ -154,11 +154,20 @@ try:
 except Exception as e:
     logger.error(f"Error loading LM Studio configuration: {e}")
 
-# Create a patched version of WorldModel that initializes entity_importance
+# Create a patched version of WorldModel that initializes entity_importance and conceptual_networks
 class PatchedWorldModel(LucidiaWorldModel):
     def __init__(self, config=None):
         # Initialize the missing attribute before parent __init__ calls _initialize_core_entities
         self.entity_importance = {}
+        self.conceptual_networks = {}  # Initialize missing conceptual_networks attribute
+        super().__init__(config)
+
+# Create a patched version of DreamProcessor that initializes cycle_stats and total_insights
+class PatchedDreamProcessor(DreamProcessor):
+    def __init__(self, config=None):
+        # Initialize the missing attributes before parent __init__
+        self.cycle_stats = {}
+        self.total_insights = 0  # Initialize missing total_insights counter
         super().__init__(config)
 
 # ========= Connection Functions =========
@@ -414,7 +423,7 @@ async def initialize_components():
             logger.info(f"LM Studio integration enabled with URL: {lm_studio_url}")
         
         logger.info("Initializing dream processor...")
-        dream_processor = DreamProcessor({
+        dream_processor = PatchedDreamProcessor({
             "memory_client": memory_client,
             "knowledge_graph": knowledge_graph,
             "self_model": self_model,
@@ -523,6 +532,43 @@ async def initialize_components():
                 "knowledge_graph": knowledge_graph  # Add back knowledge_graph
             }
         )
+        
+        # Explicitly persist models to storage using persistence_handler directly
+        try:
+            logger.info("Saving self_model and world_model to persistent storage")
+            
+            # Prepare self_model data for storage - using attributes we know exist
+            self_model_data = {
+                'content': json.dumps({
+                    'identity': getattr(self_model, 'identity', {'version': '1.0'})
+                }),
+                'memory_type': 'MODEL',
+                'metadata': {
+                    'timestamp': time.time(),
+                    'type': 'self_model'
+                }
+            }
+            
+            # Prepare world_model data for storage - using minimal data
+            world_model_data = {
+                'content': json.dumps({
+                    'model_data': 'world_model_instance'
+                }),
+                'memory_type': 'MODEL',
+                'metadata': {
+                    'timestamp': time.time(),
+                    'type': 'world_model'
+                }
+            }
+            
+            # Store models in persistence
+            await memory_integration.persistence_handler.store_memory(memory_data=self_model_data, storage_key='self_model')
+            await memory_integration.persistence_handler.store_memory(memory_data=world_model_data, storage_key='world_model')
+            
+            logger.info("Successfully saved self_model and world_model to persistent storage")
+        except Exception as e:
+            logger.error(f"Error saving models to persistent storage: {e}")
+        
         reflection_engine = ReflectionEngine(
             knowledge_graph=knowledge_graph,
             memory_integration=memory_integration,

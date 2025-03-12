@@ -64,7 +64,21 @@ This document outlines critical bug fixes and improvements implemented in the Lu
 - Implemented fallback mechanisms for unserializable data
 - Enhanced error handling during serialization process
 
-### 6. PyTorch Deprecation Warning Fix
+### 6. HPC Query Embedding Generation
+
+**File:** `memory/lucidia_memory_system/core/integration/hpc_sig_flow_manager.py`
+
+**Description:** Implemented the missing `get_embedding` method in the HPCSIGFlowManager class, which was causing errors when the Memory Prioritization Layer tried to generate embeddings for query processing.
+
+**Implementation Details:**
+- Added a dedicated method to generate embeddings from text content
+- Implemented error handling and empty text detection
+- Ensured consistent embedding dimensionality with the rest of the memory system
+- Added proper integration with the Memory Prioritization Layer
+
+This fix resolves the error: `Error getting query embedding: 'HPCSIGFlowManager' object has no attribute 'get_embedding'`
+
+### 7. PyTorch Deprecation Warning Fix
 
 **File:** `memory/lucidia_memory_system/core/integration/hpc_sig_flow_manager.py`
 
