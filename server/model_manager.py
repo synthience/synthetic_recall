@@ -185,7 +185,7 @@ class ModelManager:
                         self.default_model = config_data['default_model']
                         self.active_model = self.default_model
                     else:
-                        logger.error(f"Invalid default_model specified: {config_data.get('default_model')}, using {self.default_model}")
+                        logger.warning(f"Default model '{config_data.get('default_model')}' not found in models, using {self.default_model}")
 
                 # Handle embedding_model if specified
                 if 'embedding_model' in config_data:
@@ -193,7 +193,7 @@ class ModelManager:
                     if isinstance(config_data['embedding_model'], str) and config_data['embedding_model'] in self.models:
                         logger.info(f"Using {config_data['embedding_model']} as embedding model")
                     else:
-                        logger.error(f"Invalid embedding_model specified: {config_data.get('embedding_model')}")
+                        logger.warning(f"Embedding model '{config_data.get('embedding_model')}' not found in models")
 
                 # Handle dream_model if specified
                 if 'dream_model' in config_data:
@@ -201,17 +201,12 @@ class ModelManager:
                     if isinstance(config_data['dream_model'], str) and config_data['dream_model'] in self.models:
                         logger.info(f"Using {config_data['dream_model']} as dream model")
                     else:
-                        logger.error(f"Invalid dream_model specified: {config_data.get('dream_model')}")
+                        logger.warning(f"Dream model '{config_data.get('dream_model')}' not found in models")
 
-                # Handle model_profiles if specified
+                # Handle model_profiles
                 if 'model_profiles' in config_data:
-                    # Check if it's a list or dictionary and handle accordingly
-                    if isinstance(config_data['model_profiles'], (list, dict)):
-                        # This is fine - model_profiles can be either a list or dict
-                        pass
-                    else:
-                        logger.error(f"Invalid model_profiles format: expected list or dict, got {type(config_data['model_profiles'])}")
-
+                    # Just ignore it - we'll handle profiles differently
+                    logger.debug("Found model_profiles in config, ignoring")
             except json.JSONDecodeError as e:
                 logger.error(f"Error parsing model configuration: {e}")
                 self._create_default_models()

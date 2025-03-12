@@ -28,7 +28,7 @@
         "cpu": 0.3
       }
     },
-    "gemma2-9b-it": {
+    "phi-4": {
       "purposes": [
         "reasoning",
         "analysis",
@@ -42,34 +42,23 @@
         "cpu": 0.8
       }
     },
-    "mistral-nemo": {
+    "deepseek-coder-v2-lite-instruct": {
       "purposes": [
         "creative",
         "dreaming",
         "reflection"
       ],
       "context_length": 16384,
-      "strength": 0.9,
+      "strength": 0.82,
       "speed": 0.5,
       "resource_usage": {
         "memory": 0.9,
-        "cpu": 0.9
-      }
-    },
-    "all-MiniLM-L6-v2": {
-      "purposes": [
-        "embedding"
-      ],
-      "context_length": 512,
-      "strength": 0.7,
-      "speed": 0.95,
-      "resource_usage": {
-        "memory": 0.2,
-        "cpu": 0.2
+        "cpu": 0.85
       }
     }
   },
   "default_model": "qwen2.5-7b-instruct",
+  "dream_model": "phi-4",
   "parameters": {
     "switch_cooldown": 60
   }
