@@ -387,7 +387,7 @@ async def initialize_components():
             "api_key": "lm-studio",  # Standard API key for LM Studio
             "default_model": parameter_manager.config.get("lm_studio", {}).get("model", "qwen2.5-7b-instruct"),
             "local_model": True,
-            "allow_simulation": True  # Keep simulation enabled as fallback
+            "allow_simulation": False  # Disable simulation mode
         }
         logger.info(f"LLM Manager config: {llm_config}")
         llm_manager = LLMManager(llm_config=llm_config)

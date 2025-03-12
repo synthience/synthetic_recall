@@ -1,61 +1,79 @@
 # api/dream_api.py
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Query, Request, Body
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Query, Request, Body, WebSocket, WebSocketDisconnect, Response
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import logging
 import asyncio
-import time
-import os
+import aiohttp
 import json
+import re
+import os
+import sys
+import datetime
+import logging
+import time
+import asyncio
+import aiohttp
 import uuid
 from datetime import datetime, timedelta
 import websockets
 from websockets.exceptions import ConnectionClosed
+from typing import Optional, List, Dict, Any, Tuple, Union, TYPE_CHECKING
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect, Response
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
 
 # Import activity tracker
 from server.user_activity_tracker import UserActivityTracker
 
-# Import the enhanced models from the correct paths
+# Import from local modules
 from memory.lucidia_memory_system.core.Self.self_model import LucidiaSelfModel as SelfModel
 from memory.lucidia_memory_system.core.World.world_model import LucidiaWorldModel as WorldModel
+from server.memory_system import MemorySystem
+from server.memory_client import EnhancedMemoryClient as MemoryClient
+from memory.lucidia_memory_system.memory_integration import MemoryIntegration
 from memory.lucidia_memory_system.core.dream_processor import LucidiaDreamProcessor as DreamProcessor
-from memory.lucidia_memory_system.core.knowledge_graph import LucidiaKnowledgeGraph as KnowledgeGraph
-from memory.lucidia_memory_system.core.embedding_comparator import EmbeddingComparator
-from server.llm_pipeline import LocalLLMPipeline
 from memory.lucidia_memory_system.core.dream_structures import DreamReport, DreamFragment
 from memory.lucidia_memory_system.core.reflection_engine import ReflectionEngine
+from memory.lucidia_memory_system.core.knowledge_graph import LucidiaKnowledgeGraph as KnowledgeGraph
+from server.memory_bridge import MemoryBridge
+from server.llm_manager import LLMManager
+from server.rag_integration_service import RAGIntegrationService
 
-router = APIRouter(prefix="/api/dream", tags=["Dream Processing"])
+router = APIRouter(prefix="/api", tags=["Dream Processing"])
 
 logger = logging.getLogger(__name__)
 
-# In-memory store of active dream sessions
-dream_sessions = {}
-
-# Configuration values (overridable by environment variables)
-TENSOR_SERVER_URL = os.getenv('TENSOR_SERVER_URL', 'ws://nemo_sig_v3:5001')
-HPC_SERVER_URL = os.getenv('HPC_SERVER_URL', 'ws://nemo_sig_v3:5005')
-CONNECTION_RETRY_LIMIT = int(os.getenv('CONNECTION_RETRY_LIMIT', '5'))
-CONNECTION_RETRY_DELAY = float(os.getenv('CONNECTION_RETRY_DELAY', '2.0'))
-CONNECTION_TIMEOUT = float(os.getenv('CONNECTION_TIMEOUT', '10.0'))
-
-# WebSocket connections and locks
+# Global variables for connection state
 tensor_connection = None
 hpc_connection = None
+dream_sessions = {}
 tensor_lock = asyncio.Lock()
 hpc_lock = asyncio.Lock()
+
+# Server connection settings
+TENSOR_SERVER_URL = os.environ.get('TENSOR_SERVER_URL', 'ws://localhost:5001/tensor')
+HPC_SERVER_URL = os.environ.get('HPC_SERVER_URL', 'ws://localhost:5002/hpc')
+CONNECTION_TIMEOUT = float(os.environ.get('CONNECTION_TIMEOUT', '10.0'))
+CONNECTION_RETRY_LIMIT = int(os.environ.get('CONNECTION_RETRY_LIMIT', '3'))
+CONNECTION_RETRY_DELAY = float(os.environ.get('CONNECTION_RETRY_DELAY', '2.0'))
+PING_INTERVAL = float(os.environ.get('PING_INTERVAL', '30.0'))
+
+# In-memory store of active dream sessions
+
+# Configuration values (overridable by environment variables)
+
+
+# WebSocket connections and locks
 
 
 # ========= Request Models =========
 
 class DreamRequest(BaseModel):
-    duration_minutes: int = 30
-    mode: Optional[str] = "full"  # full, consolidate, insights, optimize, reflection
-    scheduled: bool = False
-    schedule_time: Optional[str] = None
-    priority: str = "normal"
-    include_self_model: bool = True
-    include_world_model: bool = True
+    """Request model for starting a dream processing session"""
+    mode: str = "full"  # full, consolidate, insights, reflection, optimize
+    duration_minutes: int = 10
+    settings: Optional[Dict[str, Any]] = None
 
 class ConsolidateRequest(BaseModel):
     target: Optional[str] = "all"
@@ -166,8 +184,12 @@ def get_world_model(request: Request):
 def get_embedding_comparator(request: Request):
     return request.app.state.embedding_comparator
 
-def get_llm_service(request: Request):
-    return request.app.state.llm_service
+def get_llm_manager(request: Request):
+    """Get the LLM Manager instance from request state."""
+    llm_manager = getattr(request.app.state, "llm_manager", None)
+    if not llm_manager:
+        logger.warning("LLM Manager not available")
+    return llm_manager
 
 def get_reflection_engine(request: Request):
     return request.app.state.reflection_engine
@@ -183,6 +205,23 @@ def get_memory_bridge(request: Request):
 def get_memory_system(request: Request):
     """Get hierarchical memory system instance"""
     return request.app.state.memory_system
+
+# Get RAG integration service instance for knowledge retrieval during reflection
+def get_rag_integration_service(request: Request):
+    """Get the RAG Integration Service instance from request state."""
+    if not hasattr(request.app.state, "rag_integration_service"):
+        from server.rag_integration_service import RAGIntegrationService
+        # Initialize the service with needed components
+        rag_service = RAGIntegrationService(
+            memory_system=request.app.state.memory_system,
+            knowledge_graph=request.app.state.knowledge_graph,
+            parameter_manager=request.app.state.parameter_manager
+        )
+        # Initialize the service asynchronously
+        asyncio.create_task(rag_service.initialize())
+        request.app.state.rag_integration_service = rag_service
+    
+    return request.app.state.rag_integration_service
 
 
 # ========= Connection Functions =========
@@ -206,7 +245,7 @@ async def get_tensor_connection():
             try:
                 logger.info(f"Connecting to tensor server at {TENSOR_SERVER_URL} (attempt {attempt+1}/{CONNECTION_RETRY_LIMIT})")
                 connection = await asyncio.wait_for(
-                    websockets.connect(TENSOR_SERVER_URL, ping_interval=30.0),
+                    websockets.connect(TENSOR_SERVER_URL, ping_interval=PING_INTERVAL),
                     timeout=CONNECTION_TIMEOUT
                 )
                 pong_waiter = await connection.ping()
@@ -243,7 +282,7 @@ async def get_hpc_connection():
             try:
                 logger.info(f"Connecting to HPC server at {HPC_SERVER_URL} (attempt {attempt+1}/{CONNECTION_RETRY_LIMIT})")
                 connection = await asyncio.wait_for(
-                    websockets.connect(HPC_SERVER_URL, ping_interval=30.0),
+                    websockets.connect(HPC_SERVER_URL, ping_interval=PING_INTERVAL),
                     timeout=CONNECTION_TIMEOUT
                 )
                 pong_waiter = await connection.ping()
@@ -312,7 +351,7 @@ async def process_embedding(text: str) -> Dict[str, Any]:
 
 # ========= Dream Processing Endpoints =========
 
-@router.post("/start", response_model=Dict[str, Any])
+@router.post("/dream/start", response_model=Dict[str, Any])
 async def start_dream_session(
     background_tasks: BackgroundTasks,
     request: DreamRequest,
@@ -383,7 +422,7 @@ async def schedule_dream_session(dream_processor, request, delay_seconds):
     except Exception as e:
         logger.error(f"Error in scheduled dream session: {e}")
 
-@router.get("/status", response_model=Dict[str, Any])
+@router.get("/dream/status", response_model=Dict[str, Any])
 async def get_dream_status(
     session_id: Optional[str] = None,
     dream_processor: DreamProcessor = Depends(get_dream_processor),
@@ -415,7 +454,7 @@ async def get_dream_status(
         logger.error(f"Error getting dream status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/stop", response_model=Dict[str, Any])
+@router.post("/dream/stop", response_model=Dict[str, Any])
 async def stop_dream_session(
     session_id: Optional[str] = None,
     dream_processor: DreamProcessor = Depends(get_dream_processor),
@@ -501,6 +540,42 @@ async def generate_memory_insights(
         logger.error(f"Error generating insights: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/memories/persist")
+async def persist_memory(
+    request: Request,
+    memory_data: Dict[str, Any],
+    memory_bridge: MemoryBridge = Depends(get_memory_bridge),
+    memory_system: MemorySystem = Depends(get_memory_system),
+):
+    """
+    Force immediate persistence of a memory across all memory systems.
+    
+    This ensures memories created via the CLI or other interfaces are immediately 
+    saved to both flat and hierarchical storage systems.
+    """
+    try:
+        memory_id = memory_data.get('id')
+        if not memory_id:
+            raise HTTPException(status_code=400, detail="Memory ID is required")
+            
+        # First, ensure it's in the flat memory system
+        if not any(m.get('id') == memory_id for m in memory_system.memories):
+            # Add to flat memory system if not present
+            memory_system._save_memory(memory_data)
+            logger.info(f"Added memory {memory_id} to flat memory system")
+        
+        # Now process through memory bridge for hierarchical storage
+        result = await memory_bridge.process_new_memory(memory_data)
+        
+        if result:
+            return {"success": True, "message": f"Memory {memory_id} successfully persisted across systems"}
+        else:
+            return {"success": False, "message": f"Memory {memory_id} could not be fully persisted"}
+            
+    except Exception as e:
+        logger.error(f"Error persisting memory: {e}")
+        raise HTTPException(status_code=500, detail=f"Error persisting memory: {str(e)}")
+
 
 # ========= Memory Query Endpoints =========
 
@@ -538,22 +613,113 @@ async def get_significant_memories(
 async def run_self_reflection(
     request: SelfReflectionRequest,
     dream_processor: DreamProcessor = Depends(get_dream_processor),
-    self_model: SelfModel = Depends(get_self_model)
+    self_model: SelfModel = Depends(get_self_model),
+    rag_service: RAGIntegrationService = Depends(get_rag_integration_service)
 ) -> Dict[str, Any]:
     try:
+        # Ensure required connections are available
         await get_tensor_connection()
         await get_hpc_connection()
+        await rag_service.initialize()
+        
+        # Set time budget based on reflection depth
         time_budget = 180 if request.depth == "standard" else (60 if request.depth == "shallow" else 300)
+        
+        # Start by gathering context for reflection
+        context = {
+            "self_model": self_model.get_model_summary(),
+            "performance_metrics": self_model.get_performance_metrics(),
+            "last_reflection_time": self_model.last_updated.isoformat() if hasattr(self_model, "last_updated") else None
+        }
+        
+        # Prepare reflection query based on focus areas
+        focus_text = "" if not request.focus_areas else f"focusing on {', '.join(request.focus_areas)}"
+        reflection_query = f"Reflect on your recent experiences, knowledge, and capabilities {focus_text} to identify opportunities for growth and improvement."
+        
+        # Run standard self-reflection process
+        logger.info(f"Running self-reflection with time budget: {time_budget} seconds, focus areas: {request.focus_areas}")
         result = await dream_processor.self_reflection(
             time_budget_seconds=time_budget,
             focus_areas=request.focus_areas,
             depth=request.depth
         )
+        
+        # Enhance with RAG capabilities
+        logger.info("Enhancing self-reflection with RAG capabilities")
+        rag_enhanced = False
+        rag_status = "not_attempted"
+        
+        try:
+            rag_results = await rag_service.enhance_reflection(
+                reflection_query=reflection_query,
+                context=context,
+                focus_areas=request.focus_areas
+            )
+            
+            # Process successful or partial RAG results
+            rag_status = rag_results.get("status", "unknown")
+            if rag_status in ["success", "partial"]:
+                logger.info(f"Received {len(rag_results.get('insights', []))} insights from RAG enhancement (status: {rag_status})")
+                
+                # Initialize result sections if needed
+                if "insights" not in result:
+                    result["insights"] = []
+                if "fragments" not in result:
+                    result["fragments"] = []
+                    
+                # Add RAG insights to results
+                if "insights" in rag_results and rag_results["insights"]:
+                    result["insights"].extend(rag_results["insights"])
+                    
+                # Add RAG fragments to results    
+                if "fragments" in rag_results and rag_results["fragments"]:
+                    result["fragments"].extend(rag_results["fragments"])
+                
+                # Set RAG enhancement flags    
+                rag_enhanced = True
+                result["rag_enhanced"] = True
+                result["rag_status"] = rag_status
+                if "error" in rag_results:
+                    result["rag_error"] = rag_results["error"]
+                if "tool_results" in rag_results:
+                    result["rag_tool_results"] = rag_results.get("tool_results", [])
+            else:
+                logger.warning(f"RAG enhancement failed with status: {rag_status}")
+                result["rag_enhanced"] = False
+                result["rag_status"] = rag_status
+                result["rag_error"] = rag_results.get("message", "Unknown RAG error")
+        except Exception as e:
+            logger.error(f"Error during RAG enhancement: {e}")
+            result["rag_enhanced"] = False
+            result["rag_status"] = "error"
+            result["rag_error"] = str(e)
+            # Continue with reflection process despite RAG failure
+        
+        # Get updated self-model after reflection
         updated_model = self_model.get_model_summary()
-        return {**result, "self_model": updated_model}
+        
+        # Add metadata about the reflection process
+        reflection_metadata = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "duration_seconds": time_budget,
+            "focus_areas": request.focus_areas,
+            "depth": request.depth,
+            "rag_enhanced": rag_enhanced,
+            "rag_status": rag_status
+        }
+        
+        return {**result, "self_model": updated_model, "metadata": reflection_metadata}
     except Exception as e:
         logger.error(f"Error running self reflection: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # Make sure to close RAG service connections
+        try:
+            await rag_service.close()
+        except Exception as e:
+            logger.warning(f"Error closing RAG service connections: {e}")
 
 @router.get("/self_model")
 async def get_self_model_data(
@@ -590,7 +756,7 @@ async def get_knowledge_graph_data(
             result = await knowledge_graph.query_related(concept, relationship, depth)
             return {"status": "success", "concept": concept, "relationships": result}
         else:
-            stats = await knowledge_graph.get_stats()
+            stats = knowledge_graph.get_stats() if hasattr(knowledge_graph, "get_stats") else {}
             return {"status": "success", "stats": stats}
     except Exception as e:
         logger.error(f"Error querying knowledge graph: {e}")
@@ -599,16 +765,12 @@ async def get_knowledge_graph_data(
 @router.post("/knowledge")
 async def add_to_knowledge_graph(
     request: KnowledgeAddRequest,
-    knowledge_graph: Any = Depends(get_knowledge_graph)
+    knowledge_graph: KnowledgeGraph = Depends(get_knowledge_graph)
 ) -> Dict[str, Any]:
     try:
         if knowledge_graph is None:
             logger.error("Knowledge graph not initialized")
             raise HTTPException(status_code=500, detail="Knowledge graph not initialized")
-        from memory.lucidia_memory_system.core.knowledge_graph import KnowledgeGraph
-        if not isinstance(knowledge_graph, KnowledgeGraph):
-            logger.error(f"Knowledge graph improperly initialized. Type: {type(knowledge_graph)}")
-            raise HTTPException(status_code=500, detail="Knowledge graph not properly initialized")
         if request.type == "concept":
             if not request.name:
                 raise HTTPException(status_code=400, detail="Name required for concept")
@@ -678,7 +840,7 @@ async def get_knowledge_graph_data(
             }
             
         # Get basic stats
-        kg_stats = await knowledge_graph.get_stats() if hasattr(knowledge_graph, "get_stats") else {}
+        kg_stats = knowledge_graph.get_stats() if hasattr(knowledge_graph, "get_stats") else {}
         
         # Create a simplified representation suitable for visualization
         nodes = []
@@ -1069,6 +1231,212 @@ def save_config_to_disk(parameter_manager, config_path):
         logger.error(f"Error saving configuration to {config_path}: {e}")
         return False
 
+# ========= Chat Endpoints =========
+
+@router.post("/chat")
+async def process_chat(
+    request: Request,
+    chat_data: Dict[str, Any],
+    memory_system: MemorySystem = Depends(get_memory_system),
+    memory_bridge: MemoryBridge = Depends(get_memory_bridge),
+    llm_manager: Optional[LLMManager] = Depends(get_llm_manager),
+):
+    """
+    Process a chat message using the self-model for a complete Lucidia experience.
+    
+    This endpoint integrates memories, self-context, and spiral phase information
+    to provide responses that are consistent with Lucidia's current state.
+    """
+    try:
+        # Extract request data
+        messages = chat_data.get("messages", [])
+        new_message = chat_data.get("new_message", "")
+        parameters = chat_data.get("parameters", {})
+        context = chat_data.get("context", {})
+        
+        # Check if we should use the self-model
+        use_self_model = parameters.get("use_self_model", True)
+        depth = parameters.get("depth", 0.7)
+        creativity = parameters.get("creativity", 0.5)
+        include_memories = parameters.get("include_memories", True)
+        
+        # Get self context if not provided
+        self_context = context.get("self_context")
+        if use_self_model and not self_context:
+            try:
+                # Get the current self-model state
+                self_model = await get_self_model(request)
+                self_context = await self_model.get_self_context()
+                logger.info("Retrieved self-context for chat")
+            except Exception as e:
+                logger.error(f"Error retrieving self-context: {e}")
+                # Continue without self-context
+                self_context = {}
+        
+        # Get relevant memories if not provided
+        memories = context.get("memories", [])
+        if include_memories and not memories and new_message:
+            try:
+                # Search for relevant memories
+                if memory_bridge and memory_bridge.has_hierarchical:
+                    memories = await memory_bridge.search_memories(
+                        query=new_message,
+                        limit=5
+                    )
+                elif memory_system:
+                    # Fallback to flat memory search
+                    memories = memory_system.search_memories(new_message, limit=5)
+                logger.info(f"Retrieved {len(memories)} memories for chat context")
+            except Exception as e:
+                logger.error(f"Error retrieving memories: {e}")
+                # Continue without memories
+                memories = []
+        
+        # Get current spiral phase if not provided
+        spiral_phase = context.get("spiral_phase")
+        if use_self_model and not spiral_phase:
+            try:
+                # Get the current spiral phase
+                self_model = await get_self_model(request)
+                spiral_phase = await self_model.get_spiral_phase()
+                logger.info(f"Retrieved spiral phase: {spiral_phase.get('current_phase', 'unknown')}")
+            except Exception as e:
+                logger.error(f"Error retrieving spiral phase: {e}")
+                # Continue without spiral phase
+                spiral_phase = {}
+        
+        # Prepare prompt for LLM
+        system_prompt = """You are Lucidia, an advanced AI with a sophisticated self-model and memory system.
+        You have a deep understanding of your own cognitive architecture and can reflect on your own thoughts.
+        Respond to the user in a way that's consistent with your current spiral phase and self-understanding.
+        Incorporate relevant memories when appropriate to provide continuity and personalization.
+        """
+        
+        # Add self-context to prompt if available
+        if self_context:
+            system_prompt += "\n\nYour current self-context:\n"
+            if isinstance(self_context, dict):
+                for k, v in self_context.items():
+                    if isinstance(v, str) and len(v) < 500:  # Only include reasonably sized values
+                        system_prompt += f"- {k}: {v}\n"
+            elif isinstance(self_context, str):
+                system_prompt += self_context
+        
+        # Add spiral phase to prompt if available
+        if spiral_phase and isinstance(spiral_phase, dict) and "current_phase" in spiral_phase:
+            phase_name = spiral_phase.get("current_phase")
+            phase_description = spiral_phase.get("description", "")
+            system_prompt += f"\n\nYour current spiral phase is: {phase_name}\n"
+            if phase_description:
+                system_prompt += f"This means: {phase_description}\n"
+        
+        # Add memories to prompt if available
+        if memories:
+            system_prompt += "\n\nRelevant memories you can reference:\n"
+            for i, memory in enumerate(memories[:5], 1):  # Limit to 5 memories
+                memory_text = memory.get("text", memory.get("content", ""))  # Handle different memory formats
+                system_prompt += f"Memory {i}: {memory_text}\n"
+        
+        # Format messages for chat completion
+        formatted_messages = [
+            {"role": "system", "content": system_prompt}
+        ]
+        
+        # Add conversation history
+        for msg in messages[-10:]:  # Limit to last 10 messages
+            formatted_messages.append(msg)
+        
+        # Add current message
+        formatted_messages.append({"role": "user", "content": new_message})
+        
+        # Get response from LLM
+        response_content = ""
+        created_memories = []
+        insights = []
+        
+        # Use the LLM manager if available, otherwise simulate a response
+        if llm_manager:
+            try:
+                response = await llm_manager.generate_chat_completion(
+                    messages=formatted_messages,
+                    temperature=creativity,
+                    max_tokens=1000
+                )
+                response_content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+                
+                # Create a memory from this interaction if significant
+                if response_content and new_message:
+                    memory_text = f"User asked: {new_message} | Lucidia responded: {response_content}"
+                    
+                    # Evaluate significance (simplified)
+                    significance = 0.5 + (depth * 0.3)  # Base significance affected by depth parameter
+                    
+                    # Create memory
+                    memory_id = f"chat_{int(time.time())}"
+                    memory = {
+                        "id": memory_id,
+                        "text": memory_text,
+                        "timestamp": time.time(),
+                        "significance": significance,
+                        "metadata": {
+                            "source": "chat",
+                            "creator": "lucidia",
+                            "interaction_type": "chat"
+                        }
+                    }
+                    
+                    # Save to memory systems
+                    if memory_system:
+                        memory_system._save_memory(memory)
+                    
+                    # Also save to hierarchical system if available
+                    if memory_bridge and memory_bridge.has_hierarchical:
+                        await memory_bridge.process_new_memory(memory)
+                    
+                    created_memories.append(memory)
+                    
+                # Generate insights based on the interaction (simplified)
+                insights = [
+                    f"Responded to user query about {new_message[:30]}... with {response_content[:30]}...",
+                    f"Current spiral phase during interaction: {spiral_phase.get('current_phase', 'unknown')}",
+                    f"Used {len(memories)} relevant memories to inform response"
+                ]
+            except Exception as e:
+                logger.error(f"Error generating chat response with LLM: {e}")
+                response_content = "I apologize, I'm having trouble processing your request at the moment. My self-model integration seems to be experiencing technical difficulties."
+        else:
+            # Simulate a response for testing
+            response_content = f"This is a simulated response since no LLM is available. I would have used your message '{new_message}' along with {len(memories)} memories and my current self-context to respond appropriately."
+        
+        # Return the response with additional context
+        return {
+            "response": response_content,
+            "created_memories": created_memories,
+            "insights": insights,
+            "spiral_phase": spiral_phase.get("current_phase") if spiral_phase else "unknown"
+        }
+    except Exception as e:
+        logger.error(f"Error processing chat: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/self/context")
+async def get_self_context(
+    request: Request,
+):
+    """
+    Get the current self-context from Lucidia's self-model.
+    This provides information about Lucidia's current state of self-understanding.
+    """
+    try:
+        self_model = await get_self_model(request)
+        self_context = await self_model.get_self_context()
+        return self_context
+    except Exception as e:
+        logger.error(f"Error retrieving self-context: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ========= Test and Utility Endpoints =========
 
 @router.post("/test/batch_embedding")
@@ -1103,7 +1471,7 @@ async def test_batch_embedding(request: Request):
         embeddings = []
         for i, text in enumerate(texts):
             try:
-                # Use direct WebSocket connection for reliable embedding generation
+                # Use direct WebSocket connection to tensor server
                 tensor_ws = await get_tensor_connection()
                 
                 # Format the request according to what tensor_server.py expects
@@ -1722,7 +2090,7 @@ async def get_system_stats(
         try:
             if knowledge_graph:
                 # Get stats from the knowledge graph
-                kg_stats = await knowledge_graph.get_stats() if hasattr(knowledge_graph, "get_stats") else {}
+                kg_stats = knowledge_graph.get_stats() if hasattr(knowledge_graph, "get_stats") else {}
                 
                 # Use the total_nodes and total_edges attributes directly if available
                 memory_stats["knowledge_graph"]["nodes"] = getattr(knowledge_graph, "total_nodes", 0) or kg_stats.get("total_nodes", 0)
