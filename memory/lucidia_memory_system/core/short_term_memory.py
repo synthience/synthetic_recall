@@ -45,7 +45,7 @@ class ShortTermMemory:
         logger.info(f"Initialized ShortTermMemory with max_size={max_size}")
         
     async def add_memory(self, content: str, embedding: Optional[torch.Tensor] = None, 
-                       metadata: Optional[Dict[str, Any]] = None) -> str:
+                       metadata: Optional[Dict[str, Any]] = None, memory_id: Optional[str] = None) -> str:
         """
         Add a memory to short-term storage.
         
@@ -53,14 +53,15 @@ class ShortTermMemory:
             content: The memory content text
             embedding: Optional pre-computed embedding
             metadata: Optional metadata
+            memory_id: Optional custom memory ID
             
         Returns:
             Memory ID
         """
         async with self._lock:
-            # Generate a unique memory ID
+            # Generate a unique memory ID if not provided
             import uuid
-            memory_id = str(uuid.uuid4())
+            memory_id = memory_id or str(uuid.uuid4())
             
             # Create memory entry
             memory = {

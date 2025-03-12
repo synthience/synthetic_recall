@@ -210,7 +210,8 @@ class LongTermMemory:
             logger.error(f"Error loading memories: {e}")
     
     async def store_memory(self, content: str, embedding: Optional[torch.Tensor] = None,
-                         significance: float = 0.5, metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:
+                         significance: float = 0.5, metadata: Optional[Dict[str, Any]] = None,
+                         memory_id: Optional[str] = None) -> Optional[str]:
         """
         Store a memory in long-term storage if it meets significance threshold.
         
@@ -219,6 +220,7 @@ class LongTermMemory:
             embedding: Optional pre-computed embedding
             significance: Memory significance (0.0-1.0)
             metadata: Optional additional metadata
+            memory_id: Optional custom memory ID
             
         Returns:
             Memory ID if stored, None if rejected due to low significance
@@ -229,9 +231,9 @@ class LongTermMemory:
             return None
         
         async with self._lock:
-            # Generate memory ID
+            # Generate memory ID if not provided
             import uuid
-            memory_id = str(uuid.uuid4())
+            memory_id = memory_id or str(uuid.uuid4())
             
             # Set current timestamp
             timestamp = time.time()

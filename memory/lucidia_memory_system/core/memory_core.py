@@ -44,7 +44,7 @@ class MemoryCore:
         self.config = {
             'embedding_dim': 384,
             'max_memories': 10000,
-            'memory_path': Path('/workspace/memory/stored'),
+            'memory_path': Path('/app/memory/stored'),  # Use the consistent Docker path
             'stm_max_size': 10,
             'significance_threshold': 0.3,
             'enable_persistence': True,
@@ -97,7 +97,9 @@ class MemoryCore:
         logger.info("MemoryCore initialized")
     
     async def process_and_store(self, content: str, memory_type: MemoryTypes = MemoryTypes.EPISODIC,
-                              metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                              metadata: Optional[Dict[str, Any]] = None, embedding: Optional[List[float]] = None,
+                              memory_id: Optional[str] = None, significance: Optional[float] = None,
+                              force_ltm: bool = False) -> Dict[str, Any]:
         """
         Process content through the memory pipeline and store if significant.
         
@@ -105,6 +107,10 @@ class MemoryCore:
             content: Content text to process and store
             memory_type: Type of memory (EPISODIC, SEMANTIC, etc.)
             metadata: Additional metadata about the memory
+            embedding: Optional pre-computed embedding vector
+            memory_id: Optional specific memory ID to use
+            significance: Optional pre-computed significance score
+            force_ltm: Force storage in LTM regardless of significance
             
         Returns:
             Dict with process result and memory ID if stored
@@ -126,12 +132,14 @@ class MemoryCore:
                 content = content[:10000] + "... [truncated]"
             
             try:
-                # Process through HPC for embedding and significance
-                embedding, significance = await self.hpc_manager.process_embedding(
-                    torch.tensor(content.encode(), dtype=torch.float32).reshape(1, -1)
-                )
+                # Use provided embedding and significance if available
+                if embedding is None or significance is None:
+                    # Process through HPC for embedding and significance
+                    embedding, significance = await self.hpc_manager.process_embedding(
+                        torch.tensor(content.encode(), dtype=torch.float32).reshape(1, -1)
+                    )
                 
-                processing_record['embedding_generated'] = True
+                processing_record['embedding_generated'] = embedding is not None
                 processing_record['significance'] = significance
                 
                 # Update metadata with significance
@@ -144,17 +152,19 @@ class MemoryCore:
                 stm_id = await self.short_term_memory.add_memory(
                     content=content,
                     embedding=embedding,
+                    memory_id=memory_id,  # Use provided ID if available
                     metadata=full_metadata
                 )
                 
                 processing_record['stm_stored'] = True
                 
-                # Store in LTM if above significance threshold
+                # Store in LTM if above significance threshold or forced
                 ltm_id = None
-                if significance >= self.config['significance_threshold']:
+                if force_ltm or significance >= self.config['significance_threshold']:
                     ltm_id = await self.long_term_memory.store_memory(
                         content=content,
                         embedding=embedding,
+                        memory_id=memory_id,  # Use provided ID if available
                         significance=significance,
                         metadata=full_metadata
                     )

@@ -19,6 +19,7 @@ from server.model_manager import ModelManager, ModelPurpose
 from server.resource_monitor import ResourceMonitor, SystemState
 from server.dream_api import router as dream_router
 from server.llm_pipeline import LocalLLMPipeline  # Add import for LLM Pipeline
+from server.llm_manager import LLMManager  # Import the LLMManager from the dedicated module
 from memory.lucidia_memory_system.core.dream_processor import LucidiaDreamProcessor as DreamProcessor
 from memory.lucidia_memory_system.core.knowledge_graph import LucidiaKnowledgeGraph as KnowledgeGraph
 from memory.lucidia_memory_system.core.Self.self_model import LucidiaSelfModel as SelfModel
@@ -26,7 +27,7 @@ from memory.lucidia_memory_system.core.World.world_model import LucidiaWorldMode
 from memory.lucidia_memory_system.core.embedding_comparator import EmbeddingComparator
 from memory.lucidia_memory_system.core.reflection_engine import ReflectionEngine
 from memory.lucidia_memory_system.core.hypersphere_dispatcher import HypersphereDispatcher
-from memory.lucidia_memory_system.core.integration.memory_integration import MemoryIntegration
+from memory.lucidia_memory_system.memory_integration import MemoryIntegration
 from memory.lucidia_memory_system.core.parameter_manager import ParameterManager
 from memory.lucidia_memory_system.core.dream_parameter_adapter import DreamParameterAdapter
 from memory.lucidia_memory_system.api.dream_parameter_api import router as parameter_router, init_dream_parameter_api
@@ -83,6 +84,8 @@ memory_system = None  # Added memory_system global variable
 memory_bridge = None  # Added memory_bridge global variable
 model_manager = None  # Added model_manager global variable
 resource_monitor = None  # Added resource_monitor global variable
+llm_manager = None  # Added llm_manager global variable
+rag_integration_service = None  # Added rag_integration_service global variable
 
 # WebSocket connections and locks
 tensor_connection = None
@@ -110,13 +113,26 @@ CONFIG_PATH = os.environ.get("LUCIDIA_CONFIG_PATH", os.path.join(PROJECT_ROOT, "
 # Load configuration
 settings = {}
 try:
-    config_path = Path("config/server_config.json")
-    if config_path.exists():
+    # Check multiple possible locations for configuration
+    possible_config_paths = [
+        Path("config/server_config.json"),
+        Path(os.path.join(PROJECT_ROOT, "config", "server_config.json")),
+        Path(os.path.join(os.path.dirname(__file__), "config", "server_config.json")),
+        Path(os.path.join(PROJECT_ROOT, "workspace", "config", "server_config.json"))
+    ]
+    
+    config_path = None
+    for path in possible_config_paths:
+        if path.exists():
+            config_path = path
+            break
+    
+    if config_path:
         with open(config_path, "r") as f:
             settings = json.load(f)
         logger.info(f"Loaded configuration from {config_path}")
     else:
-        logger.warning(f"Configuration file {config_path} not found. Using defaults.")
+        logger.warning(f"Configuration file not found in any of the standard locations. Using defaults.")
         settings = {}
 except Exception as e:
     logger.error(f"Error loading configuration: {e}")
@@ -253,12 +269,15 @@ def get_dream_parameter_adapter():
 def get_user_activity_tracker():
     return UserActivityTracker.get_instance()
 
+def get_llm_manager():
+    return llm_manager
+
 # Initialize components
 async def initialize_components():
     """Initialize all system components."""
     global dream_processor, knowledge_graph, self_model, world_model, embedding_comparator, reflection_engine
     global hypersphere_manager, parameter_manager, dream_parameter_adapter, user_activity_tracker, memory_system
-    global memory_bridge, model_manager, resource_monitor, llm_service
+    global memory_bridge, model_manager, resource_monitor, llm_service, llm_manager, rag_integration_service
     
     try:
         logger.info("Starting Dream API server on port 8080...")
@@ -360,24 +379,32 @@ async def initialize_components():
         )
         llm_service = LocalLLMPipeline(config=llm_config)
         
-        logger.info("Initializing reflection engine...")
-        memory_integration = MemoryIntegration(
-            config={
-                "memory_client": memory_client,
-                "knowledge_graph": knowledge_graph
-            }
-        )
-        reflection_engine = ReflectionEngine(
+        logger.info("Initializing LLM Manager...")
+        # Create LLM manager with config matching its expected parameters
+        llm_config = {
+            # Use host.docker.internal to connect to host machine from Docker container
+            "api_base_url": "http://host.docker.internal:1234/v1",
+            "api_key": "lm-studio",  # Standard API key for LM Studio
+            "default_model": parameter_manager.config.get("lm_studio", {}).get("model", "qwen2.5-7b-instruct"),
+            "local_model": True,
+            "allow_simulation": True  # Keep simulation enabled as fallback
+        }
+        logger.info(f"LLM Manager config: {llm_config}")
+        llm_manager = LLMManager(llm_config=llm_config)
+        # Initialize the LLM manager
+        await llm_manager.initialize()
+        
+        # Initialize RAG Integration Service
+        logger.info("Initializing RAG Integration Service...")
+        from server.rag_integration_service import RAGIntegrationService
+        rag_integration_service = RAGIntegrationService(
+            memory_system=memory_system,
             knowledge_graph=knowledge_graph,
-            memory_integration=memory_integration,
-            llm_service=llm_service,
-            hypersphere_dispatcher=hypersphere_manager,
-            config={
-                "storage_path": f"{LUCIDIA_STORAGE_PATH}/reflection",
-                "domain": "synthien_studies",
-                "default_model_version": DEFAULT_MODEL_VERSION
-            }
+            parameter_manager=parameter_manager
         )
+        # Initialize the RAG integration service
+        await rag_integration_service.initialize()
+        logger.info("RAG Integration Service initialized successfully")
         
         # Get the LM Studio URL configuration if it exists
         lm_studio_url = settings.get("lm_studio", {}).get("url", None)
@@ -396,13 +423,115 @@ async def initialize_components():
             "parameter_manager": parameter_manager,
             "model_manager": model_manager,  # Pass model_manager to dream processor
             "resource_monitor": resource_monitor,  # Pass resource_monitor to dream processor
-            "config": settings.get("dream_processor", {})
+            "config": settings.get("dream_processor", {}),
+            "tool_providers": []  # Empty list for now, will be populated later
         })
         
         logger.info("Initializing dream parameter adapter...")
         dream_parameter_adapter = DreamParameterAdapter(
             dream_processor=dream_processor,
             parameter_manager=parameter_manager
+        )
+        
+        # Initialize Model Context Protocol (MCP) tool providers
+        logger.info("Initializing MCP tool providers...")
+        from server.protocols.tool_protocol import ToolProvider
+        from server.protocols.dream_tools import DreamToolProvider
+        from server.protocols.counterfactual_tools import CounterfactualToolProvider
+        from server.protocols.spiral_tools import SpiralToolProvider
+        from server.protocols.world_model_tools import WorldModelToolProvider
+        from server.protocols.model_context_tools import ModelContextToolProvider
+        
+        # Initialize Dream Tool Provider
+        dream_tool_provider = DreamToolProvider(
+            dream_processor=dream_processor,
+            memory_system=memory_system,
+            knowledge_graph=knowledge_graph,
+            parameter_manager=parameter_manager,
+            model_manager=llm_manager
+        )
+        
+        # Initialize Counterfactual Tool Provider
+        counterfactual_tool_provider = CounterfactualToolProvider(
+            self_model=self_model,
+            world_model=world_model,
+            memory_system=memory_system,
+            knowledge_graph=knowledge_graph,
+            parameter_manager=parameter_manager,
+            model_manager=llm_manager
+        )
+        
+        # Initialize Spiral Tool Provider
+        spiral_tool_provider = SpiralToolProvider(
+            self_model=self_model,
+            knowledge_graph=knowledge_graph,
+            memory_system=memory_system,
+            spiral_manager=self_model.spiral_phase_manager if hasattr(self_model, "spiral_phase_manager") else None,
+            parameter_manager=parameter_manager,
+            model_manager=llm_manager
+        )
+        
+        # Initialize World Model Tool Provider
+        world_model_tool_provider = WorldModelToolProvider(
+            world_model=world_model,
+            knowledge_graph=knowledge_graph,
+            memory_system=memory_system,
+            parameter_manager=parameter_manager,
+            model_manager=llm_manager
+        )
+        
+        # Initialize Model Context Tool Provider
+        model_context_tool_provider = ModelContextToolProvider(
+            self_model=self_model,
+            world_model=world_model,
+            knowledge_graph=knowledge_graph,
+            memory_system=memory_system,
+            dream_processor=dream_processor,
+            spiral_manager=self_model.spiral_phase_manager if hasattr(self_model, "spiral_phase_manager") else None,
+            parameter_manager=parameter_manager,
+            model_manager=model_manager,
+            dream_parameter_adapter=dream_parameter_adapter
+        )
+        
+        # Register tools with Dream Processor
+        dream_processor.tool_provider = dream_tool_provider
+        
+        # Update tool_providers list with all initialized providers
+        dream_processor.tool_providers = [dream_tool_provider, counterfactual_tool_provider, spiral_tool_provider, 
+                                         world_model_tool_provider, model_context_tool_provider]
+        
+        # Register tools with RAG service if it implements ToolProtocol
+        if hasattr(rag_integration_service, "register_tool"):
+            # Share key tools between providers
+            for provider in [dream_tool_provider, counterfactual_tool_provider, spiral_tool_provider, 
+                            world_model_tool_provider, model_context_tool_provider]:
+                for tool_name, tool_info in provider.tools.items():
+                    if tool_name not in rag_integration_service.tools:
+                        rag_integration_service.register_tool(
+                            name=tool_name,
+                            function=tool_info["function"],
+                            description=tool_info["schema"]["function"]["description"],
+                            parameters=tool_info["schema"]["function"]["parameters"]
+                        )
+        
+        logger.info("MCP tool providers initialized successfully")
+        
+        logger.info("Initializing reflection engine...")
+        memory_integration = MemoryIntegration(
+            config={
+                "memory_core_path": os.path.join(settings.get("memory_path", "/app/memory"), "hierarchical"),
+                "knowledge_graph": knowledge_graph  # Add back knowledge_graph
+            }
+        )
+        reflection_engine = ReflectionEngine(
+            knowledge_graph=knowledge_graph,
+            memory_integration=memory_integration,
+            llm_service=llm_manager,  # Use the LLM Manager as the LLM service
+            config={
+                "storage_path": f"{LUCIDIA_STORAGE_PATH}/reflection",  # Add back storage path
+                "domain": settings.get("domain", "lucidia"),
+                "default_model_version": settings.get("default_model_version", "1.0")
+            }
         )
         
         # Initialize user activity tracker
@@ -424,6 +553,8 @@ async def initialize_components():
         app.state.user_activity_tracker = user_activity_tracker
         app.state.memory_system = memory_system  # Add memory_system to app state
         app.state.memory_bridge = memory_bridge  # Add memory_bridge to app state
+        app.state.llm_manager = llm_manager  # Add llm_manager to app state
+        app.state.rag_integration_service = rag_integration_service  # Add rag_integration_service to app state
         app.state.config_path = CONFIG_PATH  # Store config path for parameter persistence
         
         logger.info("All components initialized successfully")
