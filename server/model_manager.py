@@ -100,32 +100,118 @@ class ModelManager:
                 # Validate config_data is a dictionary
                 if not isinstance(config_data, dict):
                     logger.error(f"Invalid configuration format: expected dictionary, got {type(config_data)}")
-                    raise ValueError("Invalid configuration format")
+                    # Create default models instead of raising an error
+                    self._create_default_models()
+                    return
                     
                 # Process model definitions
                 models_data = config_data.get('models', {})
+                if not isinstance(models_data, dict):
+                    logger.error(f"Invalid models format: expected dictionary, got {type(models_data)}")
+                    self._create_default_models()
+                    return
+                
                 if not models_data:
                     logger.warning("No models defined in configuration, using defaults")
                     self._create_default_models()
                     return
                     
                 for model_name, model_data in models_data.items():
-                    purposes = [ModelPurpose(p) for p in model_data.get('purposes', ['general'])]
+                    # Ensure model_data is a dictionary
+                    if not isinstance(model_data, dict):
+                        logger.error(f"Invalid model data for {model_name}: expected dictionary, got {type(model_data)}")
+                        continue
+                        
+                    # Safely get purposes with type checking
+                    purposes_data = model_data.get('purposes', ['general'])
+                    if not isinstance(purposes_data, list):
+                        logger.warning(f"Invalid purposes format for {model_name}: expected list, got {type(purposes_data)}")
+                        purposes_data = ['general']
                     
+                    try:
+                        purposes = [ModelPurpose(p) for p in purposes_data]
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Error parsing purposes for {model_name}: {e}, using default")
+                        purposes = [ModelPurpose.GENERAL]
+                    
+                    # Safely extract other fields with type checking
+                    context_length = model_data.get('context_length', 4096)
+                    if not isinstance(context_length, int):
+                        try:
+                            context_length = int(context_length)
+                        except (ValueError, TypeError):
+                            logger.warning(f"Invalid context_length for {model_name}, using default")
+                            context_length = 4096
+                    
+                    # Extract strength with type checking
+                    strength = model_data.get('strength', 0.7)
+                    if not isinstance(strength, (int, float)):
+                        try:
+                            strength = float(strength)
+                        except (ValueError, TypeError):
+                            logger.warning(f"Invalid strength for {model_name}, using default")
+                            strength = 0.7
+                    
+                    # Extract speed with type checking
+                    speed = model_data.get('speed', 0.7)
+                    if not isinstance(speed, (int, float)):
+                        try:
+                            speed = float(speed)
+                        except (ValueError, TypeError):
+                            logger.warning(f"Invalid speed for {model_name}, using default")
+                            speed = 0.7
+                    
+                    # Extract resource_usage with type checking
+                    resource_usage = model_data.get('resource_usage', {'memory': 0.5, 'cpu': 0.5})
+                    if not isinstance(resource_usage, dict):
+                        logger.warning(f"Invalid resource_usage for {model_name}, using default")
+                        resource_usage = {'memory': 0.5, 'cpu': 0.5}
+                    
+                    # Create the model profile
                     self.models[model_name] = ModelProfile(
                         name=model_name,
                         purposes=purposes,
-                        context_length=model_data.get('context_length', 4096),
-                        strength=model_data.get('strength', 0.7),
-                        speed=model_data.get('speed', 0.7),
-                        resource_usage=model_data.get('resource_usage', {'memory': 0.5, 'cpu': 0.5}),
+                        context_length=context_length,
+                        strength=strength,
+                        speed=speed,
+                        resource_usage=resource_usage,
                         endpoint=model_data.get('endpoint', None)
                     )
                 
                 # Set default model if specified in config
-                if 'default_model' in config_data and config_data['default_model'] in self.models:
-                    self.default_model = config_data['default_model']
-                    self.active_model = self.default_model
+                if 'default_model' in config_data:
+                    # Check if it's a string and in our models dictionary
+                    if isinstance(config_data['default_model'], str) and config_data['default_model'] in self.models:
+                        self.default_model = config_data['default_model']
+                        self.active_model = self.default_model
+                    else:
+                        logger.error(f"Invalid default_model specified: {config_data.get('default_model')}, using {self.default_model}")
+
+                # Handle embedding_model if specified
+                if 'embedding_model' in config_data:
+                    # Just log it - we don't need to store it as a field
+                    if isinstance(config_data['embedding_model'], str) and config_data['embedding_model'] in self.models:
+                        logger.info(f"Using {config_data['embedding_model']} as embedding model")
+                    else:
+                        logger.error(f"Invalid embedding_model specified: {config_data.get('embedding_model')}")
+
+                # Handle dream_model if specified
+                if 'dream_model' in config_data:
+                    # Just log it - we don't need to store it as a field
+                    if isinstance(config_data['dream_model'], str) and config_data['dream_model'] in self.models:
+                        logger.info(f"Using {config_data['dream_model']} as dream model")
+                    else:
+                        logger.error(f"Invalid dream_model specified: {config_data.get('dream_model')}")
+
+                # Handle model_profiles if specified
+                if 'model_profiles' in config_data:
+                    # Check if it's a list or dictionary and handle accordingly
+                    if isinstance(config_data['model_profiles'], (list, dict)):
+                        # This is fine - model_profiles can be either a list or dict
+                        pass
+                    else:
+                        logger.error(f"Invalid model_profiles format: expected list or dict, got {type(config_data['model_profiles'])}")
+
             except json.JSONDecodeError as e:
                 logger.error(f"Error parsing model configuration: {e}")
                 self._create_default_models()
