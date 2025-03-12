@@ -44,6 +44,20 @@ import re
 # Import the LM Studio client
 from llm_client import LMStudioClient
 
+# Console for rich output
+console = Console()
+
+async def async_input(prompt: str) -> str:
+    """Get input from user asynchronously.
+    
+    Args:
+        prompt: The prompt to display
+        
+    Returns:
+        The user input
+    """
+    return await asyncio.get_event_loop().run_in_executor(None, lambda: console.input(prompt))
+
 # Default configuration
 DEFAULT_CONFIG = {
     "dream_api_url": "http://localhost:8081",
@@ -74,9 +88,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("LucidiaReflectionCLI")
-
-# Rich console for prettier output
-console = Console()
 
 class LucidiaReflectionClient:
     """Client for connecting to Lucidia's memory system and monitoring reflection processes."""
@@ -141,7 +152,7 @@ class LucidiaReflectionClient:
             logger.info("Connecting to Dream API...")
             response = await self._request_with_retry(
                 self.session.get, 
-                f"{self.dream_api_url}/api/dream/health"
+                f"{self.dream_api_url}/health"
             )
             
             if response and response.status == 200:
@@ -182,28 +193,28 @@ class LucidiaReflectionClient:
     async def fetch_system_state(self):
         """Fetch the current state of Lucidia's memory system."""
         try:
-            # Get system health
-            response = await self._request_with_retry(self.session.get, f"{self.dream_api_url}/api/dream/health")
+            # Get system health (at root path)
+            response = await self._request_with_retry(self.session.get, f"{self.dream_api_url}/health")
             if response:
                 health = await response.json()
                 logger.info(f"System health: {health['status']}")
             
             # Get memory stats
-            response = await self._request_with_retry(self.session.get, f"{self.dream_api_url}/api/dream/stats")
+            response = await self._request_with_retry(self.session.get, f"{self.dream_api_url}/api/stats")
             if response:
                 stats = await response.json()
                 self._update_memory_metrics(stats)
                 logger.info(f"Retrieved memory stats: {len(stats.get('memories', {}))} memories")
             
             # Get spiral phase info
-            response = await self._request_with_retry(self.session.get, f"{self.dream_api_url}/api/dream/spiral-phase")
+            response = await self._request_with_retry(self.session.get, f"{self.dream_api_url}/api/spiral-phase")
             if response:
                 phase_data = await response.json()
                 self._update_spiral_phase(phase_data)
                 logger.info(f"Current spiral phase: {phase_data.get('current_phase')}")
             
             # Get knowledge graph
-            response = await self._request_with_retry(self.session.get, f"{self.dream_api_url}/api/dream/knowledge-graph")
+            response = await self._request_with_retry(self.session.get, f"{self.dream_api_url}/api/knowledge-graph")
             if response:
                 kg_data = await response.json()
                 self.metrics["knowledge_graph"] = kg_data
@@ -246,7 +257,7 @@ class LucidiaReflectionClient:
             # Otherwise use the Dream API
             response = await self._request_with_retry(
                 self.session.post, 
-                f"{self.dream_api_url}/api/dream/sessions/start", 
+                f"{self.dream_api_url}/api/sessions/start", 
                 json=params
             )
             
@@ -363,32 +374,63 @@ class LucidiaReflectionClient:
             console.print(f"[bold red]Reflection failed: No result returned[/bold red]")
             return
             
-        # Handle the case when reflection is a string
+        # Handle the case when reflection is a string - try to parse it as JSON first
         if isinstance(reflection, str):
-            console.print(f"[bold red]Reflection failed: {reflection}[/bold red]")
-            return
+            try:
+                reflection = json.loads(reflection)
+            except json.JSONDecodeError:
+                console.print(f"[bold red]Reflection failed: {reflection}[/bold red]")
+                return
             
-        # Handle non-dictionary types
+        # Handle non-dictionary types after potential JSON parsing
         if not isinstance(reflection, dict):
             console.print(f"[bold red]Reflection failed: Unexpected result type {type(reflection)}[/bold red]")
             return
             
         # If it's a dictionary but not a success
-        if reflection.get("status") != "success":
+        if reflection.get("status") == "error":
             console.print(f"[bold red]Reflection failed: {reflection.get('message', 'Unknown error')}[/bold red]")
             return
         
-        # Check for required fields
-        if "title" not in reflection or "fragments" not in reflection:
-            console.print(f"[bold red]Reflection incomplete: Missing required fields[/bold red]")
-            return
-            
-        # Validate fragments is a list
+        # Extract components safely with proper type checking
+        # For backward compatibility, extract either 'fragments' or individual fragment types
         fragments = reflection.get("fragments", [])
         if not isinstance(fragments, list):
-            console.print(f"[bold red]Reflection invalid: Fragments is not a list[/bold red]")
-            return
+            fragments = []
+        
+        # Handle either new format (all fragments in one list) or old format (separate lists by type)
+        insights = reflection.get("insights", [])
+        if not isinstance(insights, list):
+            insights = []
             
+        questions = reflection.get("questions", [])
+        if not isinstance(questions, list):
+            questions = []
+            
+        hypotheses = reflection.get("hypotheses", [])
+        if not isinstance(hypotheses, list):
+            hypotheses = []
+            
+        counterfactuals = reflection.get("counterfactuals", [])
+        if not isinstance(counterfactuals, list):
+            counterfactuals = []
+            
+        # If we have fragments but not the individual lists, distribute them by type
+        if fragments and not (insights or questions or hypotheses or counterfactuals):
+            for fragment in fragments:
+                if not isinstance(fragment, dict):
+                    continue
+                    
+                fragment_type = fragment.get("type", "").lower()
+                if fragment_type == "insight":
+                    insights.append(fragment)
+                elif fragment_type == "question":
+                    questions.append(fragment)
+                elif fragment_type == "hypothesis":
+                    hypotheses.append(fragment)
+                elif fragment_type == "counterfactual":
+                    counterfactuals.append(fragment)
+        
         # Display the successful reflection
         console.print(f"\n[bold green]Reflection Session: {session_id}[/bold green]")
 
@@ -409,10 +451,25 @@ class LucidiaReflectionClient:
         layout["header"].update(Panel(header_text, title="Reflection"))
         
         # Group fragments by type
-        insights = [f for f in fragments if f.get("type") == "insight"]
-        questions = [f for f in fragments if f.get("type") == "question"]
-        hypotheses = [f for f in fragments if f.get("type") == "hypothesis"]
-        counterfactuals = [f for f in fragments if f.get("type") == "counterfactual"]
+        insights_text = "\n\n".join([f"[{i+1}] {insight.get('content', '')} ({insight.get('confidence', 0):.2f})" 
+                               for i, insight in enumerate(insights)])
+        insights_panel = Panel(insights_text or "No insights generated", 
+                                          title=f"Insights ({len(insights)})")
+        
+        questions_text = "\n\n".join([f"[{i+1}] {question.get('content', '')} ({question.get('confidence', 0):.2f})" 
+                                 for i, question in enumerate(questions)])
+        questions_panel = Panel(questions_text or "No questions generated", 
+                                            title=f"Questions ({len(questions)})")
+        
+        hypotheses_text = "\n\n".join([f"[{i+1}] {hypothesis.get('content', '')} ({hypothesis.get('confidence', 0):.2f})" 
+                                  for i, hypothesis in enumerate(hypotheses)])
+        hypotheses_panel = Panel(hypotheses_text or "No hypotheses generated", 
+                                             title=f"Hypotheses ({len(hypotheses)})")
+        
+        counterfactuals_text = "\n\n".join([f"[{i+1}] {cf.get('content', '')} ({cf.get('confidence', 0):.2f})" 
+                                       for i, cf in enumerate(counterfactuals)])
+        counterfactuals_panel = Panel(counterfactuals_text or "No counterfactuals generated", 
+                                                  title=f"Counterfactuals ({len(counterfactuals)})")
         
         # Create body with split layout
         body_layout = Layout()
@@ -428,15 +485,8 @@ class LucidiaReflectionClient:
             Layout(name="questions")
         )
         
-        insights_text = "\n\n".join([f"[{i+1}] {insight.get('content', '')} ({insight.get('confidence', 0):.2f})" 
-                               for i, insight in enumerate(insights)])
-        left_layout["insights"].update(Panel(insights_text or "No insights generated", 
-                                          title=f"Insights ({len(insights)})"))
-        
-        questions_text = "\n\n".join([f"[{i+1}] {question.get('content', '')} ({question.get('confidence', 0):.2f})" 
-                                 for i, question in enumerate(questions)])
-        left_layout["questions"].update(Panel(questions_text or "No questions generated", 
-                                            title=f"Questions ({len(questions)})"))
+        left_layout["insights"].update(insights_panel)
+        left_layout["questions"].update(questions_panel)
         
         body_layout["left"].update(left_layout)
         
@@ -447,15 +497,8 @@ class LucidiaReflectionClient:
             Layout(name="counterfactuals")
         )
         
-        hypotheses_text = "\n\n".join([f"[{i+1}] {hypothesis.get('content', '')} ({hypothesis.get('confidence', 0):.2f})" 
-                                  for i, hypothesis in enumerate(hypotheses)])
-        right_layout["hypotheses"].update(Panel(hypotheses_text or "No hypotheses generated", 
-                                             title=f"Hypotheses ({len(hypotheses)})"))
-        
-        counterfactuals_text = "\n\n".join([f"[{i+1}] {cf.get('content', '')} ({cf.get('confidence', 0):.2f})" 
-                                       for i, cf in enumerate(counterfactuals)])
-        right_layout["counterfactuals"].update(Panel(counterfactuals_text or "No counterfactuals generated", 
-                                                  title=f"Counterfactuals ({len(counterfactuals)})"))
+        right_layout["hypotheses"].update(hypotheses_panel)
+        right_layout["counterfactuals"].update(counterfactuals_panel)
         
         body_layout["right"].update(right_layout)
         layout["body"].update(body_layout)
@@ -506,7 +549,7 @@ class LucidiaReflectionClient:
                     # Check session status
                     response = await self._request_with_retry(
                         self.session.get,
-                        f"{self.dream_api_url}/api/dream/sessions/status/{session_id}"
+                        f"{self.dream_api_url}/api/sessions/status/{session_id}"
                     )
                     
                     if not response:
@@ -547,7 +590,7 @@ class LucidiaReflectionClient:
             # Get dream results
             response = await self._request_with_retry(
                 self.session.get,
-                f"{self.dream_api_url}/api/dream/sessions/results/{session_id}"
+                f"{self.dream_api_url}/api/sessions/results/{session_id}"
             )
             
             if not response:
@@ -680,7 +723,7 @@ class LucidiaReflectionClient:
         try:
             response = await self._request_with_retry(
                 self.session.get, 
-                f"{self.dream_api_url}/api/dream/memories/{memory_id}"
+                f"{self.dream_api_url}/api/memories/{memory_id}"
             )
             
             if response:
@@ -698,7 +741,7 @@ class LucidiaReflectionClient:
             logger.info(f"Retrieving {limit} significant memories from Dream API")
             response = await self._request_with_retry(
                 self.session.get, 
-                f"{self.dream_api_url}/api/dream/memories/significant?limit={limit}"
+                f"{self.dream_api_url}/api/memories/significant?limit={limit}"
             )
             
             if not response:
@@ -735,7 +778,7 @@ class LucidiaReflectionClient:
         try:
             response = await self._request_with_retry(
                 self.session.get, 
-                f"{self.dream_api_url}/api/dream/parameters/config"
+                f"{self.dream_api_url}/api/parameters/config"
             )
             
             if not response:
@@ -743,7 +786,7 @@ class LucidiaReflectionClient:
                 return None
                 
             if response.status != 200:
-                logger.warning(f"Request to {self.dream_api_url}/api/dream/parameters/config returned status {response.status}")
+                logger.warning(f"Request to {self.dream_api_url}/api/parameters/config returned status {response.status}")
                 logger.error(f"Failed to get parameters: {response.status}")
                 return None
                 
@@ -760,7 +803,7 @@ class LucidiaReflectionClient:
             encoded_path = urllib.parse.quote(param_path)
             response = await self._request_with_retry(
                 self.session.get, 
-                f"{self.dream_api_url}/api/dream/parameters/config/{encoded_path}"
+                f"{self.dream_api_url}/api/parameters/config/{encoded_path}"
             )
             
             if response:
@@ -778,7 +821,7 @@ class LucidiaReflectionClient:
             encoded_path = urllib.parse.quote(param_path)
             response = await self._request_with_retry(
                 self.session.post, 
-                f"{self.dream_api_url}/api/dream/parameters/config/{encoded_path}", 
+                f"{self.dream_api_url}/api/parameters/config/{encoded_path}", 
                 json={"value": value}
             )
             
@@ -1050,7 +1093,7 @@ class LucidiaReflectionClient:
                     # Check if a dream is active
                     if not self.active_dream_session:
                         # Check system idle status
-                        async with self._request_with_retry(self.session.get, f"{self.dream_api_url}/api/dream/system/idle") as response:
+                        async with self._request_with_retry(self.session.get, f"{self.dream_api_url}/api/system/idle") as response:
                             idle_data = await response.json()
                             
                             if idle_data.get("idle", False) and idle_data.get("can_dream", False):
@@ -1712,12 +1755,13 @@ class LucidiaReflectionClient:
                     
                 else:
                     # Unknown command
-                    console.print(f"[yellow]Unknown command: {command}[/yellow]")
+                    console.print(f"[yellow]Unknown command: {command}. Type /help for available commands.[/yellow]")
                     console.print("Type /help for available commands")
                     
             else:
                 # Normal message - process with LLM or Dream API
-                await self._process_chat_message(user_input, chat_context, use_local)
+                response = await self._process_chat_message(user_input, chat_context, use_local)
+                console.print(f"[bold green]Lucidia:[/bold green] {response}")
                 
         # Save before exiting
         if chat_context["messages"]:
@@ -1761,7 +1805,7 @@ class LucidiaReflectionClient:
                     # Try to ping the Dream API to verify connectivity
                     health_response = await self._request_with_retry(
                         self.session.get,
-                        f"{self.dream_api_url}/api/health",
+                        f"{self.dream_api_url}/health",
                         max_retries=1,  # Quick check
                         initial_delay=0.5
                     )
@@ -1779,7 +1823,7 @@ class LucidiaReflectionClient:
                 try:
                     response = await self._request_with_retry(
                         self.session.post,
-                        f"{self.dream_api_url}/api/dream/evaluate_significance",
+                        f"{self.dream_api_url}/api/evaluate_significance",
                         json={"content": content},
                         max_retries=2
                     )
@@ -1827,9 +1871,10 @@ class LucidiaReflectionClient:
             # Try to add memory to Dream API if connected
             if docker_available:
                 try:
+                    # First create the memory in the standard API
                     response = await self._request_with_retry(
                         self.session.post,
-                        f"{self.dream_api_url}/api/dream/memories",
+                        f"{self.dream_api_url}/api/memories",
                         json={
                             "content": content,
                             "significance": significance,  # Changed from importance to significance
@@ -1841,18 +1886,32 @@ class LucidiaReflectionClient:
                         result = await response.json()
                         if "memory_id" in result:
                             # Update with server-assigned ID
-                            memory["server_id"] = result["memory_id"]
-                            logger.info(f"Memory added to Dream API with ID: {result['memory_id']}")
+                            server_memory_id = result["memory_id"]
+                            memory["server_id"] = server_memory_id
+                            logger.info(f"Memory added to Dream API with ID: {server_memory_id}")
+                            memory["persisted"] = True
+                            console.print(f"[green]Memory [bold]{server_memory_id}[/bold] persisted across sessions")
+                        else:
+                            logger.warning(f"Failed to get memory ID from Dream API")
+                            console.print(f"[green]Memory created with ID: [bold]{memory_id}[/bold] (significance: {significance:.2f})")
                     else:
                         logger.warning(f"Failed to add memory to Dream API: {response.status if response else 'No response'}")
+                        console.print(f"[green]Memory created with ID: [bold]{memory_id}[/bold] (significance: {significance:.2f})")
                 except Exception as e:
                     logger.error(f"Error adding memory to Dream API: {e}")
+                    console.print(f"[yellow]Warning: Memory only saved locally - Docker not available[/yellow]")
+                    console.print(f"[green]Memory created with ID: [bold]{memory_id}[/bold] (significance: {significance:.2f})")
             else:
                 logger.warning("Skipping Dream API memory creation - Docker not available")
+                console.print(f"[green]Memory created with ID: [bold]{memory_id}[/bold] (significance: {significance:.2f})")
                 
             # Add to chat context
             chat_context["memories"].append(memory)
-            console.print(f"[green]Memory created with ID: [bold]{memory_id}[/bold] (significance: {significance:.2f})")
+            
+            # Remove redundant print statement
+            # This print was causing duplicate messages
+            # if not docker_available or (docker_available and not memory.get("persisted")):
+            #    console.print(f"[green]Memory created with ID: [bold]{memory_id}[/bold] (significance: {significance:.2f})")
                 
             return memory
             
@@ -1940,7 +1999,7 @@ class LucidiaReflectionClient:
                     expanded_query_str = " OR ".join(expanded_query_terms)
                     response = await self._request_with_retry(
                         self.session.get,
-                        f"{self.dream_api_url}/api/dream/memories/search?query={urllib.parse.quote(expanded_query_str)}"
+                        f"{self.dream_api_url}/api/memories/search?query={urllib.parse.quote(expanded_query_str)}"
                     )
                     
                     if response and response.status == 200:
@@ -2007,7 +2066,7 @@ class LucidiaReflectionClient:
                     try:
                         response = await self._request_with_retry(
                             self.session.delete,
-                            f"{self.dream_api_url}/api/dream/memories/{memory['server_id']}"
+                            f"{self.dream_api_url}/api/memories/{memory['server_id']}"
                         )
                         
                         if response and response.status == 200:
@@ -2124,38 +2183,154 @@ class LucidiaReflectionClient:
         Args:
             reflection: The reflection data
         """
-        try:
-            # Create a panel for the reflection title
-            console.print(f"\n[bold green]Reflection Title: {reflection.get('title', 'Untitled')}[/bold green]")
+        session_id = reflection.get("session_id", "unknown")
+        fragments = reflection.get("fragments", [])
+        
+        # Log the full reflection for Docker logs and debugging
+        logger.info(f"\nREFLECTION: {reflection.get('title', 'Untitled')}\n" +
+                    f"Session ID: {session_id}\n" +
+                    f"Metadata: {json.dumps(reflection.get('metadata', {}), indent=2)}\n" +
+                    f"Fragments: {len(fragments)}")
+        
+        for i, fragment in enumerate(fragments):
+            fragment_type = fragment.get("type", "unknown").capitalize()
+            content = fragment.get("content", "")
+            confidence = fragment.get("confidence", 0)
+            logger.info(f"Fragment {i+1} ({fragment_type}): {content} (confidence: {confidence:.2f})")
+        
+        # Handle either new format (all fragments in one list) or old format (separate lists by type)
+        insights = reflection.get("insights", [])
+        if not isinstance(insights, list):
+            insights = []
             
-            # Display fragments grouped by type
-            fragments = reflection.get("fragments", [])
+        questions = reflection.get("questions", [])
+        if not isinstance(questions, list):
+            questions = []
             
-            # Group fragments by type
-            fragment_groups = {}
+        hypotheses = reflection.get("hypotheses", [])
+        if not isinstance(hypotheses, list):
+            hypotheses = []
+            
+        counterfactuals = reflection.get("counterfactuals", [])
+        if not isinstance(counterfactuals, list):
+            counterfactuals = []
+            
+        # If we have fragments but not the individual lists, distribute them by type
+        if fragments and not (insights or questions or hypotheses or counterfactuals):
             for fragment in fragments:
-                frag_type = fragment.get("type")
-                if frag_type not in fragment_groups:
-                    fragment_groups[frag_type] = []
-                fragment_groups[frag_type].append(fragment)
-            
-            # Display each group
-            for group_type, group_fragments in {
-                "Insights": reflection.get("insights", []),
-                "Questions": reflection.get("questions", []),
-                "Hypotheses": reflection.get("hypotheses", []),
-                "Counterfactuals": reflection.get("counterfactuals", [])
-            }.items():
-                if group_fragments:
-                    console.print(f"\n[bold yellow]{group_type} ({len(group_fragments)}):[/bold yellow]")
+                if not isinstance(fragment, dict):
+                    continue
                     
-                    for i, f in enumerate(group_fragments):
-                        console.print(f"  [{i+1}] {f.get('content', '')}")
-                    
+                fragment_type = fragment.get("type", "").lower()
+                if fragment_type == "insight":
+                    insights.append(fragment)
+                elif fragment_type == "question":
+                    questions.append(fragment)
+                elif fragment_type == "hypothesis":
+                    hypotheses.append(fragment)
+                elif fragment_type == "counterfactual":
+                    counterfactuals.append(fragment)
+        
+        # Display the successful reflection
+        console.print(f"\n[bold green]Reflection Session: {session_id}[/bold green]")
+
+        # Create layout
+        layout = Layout()
+        layout.split_column(
+            Layout(name="header", size=3),
+            Layout(name="body"),
+            Layout(name="footer", size=3)
+        )
+        
+        # Create header
+        metadata = reflection.get("metadata", {})
+        header_text = Text(f"Title: {reflection['title']}\n", style="bold blue")
+        header_text.append(f"Depth: {metadata.get('depth', 'N/A')} | ")
+        header_text.append(f"Creativity: {metadata.get('creativity', 'N/A')} | ")
+        header_text.append(f"Memory Count: {metadata.get('memory_count', 'N/A')}")
+        layout["header"].update(Panel(header_text, title="Reflection"))
+        
+        # Group fragments by type
+        insights_text = "\n\n".join([f"[{i+1}] {insight.get('content', '')} ({insight.get('confidence', 0):.2f})" 
+                               for i, insight in enumerate(insights)])
+        insights_panel = Panel(insights_text or "No insights generated", 
+                                          title=f"Insights ({len(insights)})")
+        
+        questions_text = "\n\n".join([f"[{i+1}] {question.get('content', '')} ({question.get('confidence', 0):.2f})" 
+                                 for i, question in enumerate(questions)])
+        questions_panel = Panel(questions_text or "No questions generated", 
+                                            title=f"Questions ({len(questions)})")
+        
+        hypotheses_text = "\n\n".join([f"[{i+1}] {hypothesis.get('content', '')} ({hypothesis.get('confidence', 0):.2f})" 
+                                  for i, hypothesis in enumerate(hypotheses)])
+        hypotheses_panel = Panel(hypotheses_text or "No hypotheses generated", 
+                                             title=f"Hypotheses ({len(hypotheses)})")
+        
+        counterfactuals_text = "\n\n".join([f"[{i+1}] {cf.get('content', '')} ({cf.get('confidence', 0):.2f})" 
+                                       for i, cf in enumerate(counterfactuals)])
+        counterfactuals_panel = Panel(counterfactuals_text or "No counterfactuals generated", 
+                                                  title=f"Counterfactuals ({len(counterfactuals)})")
+        
+        # Create body with split layout
+        body_layout = Layout()
+        body_layout.split_row(
+            Layout(name="left", ratio=1),
+            Layout(name="right", ratio=1)
+        )
+        
+        # Left side: Insights and Questions
+        left_layout = Layout()
+        left_layout.split_column(
+            Layout(name="insights"),
+            Layout(name="questions")
+        )
+        
+        left_layout["insights"].update(insights_panel)
+        left_layout["questions"].update(questions_panel)
+        
+        body_layout["left"].update(left_layout)
+        
+        # Right side: Hypotheses and Counterfactuals
+        right_layout = Layout()
+        right_layout.split_column(
+            Layout(name="hypotheses"),
+            Layout(name="counterfactuals")
+        )
+        
+        right_layout["hypotheses"].update(hypotheses_panel)
+        right_layout["counterfactuals"].update(counterfactuals_panel)
+        
+        body_layout["right"].update(right_layout)
+        layout["body"].update(body_layout)
+        
+        # Create footer
+        footer_text = Text(f"Session ID: {session_id}\n")
+        footer_text.append(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        layout["footer"].update(Panel(footer_text, title="Session Info"))
+        
+        # Render layout with safe width
+        console_width = console.width if console.width else 100
+        safe_width = min(console_width - 5, 120)  # Ensure we don't exceed console width
+        
+        try:
+            # Print to console
+            console.print(layout, width=safe_width)
         except Exception as e:
-            logger.error(f"Error displaying reflection: {e}")
-            console.print(f"[red]Error displaying reflection: {e}[/red]")
+            logger.error(f"Error rendering reflection layout: {e}")
+            # Fallback to simple text display
+            console.print(f"[bold green]Reflection Title: {reflection.get('title', 'Untitled')}[/bold green]")
             
+            for fragment_type, fragments_list in {
+                "Insights": insights,
+                "Questions": questions,
+                "Hypotheses": hypotheses,
+                "Counterfactuals": counterfactuals
+            }.items():
+                if fragments_list:
+                    console.print(f"\n[bold]{fragment_type} ({len(fragments_list)}):[/bold]")
+                    for i, f in enumerate(fragments_list):
+                        console.print(f"  [{i+1}] {f.get('content', '')}")
+    
     async def _save_chat_session(self, chat_context: Dict[str, Any]) -> str:
         """Save the current chat session to a file.
         
@@ -2193,111 +2368,177 @@ class LucidiaReflectionClient:
             return ""
             
     async def _process_chat_message(self, message: str, chat_context: Dict[str, Any], use_local: bool):
-        """Process a regular chat message.
+        """
+        Process a regular chat message.
         
         Args:
             message: The user message
             chat_context: The current chat context
             use_local: Whether to use local LLM
         """
+        messages = chat_context.get("messages", [])
+        
         try:
-            # Check for introductions or important user information and auto-create memories
-            introduction_patterns = [
-                # Common introduction patterns
-                r"(?i)my name is (\w+)",  # "My name is Name"
-                r"(?i)i am (\w+)",       # "I am Name"
-                r"(?i)(\w+) here",       # "Name here"
-                r"(?i)this is (\w+)",    # "This is Name"
-                r"(?i)(?:it's|its) (\w+)", # "It's Name"
-            ]
-            
-            # Check if message contains an introduction
-            for pattern in introduction_patterns:
-                match = re.search(pattern, message)
-                if match:
-                    # Extract the name
-                    name = match.group(1)
+            if not use_local and self.dream_api_url:
+                # Using Dream API with self/world model integration
+                try:
+                    console.print("[dim](Using Dream API with self/world model integration)[/dim]")
                     
-                    # Create a memory about the user's name with high significance
-                    memory_content = f"The user's name is {name}."
-                    logger.info(f"Auto-creating memory for user introduction: {memory_content}")
+                    # Prepare data for the Dream API
+                    chat_data = {
+                        "messages": messages,
+                        "new_message": message,
+                        "parameters": {
+                            "use_self_model": True,
+                            "depth": 0.7,
+                            "creativity": 0.5,
+                            "include_memories": True
+                        },
+                        "context": {}
+                    }
                     
-                    # Create memory with higher significance to ensure it's kept
-                    await self._create_memory(memory_content, chat_context, significance_override=0.9)
-                    break
+                    # Call the Dream API
+                    url = f"{self.dream_api_url}/api/chat"
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(url, json=chat_data) as response:
+                            if response.status == 200:
+                                result = await response.json()
+                                
+                                # Extract the response
+                                content = result.get("response", "")
+                                if not content:
+                                    raise Exception("Empty response from Dream API")
+                                
+                                # Log insights from the integration
+                                insights = result.get("insights", [])
+                                if insights:
+                                    console.print("[dim italic]Insights from self-model integration:[/dim italic]")
+                                    for insight in insights[:3]:  # Show up to 3 insights
+                                        console.print(f"[dim italic]- {insight}[/dim italic]")
+                                
+                                # Add current spiral phase if available
+                                spiral_phase = result.get("spiral_phase")
+                                if spiral_phase and spiral_phase != "unknown":
+                                    console.print(f"[dim italic]Current spiral phase: {spiral_phase}[/dim italic]")
+                                
+                                # Update chat context with new message pair
+                                messages.append({"role": "user", "content": message})
+                                messages.append({"role": "assistant", "content": content})
+                                
+                                # Display the response
+                                return content
+                            else:
+                                error_text = await response.text()
+                                console.print(f"[red]Error from Dream API: {response.status} - {error_text}[/red]")
+                                raise Exception(f"Error from Dream API: {response.status}")
+                except Exception as e:
+                    console.print(f"[yellow]Warning: Failed to use Dream API: {e}. Falling back to local LLM.[/yellow]")
+                    use_local = True
             
-            # Prepare context for LLM
-            message_history = chat_context["messages"][-10:] if len(chat_context["messages"]) > 10 else chat_context["messages"]
-            
-            if use_local and self.llm_client:
-                # Format message history for LLM Studio
-                messages = []
+            # If we're using local LLM or Dream API failed
+            if use_local or not self.dream_api_url:
+                console.print("[dim](Using local LLM)[/dim]")
                 
-                # System prompt
-                system_prompt = """You are Lucidia, an AI assistant with memory capabilities. 
-                You can access and recall memories of past conversations and information. 
-                Be helpful, concise, and engaging. When appropriate, refer to relevant memories 
-                to provide personalized and contextually appropriate responses."""
+                # Display a message if we're using local but dream API is available
+                if self.dream_api_url and use_local:
+                    console.print("[dim italic]Note: Using local LLM without self-model integration. Some features may be limited.[/dim italic]")
                 
-                messages.append({"role": "system", "content": system_prompt})
+                # Prepare system prompt for local LLM
+                system_prompt = """You are Lucidia, an AI assistant focused on helping with memory, reflection, and self-improvement.
+                You are thoughtful, empathetic, and always try to provide helpful and balanced perspectives.
+                Focus on providing value in your answers."""
                 
-                # Add relevant memories as context
-                if chat_context["memories"]:
-                    memory_content = "Here are some relevant memories:\n\n"
-                    for memory in chat_context["memories"][-5:]:  # Use most recent 5 memories
-                        memory_content += f"MEMORY ID {memory['id']}: {memory['content']}\n\n"
-                        
-                    messages.append({"role": "system", "content": memory_content})
+                # Format for the chat model
+                formatted_messages = [
+                    {"role": "system", "content": system_prompt}
+                ]
                 
                 # Add conversation history
-                for msg in message_history:
-                    messages.append({"role": msg["role"], "content": msg["content"]})
+                for msg in messages[-5:]:  # Only include the last 5 messages to save context
+                    formatted_messages.append(msg)
                 
-                # Call LM Studio API
-                async with self.session.post(
-                    f"{self.config['lm_studio_url']}/v1/chat/completions", 
-                    json={
-                        "model": "local-model",
-                        "messages": messages,
-                        "temperature": 0.7,
-                        "max_tokens": 1000
-                    }
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-                        
-                        # Add to chat context
-                        chat_context["messages"].append({"role": "assistant", "content": content})
-                        
-                        # Display response
-                        console.print(f"[bold green]Lucidia:[/bold green] {content}")
-                    else:
-                        error_text = await response.text()
-                        console.print(f"[red]Error from LM Studio: {error_text}[/red]")
-            else:
-                # Try Dream API
-                # NOTE: This is a simplified version and would need to be extended
-                # to match the actual Dream API endpoints for chat functionality
-                console.print("[yellow]Dream API chat not implemented yet[/yellow]")
-                console.print("[yellow]Please use local LLM for chat (--local flag)[/yellow]")
+                # Add current message
+                formatted_messages.append({"role": "user", "content": message})
                 
-        except Exception as e:
-            logger.error(f"Error processing chat message: {e}")
-            console.print(f"[red]Error processing chat message: {e}[/red]")
-
-# Helper function for async input
-async def async_input(prompt: str) -> str:
-    """Get input from user asynchronously.
-    
-    Args:
-        prompt: The prompt to display
+                # Generate response with local LLM
+                response = await self._call_local_llm(
+                    messages=formatted_messages,
+                    temperature=0.7,
+                    max_tokens=1000
+                )
+                
+                # Extract content
+                content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if not content:
+                    content = "I'm sorry, I couldn't generate a response. Please try again."
+                
+                # Update chat context with new message pair
+                messages.append({"role": "user", "content": message})
+                messages.append({"role": "assistant", "content": content})
+                
+                return content
         
-    Returns:
-        The user input
-    """
-    return await asyncio.get_event_loop().run_in_executor(None, lambda: console.input(prompt))
-
+        except Exception as e:
+            console.print(f"[red]Error processing message: {e}[/red]")
+            return "I'm sorry, there was an error processing your message. Please try again."
+    
+    async def _call_local_llm(self, messages: List[Dict[str, str]], temperature: float = 0.7, max_tokens: int = 1000) -> Dict[str, Any]:
+        """Call the local LLM (LM Studio) for chat completion.
+        
+        Args:
+            messages: List of message objects with role and content
+            temperature: Creativity temperature (0.0-1.0)
+            max_tokens: Maximum tokens to generate
+            
+        Returns:
+            The model's response as a dictionary
+        """
+        try:
+            lm_studio_url = self.config.get("lm_studio_url", "http://localhost:1234")
+            
+            # Create a new session if needed
+            if not hasattr(self, 'session') or self.session is None:
+                self.session = aiohttp.ClientSession()
+            
+            # Call LM Studio API
+            async with self.session.post(
+                f"{lm_studio_url}/v1/chat/completions", 
+                json={
+                    "model": "local-model",
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens
+                },
+                timeout=60  # Local models might need more time
+            ) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Error from LM Studio: {error_text}")
+                    return {
+                        "choices": [
+                            {
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "I'm having trouble connecting to the local LLM. Please check if LM Studio is running."
+                                }
+                            }
+                        ]
+                    }
+        except Exception as e:
+            logger.error(f"Error calling local LLM: {e}")
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": f"Error calling local LLM: {e}"
+                        }
+                    }
+                ]
+            }
+    
 async def main():
     """Main entry point for the CLI."""
     parser = argparse.ArgumentParser(description="Lucidia Reflection CLI")

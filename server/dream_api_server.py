@@ -623,14 +623,40 @@ async def continuous_dream_processing():
                         dream_result = await dream_processor.generate_dream()
                         
                         if dream_result and "dream_content" in dream_result:
-                            logger.info(f"Generated dream with ID: {dream_result.get('dream_id', 'unknown')}")
+                            dream_id = dream_result.get("dream_id", "unknown")
+                            
+                            # Log detailed dream information for Docker logs
+                            logger.info(f"\n==== DREAM GENERATED ====")
+                            logger.info(f"Dream ID: {dream_id}")
+                            logger.info(f"Title: {dream_result.get('title', 'Untitled Dream')}")
+                            logger.info(f"Dream Content Length: {len(dream_result.get('dream_content', ''))} characters")
+                            
+                            # Log the actual dream content in manageable chunks to avoid overflowing logs
+                            dream_content = dream_result.get("dream_content", "")
+                            if dream_content:
+                                logger.info("Dream Content:")
+                                # Split long content into chunks for better log readability
+                                chunk_size = 1000
+                                for i in range(0, len(dream_content), chunk_size):
+                                    chunk = dream_content[i:i+chunk_size]
+                                    logger.info(f"[Content {i//chunk_size + 1}] {chunk}")
                             
                             # Process the dream to extract insights and update knowledge
                             logger.info("Processing dream for insights...")
                             insights = await dream_processor.process_dream(dream_result)
                             
                             if insights:
-                                logger.info(f"Extracted {len(insights)} insights from dream")
+                                # Log detailed insights information
+                                logger.info(f"\n==== DREAM INSIGHTS ====")
+                                logger.info(f"Extracted {len(insights)} insights from dream {dream_id}")
+                                
+                                for i, insight in enumerate(insights):
+                                    # Format the insight for logs
+                                    logger.info(f"Insight {i+1}: {insight.get('content', '')}")
+                                    if 'confidence' in insight:
+                                        logger.info(f"Confidence: {insight.get('confidence', 0):.2f}")
+                                    if 'attributes' in insight:
+                                        logger.info(f"Attributes: {json.dumps(insight.get('attributes', {}), indent=2)}")
                                 
                                 # Update knowledge graph with insights
                                 if knowledge_graph:
@@ -641,6 +667,8 @@ async def continuous_dream_processing():
                                             node_type=insight.get("node_type", "dream_insight"),
                                             attributes=insight.get("attributes", {})
                                         )
+                            else:
+                                logger.info("No insights were extracted from the dream")
                             
                             # Perform reflection on the dream and its processing
                             if reflection_engine:
@@ -649,9 +677,32 @@ async def continuous_dream_processing():
                                     dream_content=dream_result.get("dream_content"),
                                     insights=insights
                                 )
-                                logger.info("Dream reflection complete")
+                                
+                                # Log reflection results
+                                if reflection_result:
+                                    logger.info(f"\n==== DREAM REFLECTION ====")
+                                    logger.info(f"Reflection title: {reflection_result.get('title', 'Untitled Reflection')}")
+                                    
+                                    # Log fragments
+                                    fragments = reflection_result.get("fragments", [])
+                                    if fragments:
+                                        logger.info(f"Reflection fragments: {len(fragments)}")
+                                        for i, fragment in enumerate(fragments):
+                                            frag_type = fragment.get("type", "unknown").capitalize()
+                                            content = fragment.get("content", "")
+                                            confidence = fragment.get("confidence", 0)
+                                            logger.info(f"Fragment {i+1} ({frag_type}): {content} (confidence: {confidence:.2f})")
+                                    
+                                    logger.info("Dream reflection complete")
+                                else:
+                                    logger.info("No reflection was generated for the dream")
+                        else:
+                            logger.warning("Dream generation failed or returned invalid results")
+                            
                     except Exception as e:
                         logger.error(f"Error in dream processing: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
                 
                 # Switch back to default model
                 if model_manager:
@@ -677,6 +728,8 @@ async def continuous_dream_processing():
             
         except Exception as e:
             logger.error(f"Error in continuous dream processing: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             await asyncio.sleep(60)  # Wait a minute before retrying
 
 # Check if the system is idle (no active voice sessions)
