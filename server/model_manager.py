@@ -103,25 +103,34 @@ class ModelManager:
                     # Create default models instead of raising an error
                     self._create_default_models()
                     return
-                    
-                # Process model definitions
-                models_data = config_data.get('models', {})
-                if not isinstance(models_data, dict):
-                    logger.error(f"Invalid models format: expected dictionary, got {type(models_data)}")
+                
+                # These are expected to be top-level string references to models, not model data
+                reserved_fields = ['default_model', 'embedding_model', 'dream_model', 'model_profiles', 'parameters']
+                
+                # Extract and process models dictionary
+                if 'models' not in config_data or not isinstance(config_data['models'], dict):
+                    logger.error(f"No valid 'models' dictionary found in configuration")
                     self._create_default_models()
                     return
                 
+                models_data = config_data['models']
                 if not models_data:
                     logger.warning("No models defined in configuration, using defaults")
                     self._create_default_models()
                     return
-                    
+                
+                # Process each model definition
                 for model_name, model_data in models_data.items():
+                    # Skip if this is actually a reserved field (shouldn't happen but just in case)
+                    if model_name in reserved_fields:
+                        logger.warning(f"Skipping reserved field '{model_name}' found in models section")
+                        continue
+                        
                     # Ensure model_data is a dictionary
                     if not isinstance(model_data, dict):
                         logger.error(f"Invalid model data for {model_name}: expected dictionary, got {type(model_data)}")
                         continue
-                        
+                    
                     # Safely get purposes with type checking
                     purposes_data = model_data.get('purposes', ['general'])
                     if not isinstance(purposes_data, list):
