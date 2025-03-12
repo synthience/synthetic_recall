@@ -334,51 +334,81 @@ class ModelManager:
         Returns:
             Name of recommended model
         """
+        # If no models loaded, return default
         if not self.models:
+            logger.warning("No models loaded, using default")
             return self.default_model
             
-        # Use default purpose based on system state if not specified
-        if purpose is None:
-            if self.system_state == SystemState.DREAMING:
-                purpose = ModelPurpose.DREAMING
-            elif self.system_state == SystemState.IDLE:
-                purpose = ModelPurpose.REFLECTION
-            else:
-                purpose = ModelPurpose.GENERAL
+        # Default to general purpose if none specified
+        purpose = purpose or ModelPurpose.GENERAL
         
-        # Filter models suitable for the purpose
-        suitable_models = [
-            model for model in self.models.values() 
-            if purpose in model.purposes
-        ]
+        # For dreaming, handle special case based on system state
+        if purpose == ModelPurpose.DREAMING:
+            # When system is idle, use the dedicated dream model if available
+            if self.system_state == SystemState.IDLE:
+                dream_model = os.getenv('DREAM_MODEL', None)
+                # Check if we have a specific dream_model in config
+                config_path = self.config_path
+                try:
+                    with open(config_path, 'r') as f:
+                        config_data = json.load(f)
+                        if 'dream_model' in config_data and config_data['dream_model'] in self.models:
+                            dream_model = config_data['dream_model']
+                            logger.info(f"Using configured dream model: {dream_model}")
+                            return dream_model
+                except (json.JSONDecodeError, FileNotFoundError, KeyError) as e:
+                    logger.warning(f"Could not load dream model from config: {e}")
+            
+            # If not idle or no dream model found, find models with dreaming purpose
+            dreaming_models = [m for m, profile in self.models.items() 
+                              if ModelPurpose.DREAMING in profile.purposes]
+            
+            if dreaming_models:
+                # When active, prefer smaller, faster models for dreaming
+                if self.system_state == SystemState.ACTIVE:
+                    # Sort by speed (higher is better)
+                    dreaming_models.sort(key=lambda m: self.models[m].speed, reverse=True)
+                else:  # When idle, prefer stronger models
+                    # Sort by strength (higher is better)
+                    dreaming_models.sort(key=lambda m: self.models[m].strength, reverse=True)
+                    
+                return dreaming_models[0]
+            else:
+                logger.warning("No models found for purpose dreaming, using default")
+                return self.default_model
+        
+        # For other purposes, find all suitable models
+        suitable_models = [m for m, profile in self.models.items() 
+                          if purpose in profile.purposes]
         
         if not suitable_models:
-            logger.warning(f"No models found for purpose {purpose.value}, using default")
-            return self.default_model
-        
-        # Calculate scores based on state and requirements
-        scores = {}
-        for model in suitable_models:
-            base_score = model.strength
+            # Fall back to general models if no specific match
+            suitable_models = [m for m, profile in self.models.items() 
+                              if ModelPurpose.GENERAL in profile.purposes]
             
-            # Adjust score based on system state
-            if self.system_state == SystemState.LOW_RESOURCES:
-                # Prioritize efficiency and speed
-                base_score = (base_score * 0.3) + (model.efficiency * 0.4) + (model.speed * 0.3)
-            elif self.system_state == SystemState.DREAMING:
-                # Prioritize strength over speed
-                base_score = (base_score * 0.7) + (model.speed * 0.3)
-            elif self.system_state == SystemState.IDLE:
-                # Balance all factors
-                base_score = (base_score * 0.5) + (model.efficiency * 0.3) + (model.speed * 0.2)
+            # If still no matches, use default model
+            if not suitable_models:
+                logger.warning(f"No models found for purpose {purpose}, using default")
+                return self.default_model
+        
+        # Choose based on system state
+        if self.system_state == SystemState.LOW_RESOURCES:
+            # Sort by resource efficiency (lower usage is better)
+            suitable_models.sort(
+                key=lambda m: (self.models[m].resource_usage.get('memory', 0.5) + 
+                              self.models[m].resource_usage.get('cpu', 0.5)) / 2
+            )
+        elif self.system_state == SystemState.HIGH_RESOURCES:
+            # Sort by strength (higher is better)
+            suitable_models.sort(key=lambda m: self.models[m].strength, reverse=True)
+        else:  # Default to balancing speed and strength
+            # Sort by combined score
+            suitable_models.sort(
+                key=lambda m: self.models[m].speed * 0.4 + self.models[m].strength * 0.6, 
+                reverse=True
+            )
             
-            scores[model.name] = base_score
-        
-        # Find model with highest score
-        if scores:
-            return max(scores.items(), key=lambda x: x[1])[0]
-        
-        return self.default_model
+        return suitable_models[0]
     
     async def switch_model(self, target_model: str, llm_service) -> bool:
         """Switch to the specified model

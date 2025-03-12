@@ -39,6 +39,33 @@ class MemoryIndex:
         
         return memory
 
+    def add_memory_sync(self, memory_id, embedding, timestamp, significance=1.0, content=None):
+        """Synchronous version of add_memory for direct calls during initialization."""
+        # Ensure embedding is normalized
+        if isinstance(embedding, torch.Tensor):
+            embedding = embedding.clone().detach()
+        else:
+            embedding = torch.tensor(embedding, dtype=torch.float32)
+        
+        # Normalize embedding
+        norm = torch.norm(embedding, p=2)
+        if norm > 0:
+            embedding = embedding / norm
+
+        memory = {
+            'id': memory_id,
+            'embedding': embedding,
+            'timestamp': timestamp,
+            'significance': significance,
+            'content': content or ""  # Ensure content is never None
+        }
+        self.memories.append(memory)
+
+        if len(self.memories) % self.rebuild_threshold == 0:
+            self.build_index()
+        
+        return memory
+
     def build_index(self):
         """Build the search index from stored memories."""
         if not self.memories:
@@ -48,7 +75,7 @@ class MemoryIndex:
         embeddings = torch.stack([m['embedding'] for m in self.memories])
         norms = torch.norm(embeddings, p=2, dim=1, keepdim=True)
         self.index = embeddings / (norms + 1e-8)  # Add epsilon to prevent division by zero
-        print(f"🔹 Built index with {len(self.memories)} memories")
+        print(f" Built index with {len(self.memories)} memories")
 
     def search(self, query_embedding, k=5):
         """Search for top-k similar memories with time decay and significance weighting."""

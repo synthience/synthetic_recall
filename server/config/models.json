@@ -55,10 +55,22 @@
         "memory": 0.9,
         "cpu": 0.85
       }
+    },
+    "qwen_qwq-32b": {
+      "purposes": [
+        "dreaming"
+      ],
+      "context_length": 32768,
+      "strength": 0.95,
+      "speed": 0.4,
+      "resource_usage": {
+        "memory": 0.95,
+        "cpu": 0.95
+      }
     }
   },
   "default_model": "qwen2.5-7b-instruct",
-  "dream_model": "phi-4",
+  "dream_model": "qwen_qwq-32b",
   "parameters": {
     "switch_cooldown": 60
   }
