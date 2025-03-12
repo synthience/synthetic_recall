@@ -204,6 +204,181 @@ class ShortTermMemory:
         
         return None
     
+    async def keyword_search(self, keywords: List[str], limit: int = 5, min_significance: float = 0.0) -> List[Dict[str, Any]]:
+        """
+        Search memories by keywords.
+        
+        Args:
+            keywords: List of keywords to search for
+            limit: Maximum number of results to return
+            min_significance: Minimum significance threshold
+            
+        Returns:
+            List of matching memories
+        """
+        logger.debug(f"Performing keyword search with keywords: {keywords}")
+        
+        if not keywords:
+            return []
+        
+        results = []
+        
+        # Convert keywords to lowercase for case-insensitive matching
+        lowercase_keywords = [k.lower() for k in keywords]
+        
+        for memory in self.memory:
+            # Skip memories below significance threshold
+            if memory.get('metadata', {}).get('significance', 0.0) < min_significance:
+                continue
+                
+            # Check if any keyword is in the memory content
+            content = memory.get('content', '').lower()
+            if any(keyword in content for keyword in lowercase_keywords):
+                results.append({
+                    'id': memory.get('id'),
+                    'content': memory.get('content', ''),
+                    'timestamp': memory.get('timestamp', 0),
+                    'similarity': 1.0,  # Default similarity for keyword matches
+                    'significance': memory.get('metadata', {}).get('significance', 0.5)
+                })
+                
+                # Stop once we reach the limit
+                if len(results) >= limit:
+                    break
+        
+        logger.info(f"Keyword search found {len(results)} results")
+        return results
+    
+    async def search(self, query: str, limit: int = 5, min_significance: float = 0.0) -> List[Dict[str, Any]]:
+        """
+        Search memories by semantic similarity to a query.
+        
+        Args:
+            query: Search query
+            limit: Maximum number of results to return
+            min_significance: Minimum significance threshold
+            
+        Returns:
+            List of matching memories
+        """
+        logger.debug(f"Performing semantic search with query: {query}")
+        
+        # Try to use the get_recent method first, which has semantic search capabilities
+        try:
+            results = await self.get_recent(query, limit, min_significance)
+            if results:
+                return results
+        except Exception as e:
+            logger.warning(f"Error using get_recent for search: {e}")
+        
+        # As a fallback, treat this as a keyword search by splitting the query into words
+        keywords = query.split()
+        return await self.keyword_search(keywords, limit, min_significance)
+        
+    async def recency_biased_search(self, query: str, limit: int = 5, recency_weight: float = 0.5) -> List[Dict[str, Any]]:
+        """
+        Search memories with a bias toward recency.
+        
+        Args:
+            query: Search query
+            limit: Maximum number of results to return
+            recency_weight: Weight to give to recency vs content relevance (0.0-1.0)
+            
+        Returns:
+            List of matching memories
+        """
+        logger.debug(f"Performing recency-biased search with query: {query}")
+        
+        if not self.memory:
+            return []
+        
+        # Get semantic search results
+        semantic_results = []
+        try:
+            if self.embedding_comparator and hasattr(self.embedding_comparator, 'compare'):
+                query_embedding = await self.embedding_comparator.get_embedding(query)
+                
+                if query_embedding is not None:
+                    # Get similarity scores
+                    for memory in self.memory:
+                        memory_embedding = memory.get('embedding')
+                        
+                        # If no embedding, get one
+                        if memory_embedding is None and memory.get('content'):
+                            memory_embedding = await self.embedding_comparator.get_embedding(memory['content'])
+                            memory['embedding'] = memory_embedding
+                        
+                        if memory_embedding is not None:
+                            # Calculate similarity
+                            similarity = await self.embedding_comparator.compare(
+                                query_embedding, memory_embedding
+                            )
+                            
+                            semantic_results.append({
+                                'id': memory.get('id'),
+                                'content': memory.get('content', ''),
+                                'timestamp': memory.get('timestamp', 0),
+                                'similarity': similarity,
+                                'significance': memory.get('metadata', {}).get('significance', 0.5)
+                            })
+        except Exception as e:
+            logger.warning(f"Error in semantic search during recency-biased search: {e}")
+        
+        # If no semantic results, do keyword matching
+        if not semantic_results:
+            keywords = query.split()
+            for memory in self.memory:
+                content = memory.get('content', '').lower()
+                query_lower = query.lower()
+                
+                # Simple token overlap for matching
+                tokens_content = set(content.split())
+                tokens_query = set(query_lower.split())
+                
+                # Calculate Jaccard similarity
+                if tokens_content and tokens_query:
+                    intersection = tokens_content.intersection(tokens_query)
+                    union = tokens_content.union(tokens_query)
+                    similarity = len(intersection) / len(union)
+                else:
+                    similarity = 0.0
+                
+                semantic_results.append({
+                    'id': memory.get('id'),
+                    'content': memory.get('content', ''),
+                    'timestamp': memory.get('timestamp', 0),
+                    'similarity': similarity,
+                    'significance': memory.get('metadata', {}).get('significance', 0.5)
+                })
+        
+        # Apply recency bias
+        results = []
+        current_time = time.time()
+        oldest_time = min([memory.get('timestamp', 0) for memory in self.memory])
+        time_range = max(current_time - oldest_time, 1)  # Avoid division by zero
+        
+        for result in semantic_results:
+            # Calculate recency score (0-1)
+            recency_score = (result['timestamp'] - oldest_time) / time_range
+            
+            # Combine recency and semantic scores
+            combined_score = (recency_weight * recency_score) + ((1 - recency_weight) * result['similarity'])
+            
+            results.append({
+                'id': result['id'],
+                'content': result['content'],
+                'timestamp': result['timestamp'],
+                'similarity': result['similarity'],
+                'significance': result['significance'],
+                'combined_score': combined_score
+            })
+        
+        # Sort by combined score
+        results.sort(key=lambda x: x['combined_score'], reverse=True)
+        
+        # Return top results
+        return results[:limit]
+        
     def get_stats(self) -> Dict[str, Any]:
         """Get memory statistics."""
         return {
@@ -215,3 +390,30 @@ class ShortTermMemory:
             'matches': self.stats['matches'],
             'match_ratio': self.stats['matches'] / max(1, self.stats['retrievals'])
         }
+        
+    async def update_access_timestamp(self, memory_id: str) -> bool:
+        """Update the access timestamp for a memory.
+        
+        Args:
+            memory_id: ID of the memory to update
+            
+        Returns:
+            True if memory was found and updated, False otherwise
+        """
+        for i, memory in enumerate(self.memory):
+            if memory.get('id') == memory_id:
+                # Update timestamp
+                self.memory[i]['last_access'] = time.time()
+                self.memory[i]['access_count'] = self.memory[i].get('access_count', 0) + 1
+                
+                # Make sure these fields are also in metadata
+                if 'metadata' not in self.memory[i]:
+                    self.memory[i]['metadata'] = {}
+                    
+                self.memory[i]['metadata']['last_access'] = self.memory[i]['last_access']
+                self.memory[i]['metadata']['access_count'] = self.memory[i].get('access_count', 1)
+                
+                logger.debug(f"Updated access timestamp for memory {memory_id} in STM")
+                return True
+                
+        return False

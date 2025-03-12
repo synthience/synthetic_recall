@@ -53,7 +53,9 @@ class MemoryCore:
             **(config or {})
         }
         
+        # Initialize both module-level logger and instance logger
         logger.info(f"Initializing MemoryCore with device={self.config['device']}")
+        self.logger = logger  # Initialize instance logger
         
         # Initialize HPC Manager for embeddings and significance
         self.hpc_manager = HPCSIGFlowManager({
@@ -96,7 +98,7 @@ class MemoryCore:
         
         logger.info("MemoryCore initialized")
     
-    async def process_and_store(self, content: str, memory_type: MemoryTypes = MemoryTypes.EPISODIC,
+    async def process_and_store(self, content: Union[str, bytes], memory_type: MemoryTypes = MemoryTypes.EPISODIC,
                               metadata: Optional[Dict[str, Any]] = None, embedding: Optional[List[float]] = None,
                               memory_id: Optional[str] = None, significance: Optional[float] = None,
                               force_ltm: bool = False) -> Dict[str, Any]:
@@ -104,7 +106,7 @@ class MemoryCore:
         Process content through the memory pipeline and store if significant.
         
         Args:
-            content: Content text to process and store
+            content: Content text or binary data to process and store
             memory_type: Type of memory (EPISODIC, SEMANTIC, etc.)
             metadata: Additional metadata about the memory
             embedding: Optional pre-computed embedding vector
@@ -119,25 +121,46 @@ class MemoryCore:
             start_time = time.time()
             self._total_processed += 1
             
+            # Convert bytes to string if necessary
+            content_str = content
+            if isinstance(content, bytes):
+                try:
+                    # Try to decode as UTF-8
+                    content_str = content.decode('utf-8')
+                except UnicodeDecodeError:
+                    # If it's not valid UTF-8, use base64 encoding
+                    import base64
+                    content_str = f"[BASE64_ENCODED_DATA:{base64.b64encode(content).decode('ascii')}]"
+                    
+                    # Add encoding info to metadata
+                    if metadata is None:
+                        metadata = {}
+                    metadata['encoding'] = 'base64'
+            
+            # Ensure content is a string
+            if not isinstance(content_str, str):
+                content_str = str(content_str)
+            
             # Track processing stats
             processing_record = {
-                'content_length': len(content),
+                'content_length': len(content_str),
                 'memory_type': memory_type.value,
                 'start_time': start_time
             }
             
             # Preprocess content (truncate if too long)
-            if len(content) > 10000:  # Arbitrary limit for very long content
-                logger.warning(f"Content too long ({len(content)} chars), truncating")
-                content = content[:10000] + "... [truncated]"
+            if len(content_str) > 10000:  # Arbitrary limit for very long content
+                logger.warning(f"Content too long ({len(content_str)} chars), truncating")
+                content_str = content_str[:10000] + "... [truncated]"
             
             try:
                 # Use provided embedding and significance if available
                 if embedding is None or significance is None:
                     # Process through HPC for embedding and significance
-                    embedding, significance = await self.hpc_manager.process_embedding(
-                        torch.tensor(content.encode(), dtype=torch.float32).reshape(1, -1)
-                    )
+                    input_tensor = torch.tensor([ord(c) for c in content_str], dtype=torch.float32)
+                    padded_tensor = torch.zeros((1, self.config['embedding_dim']), dtype=torch.float32)
+                    padded_tensor[0, :min(input_tensor.shape[0], self.config['embedding_dim'])] = input_tensor[:min(input_tensor.shape[0], self.config['embedding_dim'])]
+                    embedding, significance = await self.hpc_manager.process_embedding(padded_tensor)
                 
                 processing_record['embedding_generated'] = embedding is not None
                 processing_record['significance'] = significance
@@ -150,7 +173,7 @@ class MemoryCore:
                 
                 # Always store in STM for immediate recall
                 stm_id = await self.short_term_memory.add_memory(
-                    content=content,
+                    content=content_str,
                     embedding=embedding,
                     memory_id=memory_id,  # Use provided ID if available
                     metadata=full_metadata
@@ -162,7 +185,7 @@ class MemoryCore:
                 ltm_id = None
                 if force_ltm or significance >= self.config['significance_threshold']:
                     ltm_id = await self.long_term_memory.store_memory(
-                        content=content,
+                        content=content_str,
                         embedding=embedding,
                         memory_id=memory_id,  # Use provided ID if available
                         significance=significance,
@@ -262,10 +285,9 @@ class MemoryCore:
         # Strategy 2: Direct keyword search in both STM and LTM
         # This helps find exact matches even if semantic similarity is low
         # Implementation inside STM and LTM components
-        keyword_search = asyncio.gather(
-            self.short_term_memory.keyword_search(query, limit),
-            self.long_term_memory.keyword_search(query, limit)
-        )
+        stm_keyword_search = self.short_term_memory.keyword_search(query, limit)
+        ltm_keyword_search = self.long_term_memory.keyword_search(query, limit)
+        keyword_search = asyncio.gather(stm_keyword_search, ltm_keyword_search)
         search_tasks.append(keyword_search)
         
         # Strategy 3: Personal information prioritized search
@@ -375,38 +397,74 @@ class MemoryCore:
         )[:limit]
         
         # Update access timestamps for retrieved memories to boost future retrievals
-        self._update_memory_access_timestamps(sorted_memories)
+        await self._update_memory_access_timestamps(sorted_memories)
         
         return sorted_memories
     
-    async def _fallback_memory_search(self, query: str, limit: int, min_significance: float) -> List[Dict[str, Any]]:
-        """Fallback search method when primary methods fail"""
-        try:
-            # First try direct STM retrieval (fast, in-memory)
-            stm_results = await self.short_term_memory.search(query, limit)
-            if stm_results and len(stm_results) > 0:
-                return stm_results
-                
-            # If no STM results, try LTM with lower significance threshold
-            ltm_results = await self.long_term_memory.search(
-                query, 
-                limit=limit,
-                min_significance=max(0.0, min_significance - 0.2)  # Lower threshold
-            )
-            if ltm_results and len(ltm_results) > 0:
-                return ltm_results
-                
-            # Last resort: return most recent memories regardless of query match
-            logger.warning("Fallback to most recent memories regardless of query")
-            recent_memories = await self.short_term_memory.get_recent_memories(limit)
-            if not recent_memories:
-                recent_memories = await self.long_term_memory.get_recent_memories(limit)
-                
-            return recent_memories or []
+    async def _fallback_memory_search(self, query: str, limit: int = 5, min_significance: float = 0.0) -> List[Dict[str, Any]]:
+        """
+        Fallback search method when other search methods fail.
+        Tries multiple approaches to find relevant memories.
+        
+        Args:
+            query: Search query
+            limit: Maximum number of results to return
+            min_significance: Minimum significance threshold
             
+        Returns:
+            List of matching memories
+        """
+        self.logger.debug(f"Using fallback memory search for query: {query}")
+        
+        # Try to route the query through the prioritization layer first
+        try:
+            # Fix: properly await the coroutine
+            routed_results = await self.memory_prioritization.route_query(query, {
+                'limit': limit,
+                'min_significance': min_significance
+            })
+            if routed_results:
+                self.logger.debug(f"Fallback search: prioritization layer returned {len(routed_results)} results")
+                return routed_results
         except Exception as e:
-            logger.error(f"Error in fallback memory search: {e}")
-            return []  # Return empty list as last resort
+            self.logger.warning(f"Error in prioritization routing during fallback search: {e}")
+        
+        # If routing fails, try direct search from each memory store
+        all_results = []
+        
+        # Try short-term memory first
+        if hasattr(self, 'short_term_memory') and self.short_term_memory:
+            try:
+                stm_results = await self.short_term_memory.search(query, limit, min_significance)
+                all_results.extend(stm_results)
+            except Exception as e:
+                self.logger.warning(f"Error searching short-term memory in fallback: {e}")
+        
+        # Then try long-term memory
+        remaining_limit = limit - len(all_results)
+        if remaining_limit > 0 and hasattr(self, 'long_term_memory') and self.long_term_memory:
+            try:
+                ltm_results = await self.long_term_memory.search(
+                    query, 
+                    remaining_limit,
+                    min_significance=max(0.0, min_significance - 0.2)  # Lower threshold for LTM
+                )
+                all_results.extend(ltm_results)
+            except Exception as e:
+                self.logger.warning(f"Error searching long-term memory in fallback: {e}")
+        
+        # If still no results, try keyword search as last resort
+        if not all_results:
+            keywords = query.split()
+            try:
+                if hasattr(self, 'short_term_memory') and self.short_term_memory:
+                    keyword_results = await self.short_term_memory.keyword_search(keywords, limit, min_significance)
+                    all_results.extend(keyword_results)
+            except Exception as e:
+                self.logger.warning(f"Error in keyword search during fallback: {e}")
+        
+        self.logger.debug(f"Fallback search found {len(all_results)} total results")
+        return all_results[:limit]  # Ensure we don't exceed the limit
             
     async def _update_memory_access_timestamps(self, memories: List[Dict[str, Any]]):
         """Update access timestamps for retrieved memories to boost future relevance"""

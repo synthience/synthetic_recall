@@ -3,6 +3,8 @@ import time
 import uuid
 from enum import Enum
 from typing import Dict, Any, Optional, List
+import torch
+import base64
 
 class MemoryTypes(Enum):
     """Enumeration of memory types for categorization."""
@@ -80,16 +82,66 @@ class MemoryEntry:
         Returns:
             Dictionary representation
         """
+        # Handle embedding tensor - convert to list or encode as base64 if bytes
+        embedding_serialized = None
+        if self.embedding is not None:
+            if isinstance(self.embedding, torch.Tensor):
+                embedding_serialized = self.embedding.cpu().tolist()
+            elif isinstance(self.embedding, (list, tuple)):
+                embedding_serialized = list(self.embedding)
+            elif isinstance(self.embedding, bytes):
+                import base64
+                embedding_serialized = {
+                    "format": "base64",
+                    "data": base64.b64encode(self.embedding).decode('ascii')
+                }
+            elif isinstance(self.embedding, str):
+                embedding_serialized = self.embedding
+            else:
+                # Try to convert to string as fallback
+                try:
+                    embedding_serialized = str(self.embedding)
+                except:
+                    embedding_serialized = "[Unserializable embedding]"
+        
+        # Process content - ensure it's string
+        content_str = self.content
+        if isinstance(content_str, bytes):
+            try:
+                content_str = content_str.decode('utf-8')
+            except UnicodeDecodeError:
+                import base64
+                content_str = f"[BASE64_ENCODED_DATA:{base64.b64encode(content_str).decode('ascii')}]"
+        
+        # Process metadata - ensure all values are serializable
+        metadata_serialized = {}
+        if self.metadata:
+            for key, value in self.metadata.items():
+                if isinstance(value, bytes):
+                    import base64
+                    metadata_serialized[key] = {
+                        "format": "base64",
+                        "data": base64.b64encode(value).decode('ascii')
+                    }
+                elif isinstance(value, (dict, list, str, int, float, bool, type(None))):
+                    metadata_serialized[key] = value
+                else:
+                    # Try to convert to string
+                    try:
+                        metadata_serialized[key] = str(value)
+                    except:
+                        metadata_serialized[key] = "[Unserializable value]"
+                        
         return {
             "id": self.id,
-            "content": self.content,
+            "content": content_str,
             "memory_type": self.memory_type,
             "significance": self.significance,
             "created_at": self.created_at,
             "last_access": self.last_access,
             "access_count": self.access_count,
-            "metadata": self.metadata,
-            "embedding": self.embedding
+            "metadata": metadata_serialized,
+            "embedding": embedding_serialized
         }
     
     @classmethod

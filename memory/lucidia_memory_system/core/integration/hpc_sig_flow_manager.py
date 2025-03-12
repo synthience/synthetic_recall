@@ -190,9 +190,32 @@ class HPCSIGFlowManager:
             # Move to correct device
             embedding = embedding.to(self.config['device'])
             
-            # Ensure correct shape
+            # Ensure correct shape and size
             if len(embedding.shape) > 1:
-                embedding = embedding.flatten()[:self.config['chunk_size']]
+                # Handle 2D tensor (batch x features)
+                if embedding.shape[1] < self.config['chunk_size']:
+                    # Pad if smaller than chunk_size
+                    padded = torch.zeros((embedding.shape[0], self.config['chunk_size']), 
+                                        device=embedding.device, dtype=embedding.dtype)
+                    padded[:, :embedding.shape[1]] = embedding
+                    embedding = padded
+                else:
+                    # Truncate if larger than chunk_size
+                    embedding = embedding[:, :self.config['chunk_size']]
+                
+                # Flatten if necessary for further processing
+                embedding = embedding.reshape(-1)[:self.config['chunk_size']]
+            else:
+                # Handle 1D tensor
+                if embedding.shape[0] < self.config['chunk_size']:
+                    # Pad if smaller than chunk_size
+                    padded = torch.zeros(self.config['chunk_size'], 
+                                        device=embedding.device, dtype=embedding.dtype)
+                    padded[:embedding.shape[0]] = embedding
+                    embedding = padded
+                else:
+                    # Truncate if larger than chunk_size
+                    embedding = embedding[:self.config['chunk_size']]
             
             # Project to unit hypersphere
             norm = torch.norm(embedding, p=2, dim=-1, keepdim=True)
@@ -242,7 +265,13 @@ class HPCSIGFlowManager:
             magnitude = torch.norm(embedding).item()
             
             if momentum_copy is not None:
-                similarity = torch.matmul(embedding, momentum_copy.T)
+                # Use .mT for matrix transpose which supports batched matrices correctly
+                # or use permute() as an alternative for any tensor dimensions
+                if momentum_copy.dim() == 2:
+                    similarity = torch.matmul(embedding, momentum_copy.T)
+                else:
+                    # Using the recommended approach for >2 dimensions
+                    similarity = torch.matmul(embedding, momentum_copy.permute(*torch.arange(momentum_copy.ndim - 1, -1, -1)))
                 diversity = 1.0 - torch.max(similarity).item()
             else:
                 diversity = 1.0
