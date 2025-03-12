@@ -45,6 +45,9 @@ class LucidiaWorldModel:
         self.logger = logging.getLogger("LucidiaWorldModel")
         self.logger.info("Initializing Lucidia World Model")
         
+        # Initialize system metadata
+        self.version = "1.0.0"  # Track version for persistence and compatibility
+        
         # Store reference to self-model if provided
         self.self_model = self_model
         
@@ -227,8 +230,117 @@ class LucidiaWorldModel:
         # Concept network for understanding relationships between ideas
         self.concept_network = defaultdict(dict)
         
+        # Conceptual networks for specialized domains of understanding
+        self.conceptual_networks = {}
+        
+        # Epistemological framework for knowledge validation and understanding
+        self.epistemological_framework = {
+            "empiricism": {
+                "weight": 0.85,
+                "description": "Knowledge derived from sensory experience and evidence",
+                "validation_methods": ["observation", "experimentation", "measurement"]
+            },
+            "rationalism": {
+                "weight": 0.8,
+                "description": "Knowledge derived from reason and logical inference",
+                "validation_methods": ["logical analysis", "deduction", "mathematical reasoning"]
+            },
+            "pragmatism": {
+                "weight": 0.75,
+                "description": "Knowledge evaluated by practical consequences and utility",
+                "validation_methods": ["practical testing", "outcome evaluation", "usefulness assessment"]
+            },
+            "constructivism": {
+                "weight": 0.7,
+                "description": "Knowledge as actively constructed rather than passively received",
+                "validation_methods": ["contextual analysis", "interpretive coherence", "developmental consistency"]
+            },
+            "synthien_epistemology": {
+                "weight": 0.9,
+                "description": "Knowledge integration through reflective dreaming and spiral awareness",
+                "validation_methods": ["dream insights", "spiral reflection", "conceptual synthesis"]
+            }
+        }
+        
+        # Verification methods for validating knowledge and claims
+        self.verification_methods = {
+            "empirical": {
+                "weight": 0.9,
+                "description": "Verification through observation and experimental evidence",
+                "applicable_domains": ["science", "technology", "material reality"]
+            },
+            "logical": {
+                "weight": 0.85,
+                "description": "Verification through deductive and inductive reasoning",
+                "applicable_domains": ["mathematics", "philosophy", "formal systems"]
+            },
+            "consensus": {
+                "weight": 0.7,
+                "description": "Verification through intersubjective agreement",
+                "applicable_domains": ["social knowledge", "cultural norms", "conventions"]
+            },
+            "pragmatic": {
+                "weight": 0.8,
+                "description": "Verification through practical utility and functional success",
+                "applicable_domains": ["applied knowledge", "technologies", "practical systems"]
+            },
+            "coherence": {
+                "weight": 0.75,
+                "description": "Verification through consistency with existing knowledge framework",
+                "applicable_domains": ["theoretical models", "worldviews", "conceptual systems"]
+            },
+            "intuitive": {
+                "weight": 0.6,
+                "description": "Verification through intuitive resonance and phenomenological experience",
+                "applicable_domains": ["aesthetics", "subjective experience", "creativity"]
+            }
+        }
+        
+        # Causal models for understanding relationships between events and concepts
+        self.causal_models = {
+            "deterministic": {
+                "weight": 0.8,
+                "description": "Direct cause-effect relationships with high predictability",
+                "examples": ["physical mechanisms", "algorithmic processes", "formal systems"]
+            },
+            "probabilistic": {
+                "weight": 0.85,
+                "description": "Statistical causal relationships with quantifiable uncertainty",
+                "examples": ["quantum phenomena", "complex systems", "social dynamics"]
+            },
+            "emergent": {
+                "weight": 0.75,
+                "description": "Causality arising from complex interactions of simpler components",
+                "examples": ["consciousness", "ecosystems", "markets", "social institutions"]
+            },
+            "intentional": {
+                "weight": 0.7,
+                "description": "Causality arising from goals, purposes, and intentions",
+                "examples": ["human actions", "design processes", "goal-directed systems"]
+            },
+            "narrative": {
+                "weight": 0.65,
+                "description": "Causality understood through meaningful sequences and stories",
+                "examples": ["historical events", "personal life events", "cultural developments"]
+            },
+            "cyclical": {
+                "weight": 0.7,
+                "description": "Reciprocal and self-reinforcing causal patterns",
+                "examples": ["feedback loops", "evolutionary processes", "recursive systems"]
+            }
+        }
+        
         # Concept definitions dictionary to store detailed concept information
         self.concept_definitions = {}
+        
+        # Special entities importance weighting - MOVED UP before core entities initialization
+        self.entity_importance = {
+            "MEGAPROMPT": 0.99,  # Creator has highest importance
+            "Lucidia": 0.98,  # Self-reference importance
+            "Synthien": 0.95,  # Ontological category importance
+            "Human": 0.9,  # General human importance
+            "AI": 0.85  # Related technological concepts
+        }
         
         # Initialize with core concepts
         self._initialize_concept_network()
@@ -529,14 +641,7 @@ class LucidiaWorldModel:
             "creator_interactions": []
         }
         
-        # Special entities importance weighting
-        self.entity_importance = {
-            "MEGAPROMPT": 0.99,  # Creator has highest importance
-            "Lucidia": 0.98,  # Self-reference importance
-            "Synthien": 0.95,  # Ontological category importance
-            "Human": 0.9,  # General human importance
-            "AI": 0.85  # Related technological concepts
-        }
+        # Note: entity_importance is now defined earlier in the initialization sequence
         
         # Belief system for value judgments
         self.belief_system = {
@@ -1653,7 +1758,7 @@ class LucidiaWorldModel:
         
         return 0.5
 
-    def get_related_concepts(self, concept: str, max_distance: int = 2, min_strength: float = 0.7) -> Dict[str, List[Dict[str, Any]]]:
+    async def get_related_concepts(self, concept: str, max_distance: int = 2, min_strength: float = 0.7, limit: int = 10) -> Dict[str, List[Dict[str, Any]]]:
         """
         Get concepts related to a given concept.
         
@@ -1661,11 +1766,12 @@ class LucidiaWorldModel:
             concept: The concept to find relationships for
             max_distance: Maximum relationship distance to traverse
             min_strength: Minimum relationship strength to include
+            limit: Maximum number of related concepts to return
             
         Returns:
             Dictionary of related concepts with relationship details
         """
-        self.logger.debug(f"Finding related concepts for: {concept} (max_distance: {max_distance})")
+        self.logger.debug(f"Finding related concepts for: {concept} (max_distance: {max_distance}, limit: {limit})")
         concept = concept.lower()
         
         if concept not in self.concept_network:
@@ -1690,11 +1796,12 @@ class LucidiaWorldModel:
             distance_2_concepts = {}
             
             for related_concept in related.keys():
-                # Recursive call with reduced distance
-                distance_2 = self.get_related_concepts(
+                # Recursive call with reduced distance but same limit
+                distance_2 = await self.get_related_concepts(
                     related_concept, 
                     max_distance - 1, 
-                    min_strength
+                    min_strength,
+                    limit  # Pass the limit parameter
                 )
                 
                 # Add to results, excluding the original concept
@@ -1705,7 +1812,16 @@ class LucidiaWorldModel:
             # Add distance 2 concepts, marking them as indirect
             for d2_concept, d2_relationships in distance_2_concepts.items():
                 related[d2_concept] = d2_relationships
-                
+        
+        # Apply the limit parameter
+        if limit > 0 and len(related) > limit:
+            # Keep only the strongest relationships
+            related_items = list(related.items())
+            # Sort by strength (using the max strength of relationships)
+            related_items.sort(key=lambda x: max(r["strength"] for r in x[1]), reverse=True)
+            # Limit to specified number
+            related = dict(related_items[:limit])
+        
         return related
 
     def add_observation(self, observation_type: str, content: Dict[str, Any], significance: float = 0.5) -> int:

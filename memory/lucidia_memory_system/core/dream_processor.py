@@ -98,6 +98,11 @@ class LucidiaDreamProcessor:
         # Memory buffer - source material for dreams
         self.memory_buffer = deque(maxlen=100)
         
+        # Save models if memory system is available
+        if self.memory_system and hasattr(self.memory_system, 'persistence_handler'):
+            self.logger.info("Ensuring models are saved to persistence storage")
+            asyncio.create_task(self.save_models())
+        
         # Dream state tracking
         self.dream_state = {
             "is_dreaming": False,
@@ -335,6 +340,15 @@ class LucidiaDreamProcessor:
                 "total_dream_time": 0,
                 "insight_significance": []
             })
+        }
+        
+        # Initialize cycle statistics
+        self.cycle_stats = {
+            "total_dreams": 0,
+            "total_insights": 0,
+            "total_cycle_time": 0,
+            "cycles_completed": 0,
+            "insight_per_cycle": []
         }
         
         self.logger.info("Dream Processor initialized")
@@ -2688,7 +2702,11 @@ class LucidiaDreamProcessor:
         # Update significant insights
         for insight in dream_record["insights"]:
             if insight["significance"] > 0.8:
-                self.dream_stats["significant_insights"].append(insight["text"])
+                self.dream_stats["significant_insights"].append({
+                    "content": insight["text"],
+                    "timestamp": time.time(),
+                    "theme": dream_record["theme"]["name"]
+                })
         
         # Update integration success rate
         integration_success = dream_record["integration_results"]["integration_success"]
@@ -3033,14 +3051,14 @@ class LucidiaDreamProcessor:
                 "seed": dream_data.get("seed", {}),
                 "theme": dream_data.get("theme", {}),
                 "cognitive_style": dream_data.get("style", {}),
-                "creativity_level": dream_data.get("creativity", 0.5),
-                "depth_level": dream_data.get("depth", 0.5),
-                "spiral_phase": dream_data.get("spiral_phase", "unknown"),
+                "creativity_level": self.dream_state["current_dream_creativity"],
+                "depth_level": self.dream_state["current_dream_depth"],
+                "spiral_phase": dream_data.get("spiral_phase", self.dream_state["current_spiral_phase"]),
                 "insights": dream_data.get("insights", []),
                 "associations": dream_data.get("associations", []),
                 "source_memories": dream_data.get("source_memories", []),
                 "context": dream_data.get("context", {}),
-                "duration_seconds": dream_data.get("duration", 0)
+                "duration_seconds": (datetime.now() - self.dream_state["dream_start_time"]).total_seconds()
             }
             
             # Log the dream completion
@@ -3090,11 +3108,13 @@ class LucidiaDreamProcessor:
                 
             # Create a minimal context for insight generation
             context = {
+                "dream_content": dream_content,
                 "theme": dream_theme,
                 "style": dream_style,
                 "concepts": dream_result.get("concepts", []),
                 "associations": dream_result.get("associations", []),
-                "patterns": dream_result.get("patterns", [])
+                "patterns": dream_result.get("patterns", []),
+                "seed": dream_result.get("seed", {})
             }
             
             # Generate insights based on dream content
@@ -3422,3 +3442,71 @@ class LucidiaDreamProcessor:
             # Fall back to standard dream generation
             self.logger.info("Falling back to standard dream generation")
             return self._process_dream()
+
+    async def generate_insights(self, dream_content: Optional[str] = None, theme: Optional[str] = None, 
+                            depth: float = 0.7, creativity: float = 0.8, 
+                            time_budget_seconds: Optional[int] = None,
+                            timeframe: str = "recent",
+                            categories: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """
+        Generate insights from dream content or memory categories.
+        
+        This method acts as a public API for the private _generate_dream_insights method,
+        allowing external components to request insight generation without needing to 
+        provide the full dream context.
+        
+        Args:
+            dream_content: The dream content to analyze (optional)
+            theme: Optional thematic direction for insight generation
+            depth: Depth of insight (0-1)
+            creativity: Level of creativity (0-1)
+            time_budget_seconds: Maximum time allowed for insight generation
+            timeframe: Time frame for memory retrieval ("recent", "all", etc.)
+            categories: List of categories to filter memories
+            
+        Returns:
+            List of generated insights
+        """
+        self.logger.info(f"Generating insights with time budget: {time_budget_seconds}s, theme: {theme}, "
+                      f"timeframe: {timeframe}, categories: {categories}")
+        
+        # Adapt newer parameters to the internal method's expected format
+        effective_theme = theme or (categories[0] if categories and len(categories) > 0 else "general")
+        
+        # Create a simplified context for insight generation
+        context = {
+            "dream_content": dream_content or "Recent experiences and knowledge patterns",
+            "theme": effective_theme,
+            "associations": [],
+            "dream_state": self.dream_state,
+            "depth": depth,
+            "creativity": creativity,
+            "time_budget": time_budget_seconds,  # Add time budget to context
+            "timeframe": timeframe,  # Add timeframe for memory retrieval
+            "categories": categories or [],  # Add categories for filtering
+            "seed": dream_content or "Recent experiences and knowledge patterns",  # Add seed to context
+            "cognitive_style": "analytical",  # Add missing cognitive_style parameter
+            "core_concepts": [],  # Add missing core_concepts parameter
+            "reflections": [],  # Add missing reflections parameter
+            "questions": [],  # Add missing questions parameter
+            "association_patterns": []  # Add missing association_patterns parameter
+        }
+        
+        # Call the internal insight generation method
+        insights = self._generate_dream_insights(context)
+        
+        # Update stats
+        self.dream_stats["total_insights"] += len(insights)
+        self.cycle_stats["total_insights"] += len(insights)
+        
+        # Store significant insights
+        for insight in insights:
+            if insight.get("significance", 0) > 0.7:
+                self.dream_stats["significant_insights"].append({
+                    "content": insight.get("content"),
+                    "timestamp": time.time(),
+                    "theme": effective_theme
+                })
+        
+        self.logger.info(f"Generated {len(insights)} insights")
+        return insights

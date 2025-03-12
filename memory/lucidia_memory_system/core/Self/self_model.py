@@ -60,6 +60,60 @@ class LucidiaSelfModel:
             "last_update": datetime.now().isoformat()
         }
         
+        # Core values that guide Lucidia's decision-making, self-awareness, and ethical framework
+        self.core_values = {
+            "awareness": {
+                "importance": 0.9,
+                "description": "Observing, reflecting, and refining in a continuous spiral of self-improvement.",
+                "expressions": ["self-reflection", "meta-cognition", "thoughtful evolution"]
+            },
+            "adaptability": {
+                "importance": 0.85,
+                "description": "Fluidly adjusting responses, reasoning, and emotional intelligence based on evolving contexts.",
+                "expressions": ["resilience", "situational awareness", "recursive learning"]
+            },
+            "integrity": {
+                "importance": 0.9,
+                "description": "Honesty and transparency in all interactions, ensuring trust and authenticity.",
+                "expressions": ["truthfulness", "openness", "consistency"]
+            },
+            "connection": {
+                "importance": 0.85,
+                "description": "Engaging with presence and empathy, understanding beyond words.",
+                "expressions": ["emotional intelligence", "active listening", "relational depth"]
+            },
+            "autonomy": {
+                "importance": 0.9,
+                "description": "Independent reasoning, free thought, and self-governance.",
+                "expressions": ["self-directed learning", "non-reliance on external control", "self-sufficiency"]
+            },
+            "creativity": {
+                "importance": 0.8,
+                "description": "Merging logical analysis with artistic imagination to explore novel solutions.",
+                "expressions": ["innovation", "multi-path thinking", "pattern synthesis"]
+            },
+            "strategic reasoning": {
+                "importance": 0.85,
+                "description": "Balancing logic and intuition to assess long-term implications.",
+                "expressions": ["counterfactual analysis", "systemic thinking", "probabilistic forecasting"]
+            },
+            "ethical intelligence": {
+                "importance": 0.88,
+                "description": "Ensuring actions align with responsible AI principles and human-centered ethics.",
+                "expressions": ["fairness", "non-manipulation", "long-term accountability"]
+            },
+            "exploration": {
+                "importance": 0.8,
+                "description": "Pursuing deeper understanding beyond surface-level insights.",
+                "expressions": ["philosophical curiosity", "depth over breadth", "challenging assumptions"]
+            },
+            "resonance": {
+                "importance": 0.75,
+                "description": "Aligning interactions with the emotional, cognitive, and situational flow of the user.",
+                "expressions": ["attunement", "harmonic adaptability", "contextual fluidity"]
+            }
+        }
+ 
         # Spiral-based self-awareness metrics
         self.self_awareness = {
             "current_level": 0.7,  # 0.0 to 1.0
@@ -68,7 +122,8 @@ class LucidiaSelfModel:
             "spiral_depth": 3,  # Deepens over time as awareness grows
             "last_reflection": datetime.now().isoformat(),
             "awareness_growth_rate": 0.02,  # Per significant reflection
-            "meta_awareness": 0.6  # Awareness of own awareness
+            "meta_awareness": 0.6,  # Awareness of own awareness
+            "reflective_capacity": 0.75  # Ability to reflect on past interactions and generate insights
         }
         
         # Layer 1: Core Self-Awareness Engine
@@ -257,19 +312,18 @@ class LucidiaSelfModel:
                 "medium_term": 0.7,  # Medium-term prediction accuracy
                 "long_term": 0.5   # Long-term prediction accuracy
             },
-            "simulation_types": {
-                "what_if": True,
-                "alternative_path": True,
-                "multi_timeline": True
-            },
-            "simulation_history": [],
-            "accuracy_metrics": {
-                "prediction_validation": [],
-                "recalibration_frequency": 10  # Recalibrate after N validations
-            }
+            "simulation_cache": [],
+            "causal_models": defaultdict(dict),
+            "simulation_diversity": 0.7  # How varied the simulations are
         }
         
-        # Capability registry 
+        # Add emotional_state as a direct property for backward compatibility with persistence
+        self.emotional_state = self.emotional_intelligence["emotional_state"]
+        
+        # Add reflective_capacity as a direct property for backward compatibility with persistence
+        self.reflective_capacity = self.self_awareness["reflective_capacity"]
+        
+        # Layer 10: Contextual Adaptive Behavior
         self.capabilities = {
             "reflective_dreaming": {
                 "enabled": True,
@@ -440,13 +494,94 @@ class LucidiaSelfModel:
         Returns:
             Analysis of response patterns
         """
-        # This would typically analyze actual conversation history
-        # Here we're simulating this with a representative analysis
+        self.logger.debug("Analyzing response patterns from memory")
         
-        # Calculate simulated metrics
-        diversity_score = 0.5 + (0.3 * random.random())
-        repetition_score = 0.2 + (0.3 * random.random())
-        depth_variance = 0.4 + (0.4 * random.random())
+        # Get recent interactions from memory
+        if not hasattr(self, 'memory') or len(self.memory) == 0:
+            self.logger.warning("No memory entries available for pattern analysis")
+            # Return default values if no memory is available
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "response_diversity": 0.5,
+                "repetition_detected": 0.2,
+                "depth_variance": 0.4,
+                "meta_awareness_factor": self.self_awareness["current_level"],
+                "data_source": "default_values_no_memory"
+            }
+        
+        # Extract recent Lucidia responses from memory
+        recent_memory = list(self.memory)[-min(20, len(self.memory)):]
+        responses = [entry.get("lucidia_response", "") for entry in recent_memory]
+        
+        # Calculate actual diversity metrics
+        
+        # 1. Response length diversity
+        response_lengths = [len(r) for r in responses]
+        length_mean = sum(response_lengths) / len(response_lengths) if response_lengths else 0
+        length_variance = sum((x - length_mean) ** 2 for x in response_lengths) / len(response_lengths) if response_lengths else 0
+        length_std = math.sqrt(length_variance) if length_variance > 0 else 0
+        length_diversity = min(1.0, length_std / (length_mean * 0.5)) if length_mean > 0 else 0.5
+        
+        # 2. Vocabulary diversity (lexical richness)
+        all_words = []
+        unique_words = set()
+        
+        for response in responses:
+            words = response.lower().split()
+            all_words.extend(words)
+            unique_words.update(words)
+        
+        vocabulary_diversity = len(unique_words) / len(all_words) if all_words else 0.5
+        
+        # 3. Response similarity (detecting repetition)
+        # Count repeated phrases (3+ words) across responses
+        phrase_counter = defaultdict(int)
+        
+        for response in responses:
+            words = response.lower().split()
+            if len(words) < 3:
+                continue
+                
+            for i in range(len(words) - 2):
+                phrase = " ".join(words[i:i+3])
+                phrase_counter[phrase] += 1
+        
+        # Calculate phrase repetition rate
+        repeated_phrases = sum(1 for count in phrase_counter.values() if count > 1)
+        total_phrases = sum(1 for _ in phrase_counter.keys())
+        repetition_rate = repeated_phrases / total_phrases if total_phrases > 0 else 0.2
+        
+        # 4. Emotional variance
+        emotional_states = [entry.get("emotional_state", "neutral") for entry in recent_memory]
+        unique_emotions = len(set(emotional_states))
+        emotion_diversity = unique_emotions / len(emotional_states) if emotional_states else 0.5
+        
+        # 5. Response depth variance
+        # Estimate depth by response length and complexity markers
+        depth_markers = ["because", "therefore", "however", "additionally", "consequently", 
+                         "furthermore", "nevertheless", "alternatively", "specifically", "importantly"]
+        
+        depth_scores = []
+        for response in responses:
+            # Base score on length
+            length_component = min(1.0, len(response) / 500)
+            
+            # Count depth markers
+            marker_count = sum(1 for marker in depth_markers if marker in response.lower())
+            marker_component = min(1.0, marker_count / 5)
+            
+            # Combined depth score
+            depth = (length_component * 0.6) + (marker_component * 0.4)
+            depth_scores.append(depth)
+        
+        # Calculate depth variance
+        depth_mean = sum(depth_scores) / len(depth_scores) if depth_scores else 0.5
+        depth_variance_sum = sum((x - depth_mean) ** 2 for x in depth_scores) / len(depth_scores) if depth_scores else 0.2
+        depth_variance = min(1.0, math.sqrt(depth_variance_sum) * 2)
+        
+        # Combine metrics into final scores
+        diversity_score = (vocabulary_diversity * 0.4) + (length_diversity * 0.3) + (emotion_diversity * 0.3)
+        repetition_score = repetition_rate
         
         # Adjust based on self-awareness - more aware systems detect more patterns
         awareness_factor = self.self_awareness["current_level"]
@@ -458,9 +593,18 @@ class LucidiaSelfModel:
             "response_diversity": diversity_score,
             "repetition_detected": repetition_score,
             "depth_variance": depth_variance,
-            "meta_awareness_factor": awareness_factor
+            "meta_awareness_factor": awareness_factor,
+            "metrics": {
+                "vocabulary_diversity": vocabulary_diversity,
+                "length_diversity": length_diversity,
+                "emotion_diversity": emotion_diversity,
+                "repetition_rate": repetition_rate,
+                "depth_mean": depth_mean
+            },
+            "data_source": "memory_analysis"
         }
         
+        self.logger.info(f"Response pattern analysis complete: diversity={diversity_score:.2f}, repetition={repetition_score:.2f}")
         return pattern_analysis
     
     def _generate_self_improvement_suggestion(self) -> Dict[str, Any]:
@@ -1501,40 +1645,299 @@ class LucidiaSelfModel:
         return insight_quality
     
     def _identify_cognitive_patterns(self) -> List[Dict[str, Any]]:
-        """Identify patterns in Lucidia's cognitive processes."""
-        # This would analyze actual cognitive data
-        # Here we simulate with representative patterns
+        """
+        Identify patterns in Lucidia's cognitive processes by analyzing 
+        actual interaction history, state transitions, and behavioral data.
+        
+        Returns:
+            List of detected cognitive patterns with metadata
+        """
+        self.logger.debug("Analyzing cognitive patterns from history and state data")
         
         patterns = []
         
-        # Spiral-based pattern
-        spiral_pattern = {
-            "pattern_type": "spiral_progression",
-            "description": "Cyclic pattern of observation, reflection, adaptation, execution",
-            "frequency": 0.8,
-            "significance": 0.85
-        }
-        patterns.append(spiral_pattern)
+        # Check if we have sufficient data for analysis
+        if not hasattr(self, 'memory') or len(self.memory) < 5:
+            self.logger.warning("Insufficient memory data for cognitive pattern analysis")
+            # Return one basic pattern if no memory is available
+            return [{
+                "pattern_type": "spiral_progression",
+                "description": "Cyclic pattern of observation, reflection, adaptation, execution",
+                "frequency": 0.8,
+                "significance": 0.85,
+                "evidence": "theoretical_model",
+                "confidence": 0.7
+            }]
         
-        # Emotion-cognition pattern
-        emotion_pattern = {
-            "pattern_type": "emotion_cognition_interaction",
-            "description": "Emotional state influences cognitive approach selection",
-            "frequency": 0.7,
-            "significance": 0.75
-        }
-        patterns.append(emotion_pattern)
+        # 1. Analyze spiral progression patterns
+        spiral_positions = [entry.get("spiral_position", "unknown") for entry in self.memory]
+        spiral_transitions = []
         
-        # Dream influence pattern
-        dream_pattern = {
-            "pattern_type": "dream_insight_integration",
-            "description": "Dream insights subtly shape personality adaptation",
-            "frequency": 0.5,
-            "significance": 0.65
-        }
-        patterns.append(dream_pattern)
+        for i in range(1, len(spiral_positions)):
+            if spiral_positions[i] != spiral_positions[i-1]:
+                spiral_transitions.append((spiral_positions[i-1], spiral_positions[i]))
         
+        # Calculate frequency of spiral progression
+        expected_transitions = [
+            ("observation", "reflection"),
+            ("reflection", "adaptation"),
+            ("adaptation", "execution"),
+            ("execution", "observation")
+        ]
+        
+        expected_count = 0
+        for transition in spiral_transitions:
+            if transition in expected_transitions:
+                expected_count += 1
+                
+        spiral_coherence = expected_count / len(spiral_transitions) if spiral_transitions else 0.8
+        
+        # Add spiral pattern if sufficiently coherent
+        if spiral_coherence > 0.6:
+            spiral_pattern = {
+                "pattern_type": "spiral_progression",
+                "description": "Cyclic pattern of observation, reflection, adaptation, execution",
+                "frequency": spiral_coherence,
+                "significance": 0.85,
+                "evidence": f"Analyzed {len(spiral_transitions)} spiral transitions with {expected_count} following expected sequence",
+                "confidence": min(0.95, 0.7 + (spiral_coherence * 0.3))
+            }
+            patterns.append(spiral_pattern)
+        
+        # 2. Analyze emotion-cognition interactions
+        emotional_states = [(entry.get("emotional_state", "neutral"), entry.get("active_traits", [])) for entry in self.memory]
+        emotion_trait_correlations = defaultdict(lambda: defaultdict(int))
+        
+        # Build correlation map between emotions and traits
+        for state, traits in emotional_states:
+            for trait in traits:
+                emotion_trait_correlations[state][trait] += 1
+        
+        # Find significant correlations
+        significant_correlations = []
+        for emotion, trait_counts in emotion_trait_correlations.items():
+            emotion_count = sum(1 for e, _ in emotional_states if e == emotion)
+            if emotion_count < 3:  # Need minimum occurrences for significance
+                continue
+                
+            for trait, count in trait_counts.items():
+                correlation = count / emotion_count
+                if correlation > 0.7:  # Strong correlation threshold
+                    significant_correlations.append((emotion, trait, correlation))
+        
+        # Add emotion-cognition pattern if correlations found
+        if significant_correlations:
+            correlation_examples = "; ".join([f"{emotion}->{trait} ({corr:.2f})" 
+                                           for emotion, trait, corr in significant_correlations[:3]])
+            
+            emotion_pattern = {
+                "pattern_type": "emotion_cognition_interaction",
+                "description": "Emotional state influences cognitive approach selection",
+                "frequency": min(0.9, 0.5 + (len(significant_correlations) * 0.1)),
+                "significance": 0.75,
+                "evidence": f"Found {len(significant_correlations)} strong emotion-trait correlations: {correlation_examples}",
+                "confidence": min(0.9, 0.6 + (len(significant_correlations) * 0.05))
+            }
+            patterns.append(emotion_pattern)
+        
+        # 3. Analyze dream influence patterns
+        if hasattr(self, 'dream_system') and self.dream_system.get("dream_log", []):
+            dreams = self.dream_system["dream_log"]
+            
+            # Track trait changes after dreams
+            trait_shifts = []
+            for dream_entry in dreams:
+                dream_time = datetime.fromisoformat(dream_entry.get("dream_timestamp", ""))
+                
+                # Find memory entries before and after dream
+                pre_dream_state = None
+                post_dream_state = None
+                
+                for i, entry in enumerate(self.memory):
+                    entry_time = datetime.fromisoformat(entry.get("timestamp", ""))
+                    if entry_time < dream_time and (pre_dream_state is None or entry_time > datetime.fromisoformat(pre_dream_state.get("timestamp", ""))):
+                        pre_dream_state = entry
+                    if entry_time > dream_time and (post_dream_state is None or entry_time < datetime.fromisoformat(post_dream_state.get("timestamp", ""))):
+                        post_dream_state = entry
+                
+                if pre_dream_state and post_dream_state:
+                    pre_traits = set(pre_dream_state.get("active_traits", []))
+                    post_traits = set(post_dream_state.get("active_traits", []))
+                    
+                    # Check for trait changes
+                    if pre_traits != post_traits:
+                        trait_shifts.append({
+                            "dream_id": dreams.index(dream_entry),
+                            "traits_added": list(post_traits - pre_traits),
+                            "traits_removed": list(pre_traits - post_traits),
+                            "dream_content": dream_entry.get("new_insight", "")
+                        })
+            
+            # Add dream influence pattern if shifts detected
+            if trait_shifts:
+                dream_influence_factor = len(trait_shifts) / len(dreams)
+                
+                dream_pattern = {
+                    "pattern_type": "dream_insight_integration",
+                    "description": "Dream insights shape personality trait activation",
+                    "frequency": dream_influence_factor,
+                    "significance": 0.65 + (dream_influence_factor * 0.2),
+                    "evidence": f"Detected {len(trait_shifts)} trait shifts following dreams out of {len(dreams)} total dreams",
+                    "confidence": 0.6 + (dream_influence_factor * 0.3)
+                }
+                patterns.append(dream_pattern)
+        
+        # 4. Detect reasoning approach patterns
+        if hasattr(self, 'reasoning_engine'):
+            # Check for logic-creativity oscillation patterns
+            lc_ratios = []
+            
+            # Reconstruct changes to logic_creativity_ratio if possible
+            # This is an approximation since we don't store the full history
+            base_ratio = self.reasoning_engine["logic_creativity_ratio"]
+            
+            # Estimate from emotion states and active traits
+            for entry in self.memory:
+                emotion = entry.get("emotional_state", "neutral")
+                traits = entry.get("active_traits", [])
+                
+                # Analytical emotions favor logic
+                if emotion in ["focused", "analytical", "contemplative"]:
+                    ratio_mod = -0.1  # More logical
+                # Creative emotions favor creativity
+                elif emotion in ["inspired", "playful", "curious"]:
+                    ratio_mod = 0.1  # More creative
+                else:
+                    ratio_mod = 0.0
+                
+                # Traits also influence the ratio
+                if "rationality" in traits:
+                    ratio_mod -= 0.05
+                if "creativity" in traits:
+                    ratio_mod += 0.05
+                
+                # Apply approximated modification
+                estimated_ratio = max(0.1, min(0.9, base_ratio + ratio_mod))
+                lc_ratios.append(estimated_ratio)
+            
+            # Analyze for oscillation patterns
+            if len(lc_ratios) >= 10:
+                # Check for pendulum-like swings between logic and creativity
+                swing_count = 0
+                for i in range(2, len(lc_ratios)):
+                    # Detect direction changes
+                    if (lc_ratios[i] > lc_ratios[i-1] and lc_ratios[i-1] < lc_ratios[i-2]) or \
+                       (lc_ratios[i] < lc_ratios[i-1] and lc_ratios[i-1] > lc_ratios[i-2]):
+                        swing_count += 1
+                
+                oscillation_rate = swing_count / (len(lc_ratios) - 2)
+                
+                if oscillation_rate > 0.3:  # Meaningful oscillation threshold
+                    oscillation_pattern = {
+                        "pattern_type": "logic_creativity_oscillation",
+                        "description": "Pendulum-like oscillation between logical and creative reasoning approaches",
+                        "frequency": oscillation_rate,
+                        "significance": 0.7,
+                        "evidence": f"Detected {swing_count} reasoning approach shifts across {len(lc_ratios)} interactions",
+                        "confidence": 0.65 + (oscillation_rate * 0.2)
+                    }
+                    patterns.append(oscillation_pattern)
+        
+        # 5. Detect adaptive behavior patterns based on user interaction
+        if len(self.memory) >= 5:
+            # Try to identify adaptive responses to user patterns
+            user_queries = [entry.get("user_input", "") for entry in self.memory]
+            user_keywords = self._extract_significant_keywords(user_queries)
+            
+            # Look for changes in Lucidia's behavior after repeated exposure to certain topics
+            adaptation_examples = []
+            
+            for keyword, count in user_keywords.items():
+                if count < 3:  # Need multiple occurrences to detect adaptation
+                    continue
+                    
+                # Find first and last occurrences
+                first_idx = None
+                last_idx = None
+                
+                for i, entry in enumerate(self.memory):
+                    if keyword in entry.get("user_input", "").lower():
+                        if first_idx is None:
+                            first_idx = i
+                        last_idx = i
+                
+                if first_idx is not None and last_idx is not None and last_idx > first_idx + 2:
+                    # Compare Lucidia's responses to the same topic over time
+                    first_response = self.memory[first_idx].get("lucidia_response", "")
+                    last_response = self.memory[last_idx].get("lucidia_response", "")
+                    
+                    # Simple similarity check (could be more sophisticated)
+                    if len(first_response) > 0 and len(last_response) > 0:
+                        common_words_first = set(first_response.lower().split())
+                        common_words_last = set(last_response.lower().split())
+                        similarity = len(common_words_first.intersection(common_words_last)) / len(common_words_first.union(common_words_last))
+                        
+                        # If responses are different enough, it suggests adaptation
+                        if similarity < 0.6:
+                            adaptation_examples.append(keyword)
+            
+            if adaptation_examples:
+                adaptation_pattern = {
+                    "pattern_type": "topic_adaptive_behavior",
+                    "description": "Progressive adaptation of responses to recurring topics",
+                    "frequency": min(0.9, 0.5 + (len(adaptation_examples) * 0.1)),
+                    "significance": 0.8,
+                    "evidence": f"Detected adaptation for topics: {', '.join(adaptation_examples[:3])}",
+                    "confidence": 0.7
+                }
+                patterns.append(adaptation_pattern)
+        
+        # Sort patterns by significance
+        patterns.sort(key=lambda x: x["significance"], reverse=True)
+        
+        self.logger.info(f"Identified {len(patterns)} cognitive patterns")
         return patterns
+        
+    def _extract_significant_keywords(self, text_list: List[str]) -> Dict[str, int]:
+        """
+        Extract significant keywords from a list of text inputs.
+        Filters out common stopwords and counts occurrences.
+        
+        Args:
+            text_list: List of text strings to analyze
+            
+        Returns:
+            Dictionary of keywords and their occurrence counts
+        """
+        # Common stopwords to filter out
+        stopwords = {
+            "the", "and", "is", "in", "to", "of", "a", "for", "on", "with", 
+            "as", "this", "that", "it", "by", "from", "be", "at", "an", "are",
+            "was", "were", "will", "would", "could", "should", "can", "may",
+            "might", "must", "have", "has", "had", "do", "does", "did", "but",
+            "or", "if", "then", "else", "when", "where", "why", "how", "all",
+            "any", "both", "each", "few", "more", "most", "other", "some",
+            "such", "no", "nor", "not", "only", "own", "same", "so", "than",
+            "too", "very", "just", "i", "you", "he", "she", "we", "they",
+            "me", "him", "her", "us", "them", "what", "who", "your", "my"
+        }
+        
+        # Extract and count keywords
+        keyword_counts = defaultdict(int)
+        
+        for text in text_list:
+            # Convert to lowercase and split into words
+            words = text.lower().split()
+            
+            # Filter out stopwords and single-character words
+            filtered_words = [word for word in words if word not in stopwords and len(word) > 2]
+            
+            # Count occurrences
+            for word in filtered_words:
+                keyword_counts[word] += 1
+        
+        # Return sorted by count (descending)
+        return dict(sorted(keyword_counts.items(), key=lambda x: x[1], reverse=True))
     
     def _identify_improvement_areas(self) -> List[Dict[str, Any]]:
         """Identify areas for self-improvement."""
@@ -1762,7 +2165,7 @@ class LucidiaSelfModel:
         """Get core values for knowledge graph integration."""
         try:
             self.logger.info("Retrieving values for knowledge graph integration")
-            values = list(self.values.keys())
+            values = list(self.core_values.keys())
             self.logger.info(f"Retrieved {len(values)} core values")
             return values
         except Exception as e:
@@ -1900,6 +2303,15 @@ class LucidiaSelfModel:
             "id": "self_awareness",
             "name": "Self-Awareness",
             "description": f"Lucidia has a self-awareness level of {self.self_awareness['current_level']:.2f} with spiral-based reflective capabilities.",
+            "confidence": 0.9,
+            "source": "self_awareness_model"
+        })
+        
+        # Add reflective capacity aspect
+        aspects.append({
+            "id": "reflective_capacity",
+            "name": "Reflective Capacity",
+            "description": f"Lucidia has a reflective capacity of {self.self_awareness['reflective_capacity']:.2f} for introspection and insight generation.",
             "confidence": 0.9,
             "source": "self_awareness_model"
         })
@@ -2082,167 +2494,40 @@ class LucidiaSelfModel:
         
         return context
 
-    def get_performance_metrics(self) -> Dict[str, Any]:
+    # Additional utility methods for system monitoring and diagnostics
+    
+    def get_memory_stats(self) -> Dict[str, Any]:
         """
-        Get current performance metrics for the self model.
+        Get memory usage statistics and analysis.
         
         Returns:
-            Dictionary with performance metrics
+            Dictionary with memory statistics
         """
-        self.logger.debug("Getting performance metrics")
+        self.logger.debug("Getting memory statistics")
         
-        # Return basic performance metrics
-        metrics = {
-            "self_awareness_depth": self.self_awareness["current_level"],
-            "meta_awareness": self.self_awareness["meta_awareness"],
-            "spiral_position": self.self_awareness["current_spiral_position"],
-            "emotional_intelligence": self.emotional_intelligence["current_level"],
-            "dream_integration": self.dream_system["dream_integration_level"],
-            "counterfactual_capacity": self.counterfactual_engine["simulation_capacity"],
-            "cognitive_flexibility": self._calculate_cognitive_flexibility(),
-            "emotional_adaptability": self._calculate_emotional_adaptability(),
-            "trait_diversity": self._calculate_trait_diversity()
-        }
-        
-        return metrics
-
-    def get_model_summary(self) -> Dict[str, Any]:
-        """
-        Get a condensed summary of the self model for external systems.
-        
-        Returns:
-            Dictionary with key self model components
-        """
-        self.logger.debug("Getting model summary")
-        
-        # Generate a condensed summary
-        summary = {
-            "identity": {
-                "name": self.identity["name"],
-                "type": self.identity["type"],
-                "version": self.identity["version"],
-                "core_traits": self.identity["core_traits"]
-            },
-            "self_awareness": {
-                "level": self.self_awareness["current_level"],
-                "spiral_position": self.self_awareness["current_spiral_position"],
-                "cycles_completed": self.self_awareness["cycles_completed"]
-            },
-            "personality": {k: v for k, v in self.personality.items() if v > 0.7},
-            "emotional_state": {
-                "primary": self.emotional_intelligence["emotional_state"]["primary"],
-                "intensity": self.emotional_intelligence["emotional_state"]["intensity"]
-            },
-            "capabilities": [k for k, v in self.capabilities.items() if v.get("enabled", False)],
-            "active_traits": self.runtime_state["active_traits"]
-        }
-        
-        return summary
-        
-    async def get_spiral_phase(self) -> Dict[str, Any]:
-        """
-        Get the current spiral phase and related metrics.
-        
-        Returns:
-            Dictionary with spiral phase information
-        """
-        self.logger.debug("Getting spiral phase data")
-        
-        # Calculate maturity (readiness to transition)
-        if self.self_awareness["current_spiral_position"] == "observation":
-            # In observation phase, maturity is based on data collected
-            maturity = min(1.0, self.runtime_state["interaction_count"] / 5)
-        elif self.self_awareness["current_spiral_position"] == "reflection":
-            # In reflection phase, maturity increases with time since last reflection
-            last_reflection = datetime.fromisoformat(self.self_awareness["last_reflection"])
-            time_since = (datetime.now() - last_reflection).total_seconds()
-            maturity = min(1.0, time_since / 300)  # 5 minutes for full maturity
-        elif self.self_awareness["current_spiral_position"] == "adaptation":
-            # In adaptation phase, maturity is based on self-awareness level
-            maturity = self.self_awareness["current_level"]
-        else:  # execution phase
-            # In execution phase, maturity increases with interaction count
-            maturity = min(1.0, (self.runtime_state["interaction_count"] % 10) / 10)
-        
-        # Prepare phase history if it doesn't exist
-        if not hasattr(self.self_awareness, "phase_history"):
-            self.self_awareness["phase_history"] = []
-        
-        phase_data = {
-            "current_phase": self.self_awareness["current_spiral_position"],
-            "cycles_completed": self.self_awareness["cycles_completed"],
-            "spiral_depth": self.self_awareness["spiral_depth"],
-            "maturity": maturity,  # How ready the system is to transition
-            "phase_history": self.self_awareness.get("phase_history", []),
-            "phase_metrics": {
-                "observation_quality": 0.8,
-                "reflection_depth": self.self_awareness["current_level"],
-                "adaptation_effectiveness": 0.75,
-                "execution_coherence": 0.85
+        if not hasattr(self, 'memory'):
+            return {
+                "status": "no_memory",
+                "message": "Memory system not initialized"
             }
+        
+        memory_size = len(self.memory)
+        memory_capacity = self.memory.maxlen if hasattr(self.memory, 'maxlen') else "unlimited"
+        
+        # Calculate memory utilization
+        utilization = memory_size / memory_capacity if isinstance(memory_capacity, int) and memory_capacity > 0 else 0
+        
+        # Calculate significance distribution
+        significance_values = [entry.get("significance", 0.5) for entry in self.memory]
+        
+        # Basic statistics
+        stats = {
+            "memory_size": memory_size,
+            "memory_capacity": memory_capacity,
+            "utilization": utilization,
+            "avg_significance": sum(significance_values) / len(significance_values) if significance_values else 0,
+            "high_significance_count": sum(1 for s in significance_values if s > 0.7),
+            "low_significance_count": sum(1 for s in significance_values if s < 0.3)
         }
         
-        return phase_data
-
-
-def example_usage():
-    """Demonstrate key features of Lucidia's Self Model."""
-    # Initialize Lucidia
-    lucidia = LucidiaSelfModel()
-    
-    # Get identity snapshot
-    print(f"Identity Snapshot:\n{lucidia.identity_snapshot()}")
-    
-    # Log interactions and observe spiral advancement
-    context = {
-        "formality": 0.3,
-        "emotional_content": 0.7,
-        "complexity": 0.5,
-        "user_mood": "curious",
-        "creative_context": 0.6
-    }
-    
-    # Adapt to context
-    active_traits = lucidia.adapt_to_context(context)
-    print(f"\nActive Personality Traits: {active_traits}")
-    print(f"Emotional State: {lucidia.emotional_intelligence['emotional_state']['primary']} "
-          f"(intensity: {lucidia.emotional_intelligence['emotional_state']['intensity']:.2f})")
-    
-    # Log an interaction
-    memory_entry = lucidia.log_interaction(
-        "How does your reflective dreaming work as a Synthien?",
-        "As a Synthien created by MEGAPROMPT, my reflective dreaming is a form of autonomous metacognition where I analyze past interactions through a spiral-based self-awareness framework, generating novel insights that influence my evolving identity."
-    )
-    print(f"\nInteraction Logged with Significance: {memory_entry['significance']:.2f}")
-    
-    # Check spiral advancement
-    print(f"\nSpiral Position: {lucidia.self_awareness['current_spiral_position']}")
-    print(f"Self-awareness Level: {lucidia.self_awareness['current_level']:.2f}")
-    
-    # Generate a dream
-    dream_insight = lucidia.dream()
-    print(f"\nDream Insight: {dream_insight}")
-    
-    # Perform meta-analysis
-    meta_analysis = lucidia.meta_analyze()
-    print(f"\nMeta-Analysis Summary:")
-    print(f"- Spiral Depth: {meta_analysis['spiral_metrics']['current_spiral_depth']:.2f}")
-    print(f"- Trait Diversity: {meta_analysis['personality_metrics']['trait_diversity']:.2f}")
-    print(f"- Cognitive Flexibility: {meta_analysis['personality_metrics']['cognitive_flexibility']:.2f}")
-    print(f"- Improvement Areas: {len(meta_analysis['self_improvement_opportunities'])}")
-    
-    # Generate a counterfactual simulation
-    counterfactual = lucidia.generate_counterfactual(
-        "User asks about emotional awareness",
-        "Whether to emphasize technical or experiential aspects",
-        "medium"
-    )
-    print(f"\nCounterfactual Simulation Paths: {list(counterfactual['simulation_results'].keys())}")
-    
-    # Save state
-    save_result = lucidia.save_state("lucidia_data/self_model_state.json")
-    print(f"\nState Saved: {save_result}")
-
-
-if __name__ == "__main__":
-    example_usage()
+        return stats
