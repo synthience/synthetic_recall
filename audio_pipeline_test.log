@@ -1,0 +1,643 @@
+2025-03-15 01:06:48,533 - audio_pipeline_test - INFO - Successfully imported NemoSTT
+2025-03-15 01:06:48,533 - asyncio - DEBUG - Using proactor: IocpProactor
+2025-03-15 01:06:48,536 - audio_pipeline_test - INFO - === STARTING AUDIO PIPELINE TEST ===
+2025-03-15 01:06:48,536 - audio_pipeline_test - INFO - Initializing STT service
+2025-03-15 01:06:48,536 - voice_core.stt.nemo_stt - INFO - Using Docker STT service at ws://localhost:5002/ws/transcribe
+2025-03-15 01:06:48,536 - voice_core.stt.nemo_stt - INFO - Initializing Docker STT client with endpoint: ws://localhost:5002/ws/transcribe
+2025-03-15 01:06:48,536 - voice_core.stt.nemo_stt - INFO - Connecting to STT Docker service at ws://localhost:5002/ws/transcribe
+2025-03-15 01:06:48,551 - voice_core.stt.nemo_stt - INFO - Connection attempt 1/3 to ws://localhost:5002/ws/transcribe
+2025-03-15 01:06:48,585 - websockets.client - DEBUG - = connection is CONNECTING
+2025-03-15 01:06:48,586 - websockets.client - DEBUG - > GET /ws/transcribe HTTP/1.1
+2025-03-15 01:06:48,586 - websockets.client - DEBUG - > Host: localhost:5002
+2025-03-15 01:06:48,586 - websockets.client - DEBUG - > Upgrade: websocket
+2025-03-15 01:06:48,586 - websockets.client - DEBUG - > Connection: Upgrade
+2025-03-15 01:06:48,586 - websockets.client - DEBUG - > Sec-WebSocket-Key: 654vrzBV3HZSdCqC3JeJ+w==
+2025-03-15 01:06:48,588 - websockets.client - DEBUG - > Sec-WebSocket-Version: 13
+2025-03-15 01:06:48,588 - websockets.client - DEBUG - > Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+2025-03-15 01:06:48,588 - websockets.client - DEBUG - > User-Agent: Python/3.12 websockets/15.0
+2025-03-15 01:06:48,597 - websockets.client - DEBUG - < HTTP/1.1 101 Switching Protocols
+2025-03-15 01:06:48,597 - websockets.client - DEBUG - < Upgrade: websocket
+2025-03-15 01:06:48,598 - websockets.client - DEBUG - < Connection: Upgrade
+2025-03-15 01:06:48,598 - websockets.client - DEBUG - < Sec-WebSocket-Accept: H4HUUZK9vE8fPQSCMsiWemXtHPY=
+2025-03-15 01:06:48,598 - websockets.client - DEBUG - < Sec-WebSocket-Extensions: permessage-deflate
+2025-03-15 01:06:48,598 - websockets.client - DEBUG - < date: Sat, 15 Mar 2025 01:06:48 GMT
+2025-03-15 01:06:48,598 - websockets.client - DEBUG - < server: uvicorn
+2025-03-15 01:06:48,598 - websockets.client - DEBUG - = connection is OPEN
+2025-03-15 01:06:48,599 - voice_core.stt.nemo_stt - INFO - Successfully connected to ws://localhost:5002/ws/transcribe
+2025-03-15 01:06:48,599 - websockets.client - DEBUG - > TEXT '{"type": "ping"}' [16 bytes]
+2025-03-15 01:06:48,601 - websockets.client - DEBUG - < TEXT '{"type":"pong"}' [15 bytes]
+2025-03-15 01:06:48,601 - voice_core.stt.nemo_stt - INFO - Successfully connected to ws://localhost:5002/ws/transcribe and received response: {"type":"pong"}
+2025-03-15 01:06:48,601 - voice_core.stt.nemo_stt - INFO - Successfully connected to Docker STT endpoint: ws://localhost:5002/ws/transcribe
+2025-03-15 01:06:48,602 - voice_core.stt.nemo_stt - INFO - Docker STT client initialized successfully
+2025-03-15 01:06:48,602 - audio_pipeline_test - INFO - STT service initialized successfully
+2025-03-15 01:06:48,602 - audio_pipeline_test - INFO - Test audio file test_data/test_audio.wav not found, generating test tone
+2025-03-15 01:06:48,605 - audio_pipeline_test - INFO - Generating test audio file at test_data/test_audio.wav
+2025-03-15 01:06:48,647 - audio_pipeline_test - INFO - Generated test audio file at test_data/test_audio.wav
+2025-03-15 01:06:48,649 - audio_pipeline_test - INFO - Loading test audio from test_data/test_audio.wav
+2025-03-15 01:06:48,655 - audio_pipeline_test - INFO - Loaded 96044 bytes of audio data
+2025-03-15 01:06:48,655 - audio_pipeline_test - INFO - Simulating audio streaming with 96044 bytes in chunks of 1600 bytes
+2025-03-15 01:06:48,656 - audio_pipeline_test - DEBUG - Processing chunk 1/61: 1600 bytes
+2025-03-15 01:06:48,718 - audio_pipeline_test - DEBUG - Processing chunk 2/61: 1600 bytes
+2025-03-15 01:06:48,780 - audio_pipeline_test - DEBUG - Processing chunk 3/61: 1600 bytes
+2025-03-15 01:06:48,842 - audio_pipeline_test - DEBUG - Processing chunk 4/61: 1600 bytes
+2025-03-15 01:06:48,904 - audio_pipeline_test - DEBUG - Processing chunk 5/61: 1600 bytes
+2025-03-15 01:06:48,966 - audio_pipeline_test - DEBUG - Processing chunk 6/61: 1600 bytes
+2025-03-15 01:06:49,028 - audio_pipeline_test - DEBUG - Processing chunk 7/61: 1600 bytes
+2025-03-15 01:06:49,089 - audio_pipeline_test - DEBUG - Processing chunk 8/61: 1600 bytes
+2025-03-15 01:06:49,150 - audio_pipeline_test - DEBUG - Processing chunk 9/61: 1600 bytes
+2025-03-15 01:06:49,213 - audio_pipeline_test - DEBUG - Processing chunk 10/61: 1600 bytes
+2025-03-15 01:06:49,274 - audio_pipeline_test - DEBUG - Processing chunk 11/61: 1600 bytes
+2025-03-15 01:06:49,336 - audio_pipeline_test - DEBUG - Processing chunk 12/61: 1600 bytes
+2025-03-15 01:06:49,397 - audio_pipeline_test - DEBUG - Processing chunk 13/61: 1600 bytes
+2025-03-15 01:06:49,458 - audio_pipeline_test - DEBUG - Processing chunk 14/61: 1600 bytes
+2025-03-15 01:06:49,520 - audio_pipeline_test - DEBUG - Processing chunk 15/61: 1600 bytes
+2025-03-15 01:06:49,581 - audio_pipeline_test - DEBUG - Processing chunk 16/61: 1600 bytes
+2025-03-15 01:06:49,644 - audio_pipeline_test - DEBUG - Processing chunk 17/61: 1600 bytes
+2025-03-15 01:06:49,706 - audio_pipeline_test - DEBUG - Processing chunk 18/61: 1600 bytes
+2025-03-15 01:06:49,769 - audio_pipeline_test - DEBUG - Processing chunk 19/61: 1600 bytes
+2025-03-15 01:06:49,831 - audio_pipeline_test - DEBUG - Processing chunk 20/61: 1600 bytes
+2025-03-15 01:06:49,894 - audio_pipeline_test - DEBUG - Processing chunk 21/61: 1600 bytes
+2025-03-15 01:06:49,956 - audio_pipeline_test - DEBUG - Processing chunk 22/61: 1600 bytes
+2025-03-15 01:06:50,017 - audio_pipeline_test - DEBUG - Processing chunk 23/61: 1600 bytes
+2025-03-15 01:06:50,080 - audio_pipeline_test - DEBUG - Processing chunk 24/61: 1600 bytes
+2025-03-15 01:06:50,141 - audio_pipeline_test - DEBUG - Processing chunk 25/61: 1600 bytes
+2025-03-15 01:06:50,204 - audio_pipeline_test - DEBUG - Processing chunk 26/61: 1600 bytes
+2025-03-15 01:06:50,265 - audio_pipeline_test - DEBUG - Processing chunk 27/61: 1600 bytes
+2025-03-15 01:06:50,327 - audio_pipeline_test - DEBUG - Processing chunk 28/61: 1600 bytes
+2025-03-15 01:06:50,391 - audio_pipeline_test - DEBUG - Processing chunk 29/61: 1600 bytes
+2025-03-15 01:06:50,453 - audio_pipeline_test - DEBUG - Processing chunk 30/61: 1600 bytes
+2025-03-15 01:06:50,514 - audio_pipeline_test - DEBUG - Processing chunk 31/61: 1600 bytes
+2025-03-15 01:06:50,578 - audio_pipeline_test - DEBUG - Processing chunk 32/61: 1600 bytes
+2025-03-15 01:06:50,641 - audio_pipeline_test - DEBUG - Processing chunk 33/61: 1600 bytes
+2025-03-15 01:06:50,703 - audio_pipeline_test - DEBUG - Processing chunk 34/61: 1600 bytes
+2025-03-15 01:06:50,767 - audio_pipeline_test - DEBUG - Processing chunk 35/61: 1600 bytes
+2025-03-15 01:06:50,831 - audio_pipeline_test - DEBUG - Processing chunk 36/61: 1600 bytes
+2025-03-15 01:06:50,895 - audio_pipeline_test - DEBUG - Processing chunk 37/61: 1600 bytes
+2025-03-15 01:06:50,958 - audio_pipeline_test - DEBUG - Processing chunk 38/61: 1600 bytes
+2025-03-15 01:06:51,020 - audio_pipeline_test - DEBUG - Processing chunk 39/61: 1600 bytes
+2025-03-15 01:06:51,083 - audio_pipeline_test - DEBUG - Processing chunk 40/61: 1600 bytes
+2025-03-15 01:06:51,143 - audio_pipeline_test - DEBUG - Processing chunk 41/61: 1600 bytes
+2025-03-15 01:06:51,206 - audio_pipeline_test - DEBUG - Processing chunk 42/61: 1600 bytes
+2025-03-15 01:06:51,268 - audio_pipeline_test - DEBUG - Processing chunk 43/61: 1600 bytes
+2025-03-15 01:06:51,331 - audio_pipeline_test - DEBUG - Processing chunk 44/61: 1600 bytes
+2025-03-15 01:06:51,392 - audio_pipeline_test - DEBUG - Processing chunk 45/61: 1600 bytes
+2025-03-15 01:06:51,455 - audio_pipeline_test - DEBUG - Processing chunk 46/61: 1600 bytes
+2025-03-15 01:06:51,517 - audio_pipeline_test - DEBUG - Processing chunk 47/61: 1600 bytes
+2025-03-15 01:06:51,578 - audio_pipeline_test - DEBUG - Processing chunk 48/61: 1600 bytes
+2025-03-15 01:06:51,640 - audio_pipeline_test - DEBUG - Processing chunk 49/61: 1600 bytes
+2025-03-15 01:06:51,703 - audio_pipeline_test - DEBUG - Processing chunk 50/61: 1600 bytes
+2025-03-15 01:06:51,704 - audio_pipeline_test - INFO - Processing audio buffer: 80000 bytes, 3.05s since last transcription
+2025-03-15 01:06:51,704 - audio_pipeline_test - DEBUG - Sending 80000 bytes to STT service
+2025-03-15 01:06:51,704 - audio_pipeline_test - INFO - Calling stt_service.transcribe...
+2025-03-15 01:06:51,704 - voice_core.stt.nemo_stt - INFO - Starting transcription (data type: <class 'bytes'>, size: 80000)
+2025-03-15 01:06:51,704 - voice_core.stt.nemo_stt - DEBUG - Sending transcription request to Docker service (ID: 619030bb-a644-4115-a773-68d777540510)
+2025-03-15 01:06:51,704 - voice_core.stt.nemo_stt - DEBUG - Sending 80000 bytes to Docker STT service
+2025-03-15 01:06:51,704 - voice_core.stt.nemo_stt - DEBUG - Sending 80000 bytes of audio data
+2025-03-15 01:06:51,704 - websockets.client - DEBUG - > BINARY 52 49 46 46 24 77 01 00 57 41 56 45 66 6d 74 20 ... 74 3e 20 3b 09 36 55 2f [80000 bytes]
+2025-03-15 01:06:51,708 - websockets.client - DEBUG - < TEXT '{"type":"status","message":"Processing audio..."}' [49 bytes]
+2025-03-15 01:06:51,710 - voice_core.stt.nemo_stt - DEBUG - Received response: {"type":"status","message":"Processing audio..."}
+2025-03-15 01:06:51,710 - voice_core.stt.nemo_stt - INFO - Docker STT service returned result: {'type': 'status', 'message': 'Processing audio...'}
+2025-03-15 01:06:51,710 - voice_core.stt.nemo_stt - INFO - Triggering on_transcription callbacks with result: {'type': 'status', 'message': 'Processing audio...', 'request_id': '619030bb-a644-4115-a773-68d777540510'}
+2025-03-15 01:06:51,710 - audio_pipeline_test - INFO - Received transcription: {'type': 'status', 'message': 'Processing audio...', 'request_id': '619030bb-a644-4115-a773-68d777540510'}
+2025-03-15 01:06:51,710 - voice_core.stt.nemo_stt - ERROR - Error in Docker STT transcription: 'NemoSTT' object has no attribute '_process_semantic'
+2025-03-15 01:06:51,710 - audio_pipeline_test - ERROR - Received error: {'error': "'NemoSTT' object has no attribute '_process_semantic'", 'request_id': '619030bb-a644-4115-a773-68d777540510'}
+2025-03-15 01:06:51,710 - voice_core.stt.nemo_stt - INFO - Transcription completed in 0.01 seconds
+2025-03-15 01:06:51,766 - audio_pipeline_test - DEBUG - Processing chunk 51/61: 1600 bytes
+2025-03-15 01:06:51,828 - audio_pipeline_test - DEBUG - Processing chunk 52/61: 1600 bytes
+2025-03-15 01:06:51,890 - audio_pipeline_test - DEBUG - Processing chunk 53/61: 1600 bytes
+2025-03-15 01:06:51,953 - audio_pipeline_test - DEBUG - Processing chunk 54/61: 1600 bytes
+2025-03-15 01:06:52,016 - audio_pipeline_test - DEBUG - Processing chunk 55/61: 1600 bytes
+2025-03-15 01:06:52,077 - audio_pipeline_test - DEBUG - Processing chunk 56/61: 1600 bytes
+2025-03-15 01:06:52,138 - audio_pipeline_test - DEBUG - Processing chunk 57/61: 1600 bytes
+2025-03-15 01:06:52,200 - audio_pipeline_test - DEBUG - Processing chunk 58/61: 1600 bytes
+2025-03-15 01:06:52,263 - audio_pipeline_test - DEBUG - Processing chunk 59/61: 1600 bytes
+2025-03-15 01:06:52,325 - audio_pipeline_test - DEBUG - Processing chunk 60/61: 1600 bytes
+2025-03-15 01:06:52,386 - audio_pipeline_test - DEBUG - Processing chunk 61/61: 44 bytes
+2025-03-15 01:06:52,449 - audio_pipeline_test - INFO - Processing remaining audio buffer: 16044 bytes
+2025-03-15 01:06:52,449 - voice_core.stt.nemo_stt - INFO - Starting transcription (data type: <class 'bytes'>, size: 16044)
+2025-03-15 01:06:52,450 - voice_core.stt.nemo_stt - DEBUG - Sending transcription request to Docker service (ID: 6dc9c1ed-52cf-4233-8514-40bfcc7ba840)
+2025-03-15 01:06:52,450 - voice_core.stt.nemo_stt - DEBUG - Sending 16044 bytes to Docker STT service
+2025-03-15 01:06:52,450 - voice_core.stt.nemo_stt - DEBUG - Sending 16044 bytes of audio data
+2025-03-15 01:06:52,450 - websockets.client - DEBUG - > BINARY 39 27 f2 1d c6 13 04 09 fe fd 06 f3 71 e8 90 de ... 35 d7 4b e0 53 ea 00 f5 [16044 bytes]
+2025-03-15 01:07:02,459 - voice_core.stt.nemo_stt - ERROR - Response timeout from STT service
+2025-03-15 01:07:02,459 - voice_core.stt.nemo_stt - INFO - Docker STT service returned result: {'error': 'Response timeout'}
+2025-03-15 01:07:02,459 - voice_core.stt.nemo_stt - INFO - Triggering on_transcription callbacks with result: {'error': 'Response timeout', 'request_id': '6dc9c1ed-52cf-4233-8514-40bfcc7ba840'}
+2025-03-15 01:07:02,459 - audio_pipeline_test - INFO - Received transcription: {'error': 'Response timeout', 'request_id': '6dc9c1ed-52cf-4233-8514-40bfcc7ba840'}
+2025-03-15 01:07:02,459 - voice_core.stt.nemo_stt - ERROR - Error in Docker STT transcription: 'NemoSTT' object has no attribute '_process_semantic'
+2025-03-15 01:07:02,460 - audio_pipeline_test - ERROR - Received error: {'error': "'NemoSTT' object has no attribute '_process_semantic'", 'request_id': '6dc9c1ed-52cf-4233-8514-40bfcc7ba840'}
+2025-03-15 01:07:02,460 - voice_core.stt.nemo_stt - INFO - Transcription completed in 10.01 seconds
+2025-03-15 01:07:02,460 - audio_pipeline_test - INFO - Waiting for transcription or error response...
+2025-03-15 01:07:02,460 - audio_pipeline_test - INFO - Test PASSED! Received transcription: {'error': 'Response timeout', 'request_id': '6dc9c1ed-52cf-4233-8514-40bfcc7ba840'}
+2025-03-15 01:07:02,460 - audio_pipeline_test - INFO - === AUDIO PIPELINE TEST COMPLETED ===
+2025-03-15 01:08:26,636 - audio_pipeline_test - INFO - Successfully imported NemoSTT
+2025-03-15 01:08:26,636 - asyncio - DEBUG - Using proactor: IocpProactor
+2025-03-15 01:08:26,638 - audio_pipeline_test - INFO - === STARTING AUDIO PIPELINE TEST ===
+2025-03-15 01:08:26,639 - audio_pipeline_test - INFO - Initializing STT service
+2025-03-15 01:08:26,639 - voice_core.stt.nemo_stt - INFO - Using Docker STT service at ws://localhost:5002/ws/transcribe
+2025-03-15 01:08:26,639 - voice_core.stt.nemo_stt - INFO - Initializing Docker STT client with endpoint: ws://localhost:5002/ws/transcribe
+2025-03-15 01:08:26,639 - voice_core.stt.nemo_stt - INFO - Connecting to STT Docker service at ws://localhost:5002/ws/transcribe
+2025-03-15 01:08:26,659 - voice_core.stt.nemo_stt - INFO - Connection attempt 1/3 to ws://localhost:5002/ws/transcribe
+2025-03-15 01:08:26,689 - websockets.client - DEBUG - = connection is CONNECTING
+2025-03-15 01:08:26,690 - websockets.client - DEBUG - > GET /ws/transcribe HTTP/1.1
+2025-03-15 01:08:26,690 - websockets.client - DEBUG - > Host: localhost:5002
+2025-03-15 01:08:26,690 - websockets.client - DEBUG - > Upgrade: websocket
+2025-03-15 01:08:26,691 - websockets.client - DEBUG - > Connection: Upgrade
+2025-03-15 01:08:26,691 - websockets.client - DEBUG - > Sec-WebSocket-Key: ShZ7a6dql7Ps/l+zNYmzxQ==
+2025-03-15 01:08:26,691 - websockets.client - DEBUG - > Sec-WebSocket-Version: 13
+2025-03-15 01:08:26,691 - websockets.client - DEBUG - > Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+2025-03-15 01:08:26,691 - websockets.client - DEBUG - > User-Agent: Python/3.12 websockets/15.0
+2025-03-15 01:08:26,698 - websockets.client - DEBUG - < HTTP/1.1 101 Switching Protocols
+2025-03-15 01:08:26,698 - websockets.client - DEBUG - < Upgrade: websocket
+2025-03-15 01:08:26,698 - websockets.client - DEBUG - < Connection: Upgrade
+2025-03-15 01:08:26,698 - websockets.client - DEBUG - < Sec-WebSocket-Accept: KRleTdsFLMicbzZCi3OQEnJYvj8=
+2025-03-15 01:08:26,698 - websockets.client - DEBUG - < Sec-WebSocket-Extensions: permessage-deflate
+2025-03-15 01:08:26,698 - websockets.client - DEBUG - < date: Sat, 15 Mar 2025 01:08:25 GMT
+2025-03-15 01:08:26,700 - websockets.client - DEBUG - < server: uvicorn
+2025-03-15 01:08:26,700 - websockets.client - DEBUG - = connection is OPEN
+2025-03-15 01:08:26,701 - voice_core.stt.nemo_stt - INFO - Successfully connected to ws://localhost:5002/ws/transcribe
+2025-03-15 01:08:26,701 - websockets.client - DEBUG - > TEXT '{"type": "ping"}' [16 bytes]
+2025-03-15 01:08:26,702 - websockets.client - DEBUG - < TEXT '{"type":"pong"}' [15 bytes]
+2025-03-15 01:08:26,703 - voice_core.stt.nemo_stt - INFO - Successfully connected to ws://localhost:5002/ws/transcribe and received response: {"type":"pong"}
+2025-03-15 01:08:26,703 - voice_core.stt.nemo_stt - INFO - Successfully connected to Docker STT endpoint: ws://localhost:5002/ws/transcribe
+2025-03-15 01:08:26,704 - voice_core.stt.nemo_stt - INFO - Docker STT client initialized successfully
+2025-03-15 01:08:26,704 - audio_pipeline_test - INFO - STT service initialized successfully
+2025-03-15 01:08:26,704 - audio_pipeline_test - INFO - Loading test audio from test_data/test_audio.wav
+2025-03-15 01:08:26,705 - audio_pipeline_test - INFO - Loaded 96044 bytes of audio data
+2025-03-15 01:08:26,705 - audio_pipeline_test - INFO - Simulating audio streaming with 96044 bytes in chunks of 1600 bytes
+2025-03-15 01:08:26,705 - audio_pipeline_test - DEBUG - Processing chunk 1/61: 1600 bytes
+2025-03-15 01:08:26,757 - audio_pipeline_test - DEBUG - Processing chunk 2/61: 1600 bytes
+2025-03-15 01:08:26,818 - audio_pipeline_test - DEBUG - Processing chunk 3/61: 1600 bytes
+2025-03-15 01:08:26,880 - audio_pipeline_test - DEBUG - Processing chunk 4/61: 1600 bytes
+2025-03-15 01:08:26,942 - audio_pipeline_test - DEBUG - Processing chunk 5/61: 1600 bytes
+2025-03-15 01:08:27,003 - audio_pipeline_test - DEBUG - Processing chunk 6/61: 1600 bytes
+2025-03-15 01:08:27,064 - audio_pipeline_test - DEBUG - Processing chunk 7/61: 1600 bytes
+2025-03-15 01:08:27,130 - audio_pipeline_test - DEBUG - Processing chunk 8/61: 1600 bytes
+2025-03-15 01:08:27,188 - audio_pipeline_test - DEBUG - Processing chunk 9/61: 1600 bytes
+2025-03-15 01:08:27,251 - audio_pipeline_test - DEBUG - Processing chunk 10/61: 1600 bytes
+2025-03-15 01:08:27,313 - audio_pipeline_test - DEBUG - Processing chunk 11/61: 1600 bytes
+2025-03-15 01:08:27,374 - audio_pipeline_test - DEBUG - Processing chunk 12/61: 1600 bytes
+2025-03-15 01:08:27,438 - audio_pipeline_test - DEBUG - Processing chunk 13/61: 1600 bytes
+2025-03-15 01:08:27,501 - audio_pipeline_test - DEBUG - Processing chunk 14/61: 1600 bytes
+2025-03-15 01:08:27,561 - audio_pipeline_test - DEBUG - Processing chunk 15/61: 1600 bytes
+2025-03-15 01:08:27,623 - audio_pipeline_test - DEBUG - Processing chunk 16/61: 1600 bytes
+2025-03-15 01:08:27,685 - audio_pipeline_test - DEBUG - Processing chunk 17/61: 1600 bytes
+2025-03-15 01:08:27,747 - audio_pipeline_test - DEBUG - Processing chunk 18/61: 1600 bytes
+2025-03-15 01:08:27,809 - audio_pipeline_test - DEBUG - Processing chunk 19/61: 1600 bytes
+2025-03-15 01:08:27,871 - audio_pipeline_test - DEBUG - Processing chunk 20/61: 1600 bytes
+2025-03-15 01:08:27,933 - audio_pipeline_test - DEBUG - Processing chunk 21/61: 1600 bytes
+2025-03-15 01:08:27,995 - audio_pipeline_test - DEBUG - Processing chunk 22/61: 1600 bytes
+2025-03-15 01:08:28,058 - audio_pipeline_test - DEBUG - Processing chunk 23/61: 1600 bytes
+2025-03-15 01:08:28,120 - audio_pipeline_test - DEBUG - Processing chunk 24/61: 1600 bytes
+2025-03-15 01:08:28,180 - audio_pipeline_test - DEBUG - Processing chunk 25/61: 1600 bytes
+2025-03-15 01:08:28,241 - audio_pipeline_test - DEBUG - Processing chunk 26/61: 1600 bytes
+2025-03-15 01:08:28,305 - audio_pipeline_test - DEBUG - Processing chunk 27/61: 1600 bytes
+2025-03-15 01:08:28,366 - audio_pipeline_test - DEBUG - Processing chunk 28/61: 1600 bytes
+2025-03-15 01:08:28,428 - audio_pipeline_test - DEBUG - Processing chunk 29/61: 1600 bytes
+2025-03-15 01:08:28,490 - audio_pipeline_test - DEBUG - Processing chunk 30/61: 1600 bytes
+2025-03-15 01:08:28,552 - audio_pipeline_test - DEBUG - Processing chunk 31/61: 1600 bytes
+2025-03-15 01:08:28,615 - audio_pipeline_test - DEBUG - Processing chunk 32/61: 1600 bytes
+2025-03-15 01:08:28,678 - audio_pipeline_test - DEBUG - Processing chunk 33/61: 1600 bytes
+2025-03-15 01:08:28,741 - audio_pipeline_test - DEBUG - Processing chunk 34/61: 1600 bytes
+2025-03-15 01:08:28,804 - audio_pipeline_test - DEBUG - Processing chunk 35/61: 1600 bytes
+2025-03-15 01:08:28,866 - audio_pipeline_test - DEBUG - Processing chunk 36/61: 1600 bytes
+2025-03-15 01:08:28,928 - audio_pipeline_test - DEBUG - Processing chunk 37/61: 1600 bytes
+2025-03-15 01:08:28,989 - audio_pipeline_test - DEBUG - Processing chunk 38/61: 1600 bytes
+2025-03-15 01:08:29,053 - audio_pipeline_test - DEBUG - Processing chunk 39/61: 1600 bytes
+2025-03-15 01:08:29,114 - audio_pipeline_test - DEBUG - Processing chunk 40/61: 1600 bytes
+2025-03-15 01:08:29,175 - audio_pipeline_test - DEBUG - Processing chunk 41/61: 1600 bytes
+2025-03-15 01:08:29,237 - audio_pipeline_test - DEBUG - Processing chunk 42/61: 1600 bytes
+2025-03-15 01:08:29,299 - audio_pipeline_test - DEBUG - Processing chunk 43/61: 1600 bytes
+2025-03-15 01:08:29,360 - audio_pipeline_test - DEBUG - Processing chunk 44/61: 1600 bytes
+2025-03-15 01:08:29,423 - audio_pipeline_test - DEBUG - Processing chunk 45/61: 1600 bytes
+2025-03-15 01:08:29,485 - audio_pipeline_test - DEBUG - Processing chunk 46/61: 1600 bytes
+2025-03-15 01:08:29,547 - audio_pipeline_test - DEBUG - Processing chunk 47/61: 1600 bytes
+2025-03-15 01:08:29,607 - audio_pipeline_test - DEBUG - Processing chunk 48/61: 1600 bytes
+2025-03-15 01:08:29,671 - audio_pipeline_test - DEBUG - Processing chunk 49/61: 1600 bytes
+2025-03-15 01:08:29,733 - audio_pipeline_test - DEBUG - Processing chunk 50/61: 1600 bytes
+2025-03-15 01:08:29,733 - audio_pipeline_test - INFO - Processing audio buffer: 80000 bytes, 3.03s since last transcription
+2025-03-15 01:08:29,736 - audio_pipeline_test - DEBUG - Sending 80000 bytes to STT service
+2025-03-15 01:08:29,741 - audio_pipeline_test - INFO - Calling stt_service.transcribe...
+2025-03-15 01:08:29,741 - voice_core.stt.nemo_stt - INFO - Starting transcription (data type: <class 'bytes'>, size: 80000)
+2025-03-15 01:08:29,741 - voice_core.stt.nemo_stt - DEBUG - Sending transcription request to Docker service (ID: b97c9f6e-e369-4d96-8ecb-2ab4cd774321)
+2025-03-15 01:08:29,742 - voice_core.stt.nemo_stt - DEBUG - Sending 80000 bytes to Docker STT service
+2025-03-15 01:08:29,742 - voice_core.stt.nemo_stt - DEBUG - Sending 80000 bytes of audio data
+2025-03-15 01:08:29,742 - websockets.client - DEBUG - > BINARY 52 49 46 46 24 77 01 00 57 41 56 45 66 6d 74 20 ... 74 3e 20 3b 09 36 55 2f [80000 bytes]
+2025-03-15 01:08:29,744 - websockets.client - DEBUG - < TEXT '{"type":"status","message":"Processing audio..."}' [49 bytes]
+2025-03-15 01:08:29,745 - voice_core.stt.nemo_stt - DEBUG - Received response: {"type":"status","message":"Processing audio..."}
+2025-03-15 01:08:29,745 - voice_core.stt.nemo_stt - INFO - Docker STT service returned result: {'type': 'status', 'message': 'Processing audio...'}
+2025-03-15 01:08:29,745 - voice_core.stt.nemo_stt - INFO - Triggering on_transcription callbacks with result: {'type': 'status', 'message': 'Processing audio...', 'request_id': 'b97c9f6e-e369-4d96-8ecb-2ab4cd774321'}
+2025-03-15 01:08:29,745 - audio_pipeline_test - INFO - Received transcription: {'type': 'status', 'message': 'Processing audio...', 'request_id': 'b97c9f6e-e369-4d96-8ecb-2ab4cd774321'}
+2025-03-15 01:08:29,745 - voice_core.stt.nemo_stt - INFO - Transcription completed in 0.00 seconds
+2025-03-15 01:08:29,797 - audio_pipeline_test - DEBUG - Processing chunk 51/61: 1600 bytes
+2025-03-15 01:08:29,859 - audio_pipeline_test - DEBUG - Processing chunk 52/61: 1600 bytes
+2025-03-15 01:08:29,920 - audio_pipeline_test - DEBUG - Processing chunk 53/61: 1600 bytes
+2025-03-15 01:08:29,982 - audio_pipeline_test - DEBUG - Processing chunk 54/61: 1600 bytes
+2025-03-15 01:08:30,044 - audio_pipeline_test - DEBUG - Processing chunk 55/61: 1600 bytes
+2025-03-15 01:08:30,105 - audio_pipeline_test - DEBUG - Processing chunk 56/61: 1600 bytes
+2025-03-15 01:08:30,168 - audio_pipeline_test - DEBUG - Processing chunk 57/61: 1600 bytes
+2025-03-15 01:08:30,228 - audio_pipeline_test - DEBUG - Processing chunk 58/61: 1600 bytes
+2025-03-15 01:08:30,289 - audio_pipeline_test - DEBUG - Processing chunk 59/61: 1600 bytes
+2025-03-15 01:08:30,351 - audio_pipeline_test - DEBUG - Processing chunk 60/61: 1600 bytes
+2025-03-15 01:08:30,412 - audio_pipeline_test - DEBUG - Processing chunk 61/61: 44 bytes
+2025-03-15 01:08:30,474 - audio_pipeline_test - INFO - Processing remaining audio buffer: 16044 bytes
+2025-03-15 01:08:30,475 - voice_core.stt.nemo_stt - INFO - Starting transcription (data type: <class 'bytes'>, size: 16044)
+2025-03-15 01:08:30,476 - voice_core.stt.nemo_stt - DEBUG - Sending transcription request to Docker service (ID: dd3319b6-4f7c-4447-9f94-0144df1a84c8)
+2025-03-15 01:08:30,476 - voice_core.stt.nemo_stt - DEBUG - Sending 16044 bytes to Docker STT service
+2025-03-15 01:08:30,477 - voice_core.stt.nemo_stt - DEBUG - Sending 16044 bytes of audio data
+2025-03-15 01:08:30,477 - websockets.client - DEBUG - > BINARY 39 27 f2 1d c6 13 04 09 fe fd 06 f3 71 e8 90 de ... 35 d7 4b e0 53 ea 00 f5 [16044 bytes]
+2025-03-15 01:08:31,219 - websockets.client - DEBUG - < TEXT '{"type":"transcription","text":"I\'m going to g...me":1.4734218120574951}' [121 bytes]
+2025-03-15 01:08:31,220 - voice_core.stt.nemo_stt - DEBUG - Received response: {"type":"transcription","text":"I'm going to go to the next one.","confidence":0.95,"processing_time":1.4734218120574951}
+2025-03-15 01:08:31,220 - voice_core.stt.nemo_stt - INFO - Docker STT service returned result: {'text': "I'm going to go to the next one.", 'confidence': 0.95}
+2025-03-15 01:08:31,220 - voice_core.stt.nemo_stt - INFO - Triggering on_transcription callbacks with result: {'text': "I'm going to go to the next one.", 'confidence': 0.95, 'request_id': 'dd3319b6-4f7c-4447-9f94-0144df1a84c8'}
+2025-03-15 01:08:31,221 - audio_pipeline_test - INFO - Received transcription: {'text': "I'm going to go to the next one.", 'confidence': 0.95, 'request_id': 'dd3319b6-4f7c-4447-9f94-0144df1a84c8'}
+2025-03-15 01:08:31,221 - voice_core.stt.nemo_stt - INFO - Transcription completed in 0.75 seconds
+2025-03-15 01:08:31,221 - audio_pipeline_test - INFO - Waiting for transcription or error response...
+2025-03-15 01:08:31,221 - websockets.client - DEBUG - < TEXT '{"type":"status","message":"Processing semantic data..."}' [57 bytes]
+2025-03-15 01:08:31,221 - websockets.client - DEBUG - < TEXT '{"type":"status","message":"Processing audio..."}' [49 bytes]
+2025-03-15 01:08:31,222 - audio_pipeline_test - INFO - Test PASSED! Received transcription: {'text': "I'm going to go to the next one.", 'confidence': 0.95, 'request_id': 'dd3319b6-4f7c-4447-9f94-0144df1a84c8'}
+2025-03-15 01:08:31,222 - audio_pipeline_test - INFO - === AUDIO PIPELINE TEST COMPLETED ===
+2025-03-15 01:08:46,692 - audio_pipeline_test - INFO - Successfully imported NemoSTT
+2025-03-15 01:08:46,693 - asyncio - DEBUG - Using proactor: IocpProactor
+2025-03-15 01:08:46,706 - audio_pipeline_test - INFO - === STARTING AUDIO PIPELINE TEST ===
+2025-03-15 01:08:46,707 - audio_pipeline_test - INFO - Initializing STT service
+2025-03-15 01:08:46,707 - voice_core.stt.nemo_stt - INFO - Using Docker STT service at ws://localhost:5002/ws/transcribe
+2025-03-15 01:08:46,707 - voice_core.stt.nemo_stt - INFO - Initializing Docker STT client with endpoint: ws://localhost:5002/ws/transcribe
+2025-03-15 01:08:46,707 - voice_core.stt.nemo_stt - INFO - Connecting to STT Docker service at ws://localhost:5002/ws/transcribe
+2025-03-15 01:08:46,726 - voice_core.stt.nemo_stt - INFO - Connection attempt 1/3 to ws://localhost:5002/ws/transcribe
+2025-03-15 01:08:46,760 - websockets.client - DEBUG - = connection is CONNECTING
+2025-03-15 01:08:46,760 - websockets.client - DEBUG - > GET /ws/transcribe HTTP/1.1
+2025-03-15 01:08:46,760 - websockets.client - DEBUG - > Host: localhost:5002
+2025-03-15 01:08:46,761 - websockets.client - DEBUG - > Upgrade: websocket
+2025-03-15 01:08:46,761 - websockets.client - DEBUG - > Connection: Upgrade
+2025-03-15 01:08:46,761 - websockets.client - DEBUG - > Sec-WebSocket-Key: YQctRWQMHM5f1rDwQdx2Dg==
+2025-03-15 01:08:46,761 - websockets.client - DEBUG - > Sec-WebSocket-Version: 13
+2025-03-15 01:08:46,761 - websockets.client - DEBUG - > Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+2025-03-15 01:08:46,761 - websockets.client - DEBUG - > User-Agent: Python/3.12 websockets/15.0
+2025-03-15 01:08:46,765 - websockets.client - DEBUG - < HTTP/1.1 101 Switching Protocols
+2025-03-15 01:08:46,765 - websockets.client - DEBUG - < Upgrade: websocket
+2025-03-15 01:08:46,767 - websockets.client - DEBUG - < Connection: Upgrade
+2025-03-15 01:08:46,767 - websockets.client - DEBUG - < Sec-WebSocket-Accept: 9JrX3DH/NKNuRuL3pkxmK4fv1eo=
+2025-03-15 01:08:46,767 - websockets.client - DEBUG - < Sec-WebSocket-Extensions: permessage-deflate
+2025-03-15 01:08:46,767 - websockets.client - DEBUG - < date: Sat, 15 Mar 2025 01:08:46 GMT
+2025-03-15 01:08:46,768 - websockets.client - DEBUG - < server: uvicorn
+2025-03-15 01:08:46,768 - websockets.client - DEBUG - = connection is OPEN
+2025-03-15 01:08:46,769 - voice_core.stt.nemo_stt - INFO - Successfully connected to ws://localhost:5002/ws/transcribe
+2025-03-15 01:08:46,769 - websockets.client - DEBUG - > TEXT '{"type": "ping"}' [16 bytes]
+2025-03-15 01:08:46,770 - websockets.client - DEBUG - < TEXT '{"type":"pong"}' [15 bytes]
+2025-03-15 01:08:46,770 - voice_core.stt.nemo_stt - INFO - Successfully connected to ws://localhost:5002/ws/transcribe and received response: {"type":"pong"}
+2025-03-15 01:08:46,772 - voice_core.stt.nemo_stt - INFO - Successfully connected to Docker STT endpoint: ws://localhost:5002/ws/transcribe
+2025-03-15 01:08:46,772 - voice_core.stt.nemo_stt - INFO - Docker STT client initialized successfully
+2025-03-15 01:08:46,772 - audio_pipeline_test - INFO - STT service initialized successfully
+2025-03-15 01:08:46,772 - audio_pipeline_test - INFO - Loading test audio from test_data/test_audio.wav
+2025-03-15 01:08:46,773 - audio_pipeline_test - INFO - Loaded 96044 bytes of audio data
+2025-03-15 01:08:46,773 - audio_pipeline_test - INFO - Simulating audio streaming with 96044 bytes in chunks of 1600 bytes
+2025-03-15 01:08:46,773 - audio_pipeline_test - DEBUG - Processing chunk 1/61: 1600 bytes
+2025-03-15 01:08:46,829 - audio_pipeline_test - DEBUG - Processing chunk 2/61: 1600 bytes
+2025-03-15 01:08:46,893 - audio_pipeline_test - DEBUG - Processing chunk 3/61: 1600 bytes
+2025-03-15 01:08:46,955 - audio_pipeline_test - DEBUG - Processing chunk 4/61: 1600 bytes
+2025-03-15 01:08:47,018 - audio_pipeline_test - DEBUG - Processing chunk 5/61: 1600 bytes
+2025-03-15 01:08:47,081 - audio_pipeline_test - DEBUG - Processing chunk 6/61: 1600 bytes
+2025-03-15 01:08:47,143 - audio_pipeline_test - DEBUG - Processing chunk 7/61: 1600 bytes
+2025-03-15 01:08:47,207 - audio_pipeline_test - DEBUG - Processing chunk 8/61: 1600 bytes
+2025-03-15 01:08:47,269 - audio_pipeline_test - DEBUG - Processing chunk 9/61: 1600 bytes
+2025-03-15 01:08:47,330 - audio_pipeline_test - DEBUG - Processing chunk 10/61: 1600 bytes
+2025-03-15 01:08:47,390 - audio_pipeline_test - DEBUG - Processing chunk 11/61: 1600 bytes
+2025-03-15 01:08:47,453 - audio_pipeline_test - DEBUG - Processing chunk 12/61: 1600 bytes
+2025-03-15 01:08:47,513 - audio_pipeline_test - DEBUG - Processing chunk 13/61: 1600 bytes
+2025-03-15 01:08:47,576 - audio_pipeline_test - DEBUG - Processing chunk 14/61: 1600 bytes
+2025-03-15 01:08:47,638 - audio_pipeline_test - DEBUG - Processing chunk 15/61: 1600 bytes
+2025-03-15 01:08:47,699 - audio_pipeline_test - DEBUG - Processing chunk 16/61: 1600 bytes
+2025-03-15 01:08:47,760 - audio_pipeline_test - DEBUG - Processing chunk 17/61: 1600 bytes
+2025-03-15 01:08:47,822 - audio_pipeline_test - DEBUG - Processing chunk 18/61: 1600 bytes
+2025-03-15 01:08:47,884 - audio_pipeline_test - DEBUG - Processing chunk 19/61: 1600 bytes
+2025-03-15 01:08:47,947 - audio_pipeline_test - DEBUG - Processing chunk 20/61: 1600 bytes
+2025-03-15 01:08:48,009 - audio_pipeline_test - DEBUG - Processing chunk 21/61: 1600 bytes
+2025-03-15 01:08:48,070 - audio_pipeline_test - DEBUG - Processing chunk 22/61: 1600 bytes
+2025-03-15 01:08:48,133 - audio_pipeline_test - DEBUG - Processing chunk 23/61: 1600 bytes
+2025-03-15 01:08:48,194 - audio_pipeline_test - DEBUG - Processing chunk 24/61: 1600 bytes
+2025-03-15 01:08:48,256 - audio_pipeline_test - DEBUG - Processing chunk 25/61: 1600 bytes
+2025-03-15 01:08:48,320 - audio_pipeline_test - DEBUG - Processing chunk 26/61: 1600 bytes
+2025-03-15 01:08:48,381 - audio_pipeline_test - DEBUG - Processing chunk 27/61: 1600 bytes
+2025-03-15 01:08:48,443 - audio_pipeline_test - DEBUG - Processing chunk 28/61: 1600 bytes
+2025-03-15 01:08:48,505 - audio_pipeline_test - DEBUG - Processing chunk 29/61: 1600 bytes
+2025-03-15 01:08:48,566 - audio_pipeline_test - DEBUG - Processing chunk 30/61: 1600 bytes
+2025-03-15 01:08:48,628 - audio_pipeline_test - DEBUG - Processing chunk 31/61: 1600 bytes
+2025-03-15 01:08:48,691 - audio_pipeline_test - DEBUG - Processing chunk 32/61: 1600 bytes
+2025-03-15 01:08:48,753 - audio_pipeline_test - DEBUG - Processing chunk 33/61: 1600 bytes
+2025-03-15 01:08:48,814 - audio_pipeline_test - DEBUG - Processing chunk 34/61: 1600 bytes
+2025-03-15 01:08:48,876 - audio_pipeline_test - DEBUG - Processing chunk 35/61: 1600 bytes
+2025-03-15 01:08:48,940 - audio_pipeline_test - DEBUG - Processing chunk 36/61: 1600 bytes
+2025-03-15 01:08:49,000 - audio_pipeline_test - DEBUG - Processing chunk 37/61: 1600 bytes
+2025-03-15 01:08:49,061 - audio_pipeline_test - DEBUG - Processing chunk 38/61: 1600 bytes
+2025-03-15 01:08:49,124 - audio_pipeline_test - DEBUG - Processing chunk 39/61: 1600 bytes
+2025-03-15 01:08:49,185 - audio_pipeline_test - DEBUG - Processing chunk 40/61: 1600 bytes
+2025-03-15 01:08:49,247 - audio_pipeline_test - DEBUG - Processing chunk 41/61: 1600 bytes
+2025-03-15 01:08:49,310 - audio_pipeline_test - DEBUG - Processing chunk 42/61: 1600 bytes
+2025-03-15 01:08:49,371 - audio_pipeline_test - DEBUG - Processing chunk 43/61: 1600 bytes
+2025-03-15 01:08:49,434 - audio_pipeline_test - DEBUG - Processing chunk 44/61: 1600 bytes
+2025-03-15 01:08:49,496 - audio_pipeline_test - DEBUG - Processing chunk 45/61: 1600 bytes
+2025-03-15 01:08:49,559 - audio_pipeline_test - DEBUG - Processing chunk 46/61: 1600 bytes
+2025-03-15 01:08:49,620 - audio_pipeline_test - DEBUG - Processing chunk 47/61: 1600 bytes
+2025-03-15 01:08:49,683 - audio_pipeline_test - DEBUG - Processing chunk 48/61: 1600 bytes
+2025-03-15 01:08:49,745 - audio_pipeline_test - DEBUG - Processing chunk 49/61: 1600 bytes
+2025-03-15 01:08:49,808 - audio_pipeline_test - DEBUG - Processing chunk 50/61: 1600 bytes
+2025-03-15 01:08:49,809 - audio_pipeline_test - INFO - Processing audio buffer: 80000 bytes, 3.04s since last transcription
+2025-03-15 01:08:49,809 - audio_pipeline_test - DEBUG - Sending 80000 bytes to STT service
+2025-03-15 01:08:49,809 - audio_pipeline_test - INFO - Calling stt_service.transcribe...
+2025-03-15 01:08:49,809 - voice_core.stt.nemo_stt - INFO - Starting transcription (data type: <class 'bytes'>, size: 80000)
+2025-03-15 01:08:49,809 - voice_core.stt.nemo_stt - DEBUG - Sending transcription request to Docker service (ID: 5fc41ab2-3f94-40fd-a969-647e0e09580a)
+2025-03-15 01:08:49,809 - voice_core.stt.nemo_stt - DEBUG - Sending 80000 bytes to Docker STT service
+2025-03-15 01:08:49,809 - voice_core.stt.nemo_stt - DEBUG - Sending 80000 bytes of audio data
+2025-03-15 01:08:49,809 - websockets.client - DEBUG - > BINARY 52 49 46 46 24 77 01 00 57 41 56 45 66 6d 74 20 ... 74 3e 20 3b 09 36 55 2f [80000 bytes]
+2025-03-15 01:08:49,812 - websockets.client - DEBUG - < TEXT '{"type":"status","message":"Processing audio..."}' [49 bytes]
+2025-03-15 01:08:49,812 - voice_core.stt.nemo_stt - DEBUG - Received response: {"type":"status","message":"Processing audio..."}
+2025-03-15 01:08:49,812 - voice_core.stt.nemo_stt - INFO - Docker STT service returned result: {'type': 'status', 'message': 'Processing audio...'}
+2025-03-15 01:08:49,813 - voice_core.stt.nemo_stt - INFO - Triggering on_transcription callbacks with result: {'type': 'status', 'message': 'Processing audio...', 'request_id': '5fc41ab2-3f94-40fd-a969-647e0e09580a'}
+2025-03-15 01:08:49,813 - audio_pipeline_test - INFO - Received transcription: {'type': 'status', 'message': 'Processing audio...', 'request_id': '5fc41ab2-3f94-40fd-a969-647e0e09580a'}
+2025-03-15 01:08:49,813 - voice_core.stt.nemo_stt - INFO - Transcription completed in 0.00 seconds
+2025-03-15 01:08:49,870 - audio_pipeline_test - DEBUG - Processing chunk 51/61: 1600 bytes
+2025-03-15 01:08:49,932 - audio_pipeline_test - DEBUG - Processing chunk 52/61: 1600 bytes
+2025-03-15 01:08:49,995 - audio_pipeline_test - DEBUG - Processing chunk 53/61: 1600 bytes
+2025-03-15 01:08:50,058 - audio_pipeline_test - DEBUG - Processing chunk 54/61: 1600 bytes
+2025-03-15 01:08:50,120 - audio_pipeline_test - DEBUG - Processing chunk 55/61: 1600 bytes
+2025-03-15 01:08:50,179 - audio_pipeline_test - DEBUG - Processing chunk 56/61: 1600 bytes
+2025-03-15 01:08:50,242 - audio_pipeline_test - DEBUG - Processing chunk 57/61: 1600 bytes
+2025-03-15 01:08:50,303 - audio_pipeline_test - DEBUG - Processing chunk 58/61: 1600 bytes
+2025-03-15 01:08:50,365 - audio_pipeline_test - DEBUG - Processing chunk 59/61: 1600 bytes
+2025-03-15 01:08:50,426 - audio_pipeline_test - DEBUG - Processing chunk 60/61: 1600 bytes
+2025-03-15 01:08:50,489 - audio_pipeline_test - DEBUG - Processing chunk 61/61: 44 bytes
+2025-03-15 01:08:50,551 - audio_pipeline_test - INFO - Processing remaining audio buffer: 16044 bytes
+2025-03-15 01:08:50,551 - voice_core.stt.nemo_stt - INFO - Starting transcription (data type: <class 'bytes'>, size: 16044)
+2025-03-15 01:08:50,552 - voice_core.stt.nemo_stt - DEBUG - Sending transcription request to Docker service (ID: c9ff343f-6688-471b-841c-8c8b108fc263)
+2025-03-15 01:08:50,552 - voice_core.stt.nemo_stt - DEBUG - Sending 16044 bytes to Docker STT service
+2025-03-15 01:08:50,552 - voice_core.stt.nemo_stt - DEBUG - Sending 16044 bytes of audio data
+2025-03-15 01:08:50,552 - websockets.client - DEBUG - > BINARY 39 27 f2 1d c6 13 04 09 fe fd 06 f3 71 e8 90 de ... 35 d7 4b e0 53 ea 00 f5 [16044 bytes]
+2025-03-15 01:08:51,022 - websockets.client - DEBUG - < TEXT '{"type":"transcription","text":"I\'m going to g...me":1.2088589668273926}' [121 bytes]
+2025-03-15 01:08:51,022 - websockets.client - DEBUG - < TEXT '{"type":"status","message":"Processing semantic data..."}' [57 bytes]
+2025-03-15 01:08:51,022 - voice_core.stt.nemo_stt - DEBUG - Received response: {"type":"transcription","text":"I'm going to go to the next one.","confidence":0.95,"processing_time":1.2088589668273926}
+2025-03-15 01:08:51,022 - voice_core.stt.nemo_stt - INFO - Docker STT service returned result: {'text': "I'm going to go to the next one.", 'confidence': 0.95}
+2025-03-15 01:08:51,022 - voice_core.stt.nemo_stt - INFO - Triggering on_transcription callbacks with result: {'text': "I'm going to go to the next one.", 'confidence': 0.95, 'request_id': 'c9ff343f-6688-471b-841c-8c8b108fc263'}
+2025-03-15 01:08:51,022 - audio_pipeline_test - INFO - Received transcription: {'text': "I'm going to go to the next one.", 'confidence': 0.95, 'request_id': 'c9ff343f-6688-471b-841c-8c8b108fc263'}
+2025-03-15 01:08:51,022 - voice_core.stt.nemo_stt - INFO - Transcription completed in 0.47 seconds
+2025-03-15 01:08:51,022 - audio_pipeline_test - INFO - Waiting for transcription or error response...
+2025-03-15 01:08:51,024 - websockets.client - DEBUG - < TEXT '{"type":"status","message":"Processing audio..."}' [49 bytes]
+2025-03-15 01:08:51,024 - audio_pipeline_test - INFO - Test PASSED! Received transcription: {'text': "I'm going to go to the next one.", 'confidence': 0.95, 'request_id': 'c9ff343f-6688-471b-841c-8c8b108fc263'}
+2025-03-15 01:08:51,024 - audio_pipeline_test - INFO - === AUDIO PIPELINE TEST COMPLETED ===
+2025-03-15 01:16:52,992 - audio_pipeline_test - INFO - Successfully imported NemoSTT
+2025-03-15 01:16:52,993 - asyncio - DEBUG - Using proactor: IocpProactor
+2025-03-15 01:16:52,996 - audio_pipeline_test - INFO - === STARTING AUDIO PIPELINE TEST ===
+2025-03-15 01:16:52,996 - audio_pipeline_test - INFO - Initializing STT service
+2025-03-15 01:16:52,997 - voice_core.stt.nemo_stt - INFO - Using Docker STT service at ws://localhost:5002/ws/transcribe
+2025-03-15 01:16:52,997 - voice_core.stt.nemo_stt - INFO - Initializing Docker STT client with endpoint: ws://localhost:5002/ws/transcribe
+2025-03-15 01:16:52,997 - voice_core.stt.nemo_stt - INFO - Connecting to STT Docker service at ws://localhost:5002/ws/transcribe
+2025-03-15 01:16:53,042 - voice_core.stt.nemo_stt - INFO - Connection attempt 1/3 to ws://localhost:5002/ws/transcribe
+2025-03-15 01:16:53,102 - websockets.client - DEBUG - = connection is CONNECTING
+2025-03-15 01:16:53,103 - websockets.client - DEBUG - > GET /ws/transcribe HTTP/1.1
+2025-03-15 01:16:53,103 - websockets.client - DEBUG - > Host: localhost:5002
+2025-03-15 01:16:53,103 - websockets.client - DEBUG - > Upgrade: websocket
+2025-03-15 01:16:53,103 - websockets.client - DEBUG - > Connection: Upgrade
+2025-03-15 01:16:53,103 - websockets.client - DEBUG - > Sec-WebSocket-Key: 5XmYeIcwbn0ETaBZjIGpNw==
+2025-03-15 01:16:53,104 - websockets.client - DEBUG - > Sec-WebSocket-Version: 13
+2025-03-15 01:16:53,104 - websockets.client - DEBUG - > Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+2025-03-15 01:16:53,104 - websockets.client - DEBUG - > User-Agent: Python/3.12 websockets/15.0
+2025-03-15 01:16:53,193 - websockets.client - DEBUG - < HTTP/1.1 101 Switching Protocols
+2025-03-15 01:16:53,194 - websockets.client - DEBUG - < Upgrade: websocket
+2025-03-15 01:16:53,194 - websockets.client - DEBUG - < Connection: Upgrade
+2025-03-15 01:16:53,195 - websockets.client - DEBUG - < Sec-WebSocket-Accept: XNsXI7GNGpBMg4VJR+D/AYm187U=
+2025-03-15 01:16:53,195 - websockets.client - DEBUG - < Sec-WebSocket-Extensions: permessage-deflate
+2025-03-15 01:16:53,195 - websockets.client - DEBUG - < date: Sat, 15 Mar 2025 01:16:52 GMT
+2025-03-15 01:16:53,195 - websockets.client - DEBUG - < server: uvicorn
+2025-03-15 01:16:53,195 - websockets.client - DEBUG - = connection is OPEN
+2025-03-15 01:16:53,196 - voice_core.stt.nemo_stt - INFO - Successfully connected to ws://localhost:5002/ws/transcribe
+2025-03-15 01:16:53,196 - websockets.client - DEBUG - > TEXT '{"type": "ping"}' [16 bytes]
+2025-03-15 01:16:53,208 - websockets.client - DEBUG - < TEXT '{"type":"pong"}' [15 bytes]
+2025-03-15 01:16:53,208 - voice_core.stt.nemo_stt - INFO - Successfully connected to ws://localhost:5002/ws/transcribe and received response: {"type":"pong"}
+2025-03-15 01:16:53,209 - voice_core.stt.nemo_stt - INFO - Successfully connected to Docker STT endpoint: ws://localhost:5002/ws/transcribe
+2025-03-15 01:16:53,209 - voice_core.stt.nemo_stt - INFO - Docker STT client initialized successfully
+2025-03-15 01:16:53,209 - audio_pipeline_test - INFO - STT service initialized successfully
+2025-03-15 01:16:53,209 - audio_pipeline_test - INFO - Loading test audio from test_data/test_audio.wav
+2025-03-15 01:16:53,211 - audio_pipeline_test - INFO - Loaded 96044 bytes of audio data
+2025-03-15 01:16:53,211 - audio_pipeline_test - INFO - Simulating audio streaming with 96044 bytes in chunks of 1600 bytes
+2025-03-15 01:16:53,211 - audio_pipeline_test - DEBUG - Processing chunk 1/61: 1600 bytes
+2025-03-15 01:16:53,274 - audio_pipeline_test - DEBUG - Processing chunk 2/61: 1600 bytes
+2025-03-15 01:16:53,337 - audio_pipeline_test - DEBUG - Processing chunk 3/61: 1600 bytes
+2025-03-15 01:16:53,399 - audio_pipeline_test - DEBUG - Processing chunk 4/61: 1600 bytes
+2025-03-15 01:16:53,461 - audio_pipeline_test - DEBUG - Processing chunk 5/61: 1600 bytes
+2025-03-15 01:16:53,522 - audio_pipeline_test - DEBUG - Processing chunk 6/61: 1600 bytes
+2025-03-15 01:16:53,582 - audio_pipeline_test - DEBUG - Processing chunk 7/61: 1600 bytes
+2025-03-15 01:16:53,645 - audio_pipeline_test - DEBUG - Processing chunk 8/61: 1600 bytes
+2025-03-15 01:16:53,707 - audio_pipeline_test - DEBUG - Processing chunk 9/61: 1600 bytes
+2025-03-15 01:16:53,770 - audio_pipeline_test - DEBUG - Processing chunk 10/61: 1600 bytes
+2025-03-15 01:16:53,832 - audio_pipeline_test - DEBUG - Processing chunk 11/61: 1600 bytes
+2025-03-15 01:16:53,895 - audio_pipeline_test - DEBUG - Processing chunk 12/61: 1600 bytes
+2025-03-15 01:16:53,958 - audio_pipeline_test - DEBUG - Processing chunk 13/61: 1600 bytes
+2025-03-15 01:16:54,019 - audio_pipeline_test - DEBUG - Processing chunk 14/61: 1600 bytes
+2025-03-15 01:16:54,081 - audio_pipeline_test - DEBUG - Processing chunk 15/61: 1600 bytes
+2025-03-15 01:16:54,142 - audio_pipeline_test - DEBUG - Processing chunk 16/61: 1600 bytes
+2025-03-15 01:16:54,205 - audio_pipeline_test - DEBUG - Processing chunk 17/61: 1600 bytes
+2025-03-15 01:16:54,266 - audio_pipeline_test - DEBUG - Processing chunk 18/61: 1600 bytes
+2025-03-15 01:16:54,326 - audio_pipeline_test - DEBUG - Processing chunk 19/61: 1600 bytes
+2025-03-15 01:16:54,387 - audio_pipeline_test - DEBUG - Processing chunk 20/61: 1600 bytes
+2025-03-15 01:16:54,449 - audio_pipeline_test - DEBUG - Processing chunk 21/61: 1600 bytes
+2025-03-15 01:16:54,510 - audio_pipeline_test - DEBUG - Processing chunk 22/61: 1600 bytes
+2025-03-15 01:16:54,574 - audio_pipeline_test - DEBUG - Processing chunk 23/61: 1600 bytes
+2025-03-15 01:16:54,637 - audio_pipeline_test - DEBUG - Processing chunk 24/61: 1600 bytes
+2025-03-15 01:16:54,699 - audio_pipeline_test - DEBUG - Processing chunk 25/61: 1600 bytes
+2025-03-15 01:16:54,762 - audio_pipeline_test - DEBUG - Processing chunk 26/61: 1600 bytes
+2025-03-15 01:16:54,823 - audio_pipeline_test - DEBUG - Processing chunk 27/61: 1600 bytes
+2025-03-15 01:16:54,886 - audio_pipeline_test - DEBUG - Processing chunk 28/61: 1600 bytes
+2025-03-15 01:16:54,948 - audio_pipeline_test - DEBUG - Processing chunk 29/61: 1600 bytes
+2025-03-15 01:16:55,008 - audio_pipeline_test - DEBUG - Processing chunk 30/61: 1600 bytes
+2025-03-15 01:16:55,070 - audio_pipeline_test - DEBUG - Processing chunk 31/61: 1600 bytes
+2025-03-15 01:16:55,132 - audio_pipeline_test - DEBUG - Processing chunk 32/61: 1600 bytes
+2025-03-15 01:16:55,194 - audio_pipeline_test - DEBUG - Processing chunk 33/61: 1600 bytes
+2025-03-15 01:16:55,257 - audio_pipeline_test - DEBUG - Processing chunk 34/61: 1600 bytes
+2025-03-15 01:16:55,321 - audio_pipeline_test - DEBUG - Processing chunk 35/61: 1600 bytes
+2025-03-15 01:16:55,382 - audio_pipeline_test - DEBUG - Processing chunk 36/61: 1600 bytes
+2025-03-15 01:16:55,444 - audio_pipeline_test - DEBUG - Processing chunk 37/61: 1600 bytes
+2025-03-15 01:16:55,506 - audio_pipeline_test - DEBUG - Processing chunk 38/61: 1600 bytes
+2025-03-15 01:16:55,569 - audio_pipeline_test - DEBUG - Processing chunk 39/61: 1600 bytes
+2025-03-15 01:16:55,631 - audio_pipeline_test - DEBUG - Processing chunk 40/61: 1600 bytes
+2025-03-15 01:16:55,692 - audio_pipeline_test - DEBUG - Processing chunk 41/61: 1600 bytes
+2025-03-15 01:16:55,757 - audio_pipeline_test - DEBUG - Processing chunk 42/61: 1600 bytes
+2025-03-15 01:16:55,817 - audio_pipeline_test - DEBUG - Processing chunk 43/61: 1600 bytes
+2025-03-15 01:16:55,879 - audio_pipeline_test - DEBUG - Processing chunk 44/61: 1600 bytes
+2025-03-15 01:16:55,941 - audio_pipeline_test - DEBUG - Processing chunk 45/61: 1600 bytes
+2025-03-15 01:16:56,002 - audio_pipeline_test - DEBUG - Processing chunk 46/61: 1600 bytes
+2025-03-15 01:16:56,067 - audio_pipeline_test - DEBUG - Processing chunk 47/61: 1600 bytes
+2025-03-15 01:16:56,127 - audio_pipeline_test - DEBUG - Processing chunk 48/61: 1600 bytes
+2025-03-15 01:16:56,195 - audio_pipeline_test - DEBUG - Processing chunk 49/61: 1600 bytes
+2025-03-15 01:16:56,266 - audio_pipeline_test - DEBUG - Processing chunk 50/61: 1600 bytes
+2025-03-15 01:16:56,268 - audio_pipeline_test - INFO - Processing audio buffer: 80000 bytes, 3.06s since last transcription
+2025-03-15 01:16:56,268 - audio_pipeline_test - DEBUG - Sending 80000 bytes to STT service
+2025-03-15 01:16:56,269 - audio_pipeline_test - INFO - Calling stt_service.transcribe...
+2025-03-15 01:16:56,269 - voice_core.stt.nemo_stt - INFO - Starting transcription (data type: <class 'bytes'>, size: 80000)
+2025-03-15 01:16:56,269 - voice_core.stt.nemo_stt - DEBUG - Sending transcription request to Docker service (ID: 869635d3-0a7e-4834-ad81-613ac0dab755)
+2025-03-15 01:16:56,269 - voice_core.stt.nemo_stt - DEBUG - Sending 80000 bytes to Docker STT service
+2025-03-15 01:16:56,269 - voice_core.stt.nemo_stt - DEBUG - Sending 80000 bytes of audio data
+2025-03-15 01:16:56,269 - websockets.client - DEBUG - > BINARY 52 49 46 46 24 77 01 00 57 41 56 45 66 6d 74 20 ... 74 3e 20 3b 09 36 55 2f [80000 bytes]
+2025-03-15 01:16:56,273 - websockets.client - DEBUG - < TEXT '{"type":"status","message":"Processing audio..."}' [49 bytes]
+2025-03-15 01:16:56,273 - voice_core.stt.nemo_stt - DEBUG - Received response: {"type":"status","message":"Processing audio..."}
+2025-03-15 01:16:56,273 - voice_core.stt.nemo_stt - INFO - Docker STT service returned result: {'type': 'status', 'message': 'Processing audio...'}
+2025-03-15 01:16:56,273 - voice_core.stt.nemo_stt - INFO - Triggering on_transcription callbacks with result: {'type': 'status', 'message': 'Processing audio...', 'request_id': '869635d3-0a7e-4834-ad81-613ac0dab755'}
+2025-03-15 01:16:56,273 - audio_pipeline_test - INFO - Received transcription: {'type': 'status', 'message': 'Processing audio...', 'request_id': '869635d3-0a7e-4834-ad81-613ac0dab755'}
+2025-03-15 01:16:56,274 - voice_core.stt.nemo_stt - INFO - Transcription completed in 0.01 seconds
+2025-03-15 01:16:56,329 - audio_pipeline_test - DEBUG - Processing chunk 51/61: 1600 bytes
+2025-03-15 01:16:56,391 - audio_pipeline_test - DEBUG - Processing chunk 52/61: 1600 bytes
+2025-03-15 01:16:56,452 - audio_pipeline_test - DEBUG - Processing chunk 53/61: 1600 bytes
+2025-03-15 01:16:56,515 - audio_pipeline_test - DEBUG - Processing chunk 54/61: 1600 bytes
+2025-03-15 01:16:56,578 - audio_pipeline_test - DEBUG - Processing chunk 55/61: 1600 bytes
+2025-03-15 01:16:56,640 - audio_pipeline_test - DEBUG - Processing chunk 56/61: 1600 bytes
+2025-03-15 01:16:56,704 - audio_pipeline_test - DEBUG - Processing chunk 57/61: 1600 bytes
+2025-03-15 01:16:56,766 - audio_pipeline_test - DEBUG - Processing chunk 58/61: 1600 bytes
+2025-03-15 01:16:56,828 - audio_pipeline_test - DEBUG - Processing chunk 59/61: 1600 bytes
+2025-03-15 01:16:56,890 - audio_pipeline_test - DEBUG - Processing chunk 60/61: 1600 bytes
+2025-03-15 01:16:56,952 - audio_pipeline_test - DEBUG - Processing chunk 61/61: 44 bytes
+2025-03-15 01:16:57,014 - audio_pipeline_test - INFO - Processing remaining audio buffer: 16044 bytes
+2025-03-15 01:16:57,014 - voice_core.stt.nemo_stt - INFO - Starting transcription (data type: <class 'bytes'>, size: 16044)
+2025-03-15 01:16:57,014 - voice_core.stt.nemo_stt - DEBUG - Sending transcription request to Docker service (ID: f89f7bc4-31f7-41e6-ad20-8462cec1909b)
+2025-03-15 01:16:57,015 - voice_core.stt.nemo_stt - DEBUG - Converting raw audio bytes to WAV format (size: 16044 bytes)
+2025-03-15 01:16:57,015 - voice_core.stt.nemo_stt - DEBUG - Successfully converted to WAV format (new size: 16088 bytes)
+2025-03-15 01:16:57,015 - voice_core.stt.nemo_stt - DEBUG - Sending 16088 bytes to Docker STT service
+2025-03-15 01:16:57,016 - voice_core.stt.nemo_stt - DEBUG - Sending 16088 bytes of audio data
+2025-03-15 01:16:57,016 - websockets.client - DEBUG - > BINARY 52 49 46 46 c8 3e 00 00 57 41 56 45 66 6d 74 20 ... 35 d7 4b e0 53 ea 00 f5 [16088 bytes]
+2025-03-15 01:17:03,625 - websockets.client - DEBUG - < TEXT '{"type":"transcription","text":"I\'m going to g...ime":7.351203441619873}' [120 bytes]
+2025-03-15 01:17:03,625 - websockets.client - DEBUG - < TEXT '{"type":"status","message":"Processing semantic data..."}' [57 bytes]
+2025-03-15 01:17:03,625 - voice_core.stt.nemo_stt - DEBUG - Received response: {"type":"transcription","text":"I'm going to go to the next one.","confidence":0.95,"processing_time":7.351203441619873}
+2025-03-15 01:17:03,626 - voice_core.stt.nemo_stt - INFO - Docker STT service returned result: {'text': "I'm going to go to the next one.", 'confidence': 0.95}
+2025-03-15 01:17:03,626 - voice_core.stt.nemo_stt - INFO - Triggering on_transcription callbacks with result: {'text': "I'm going to go to the next one.", 'confidence': 0.95, 'request_id': 'f89f7bc4-31f7-41e6-ad20-8462cec1909b'}
+2025-03-15 01:17:03,626 - audio_pipeline_test - INFO - Received transcription: {'text': "I'm going to go to the next one.", 'confidence': 0.95, 'request_id': 'f89f7bc4-31f7-41e6-ad20-8462cec1909b'}
+2025-03-15 01:17:03,626 - voice_core.stt.nemo_stt - INFO - Transcription completed in 6.61 seconds
+2025-03-15 01:17:03,626 - audio_pipeline_test - INFO - Waiting for transcription or error response...
+2025-03-15 01:17:03,626 - audio_pipeline_test - INFO - Test PASSED! Received transcription: {'text': "I'm going to go to the next one.", 'confidence': 0.95, 'request_id': 'f89f7bc4-31f7-41e6-ad20-8462cec1909b'}
+2025-03-15 01:17:03,626 - audio_pipeline_test - INFO - === AUDIO PIPELINE TEST COMPLETED ===
+2025-03-15 01:17:03,629 - websockets.client - DEBUG - < TEXT '{"type":"status","message":"Processing audio..."}' [49 bytes]
+2025-03-15 01:53:54,001 - audio_pipeline_test - INFO - Successfully imported NemoSTT
+2025-03-15 01:53:54,006 - asyncio - DEBUG - Using proactor: IocpProactor
+2025-03-15 01:53:54,008 - audio_pipeline_test - INFO - === STARTING AUDIO PIPELINE TEST ===
+2025-03-15 01:53:54,008 - audio_pipeline_test - INFO - Initializing STT service
+2025-03-15 01:53:54,008 - voice_core.stt.nemo_stt - INFO - Using Docker STT service at ws://localhost:5002/ws/transcribe
+2025-03-15 01:53:54,008 - voice_core.stt.nemo_stt - INFO - Initializing Docker STT client with endpoint: ws://localhost:5002/ws/transcribe
+2025-03-15 01:53:54,009 - voice_core.stt.nemo_stt - INFO - Connecting to STT Docker service at ws://localhost:5002/ws/transcribe
+2025-03-15 01:53:54,029 - voice_core.stt.nemo_stt - INFO - Connection attempt 1/3 to ws://localhost:5002/ws/transcribe
+2025-03-15 01:53:54,062 - websockets.client - DEBUG - = connection is CONNECTING
+2025-03-15 01:53:54,062 - websockets.client - DEBUG - > GET /ws/transcribe HTTP/1.1
+2025-03-15 01:53:54,063 - websockets.client - DEBUG - > Host: localhost:5002
+2025-03-15 01:53:54,063 - websockets.client - DEBUG - > Upgrade: websocket
+2025-03-15 01:53:54,063 - websockets.client - DEBUG - > Connection: Upgrade
+2025-03-15 01:53:54,063 - websockets.client - DEBUG - > Sec-WebSocket-Key: Hs8UPbbcyKxhdMyz5+hwiw==
+2025-03-15 01:53:54,063 - websockets.client - DEBUG - > Sec-WebSocket-Version: 13
+2025-03-15 01:53:54,064 - websockets.client - DEBUG - > Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+2025-03-15 01:53:54,064 - websockets.client - DEBUG - > User-Agent: Python/3.12 websockets/15.0
+2025-03-15 01:53:54,068 - websockets.client - DEBUG - < HTTP/1.1 101 Switching Protocols
+2025-03-15 01:53:54,069 - websockets.client - DEBUG - < Upgrade: websocket
+2025-03-15 01:53:54,069 - websockets.client - DEBUG - < Connection: Upgrade
+2025-03-15 01:53:54,069 - websockets.client - DEBUG - < Sec-WebSocket-Accept: o+859RXvppO/BuMhptrdldCSrRU=
+2025-03-15 01:53:54,069 - websockets.client - DEBUG - < Sec-WebSocket-Extensions: permessage-deflate
+2025-03-15 01:53:54,070 - websockets.client - DEBUG - < date: Sat, 15 Mar 2025 01:53:53 GMT
+2025-03-15 01:53:54,070 - websockets.client - DEBUG - < server: uvicorn
+2025-03-15 01:53:54,070 - websockets.client - DEBUG - = connection is OPEN
+2025-03-15 01:53:54,070 - voice_core.stt.nemo_stt - INFO - Successfully connected to ws://localhost:5002/ws/transcribe
+2025-03-15 01:53:54,070 - websockets.client - DEBUG - > TEXT '{"type": "ping"}' [16 bytes]
+2025-03-15 01:53:54,072 - websockets.client - DEBUG - < TEXT '{"type":"pong"}' [15 bytes]
+2025-03-15 01:53:54,072 - voice_core.stt.nemo_stt - INFO - Successfully connected to ws://localhost:5002/ws/transcribe and received response: {"type":"pong"}
+2025-03-15 01:53:54,074 - voice_core.stt.nemo_stt - INFO - Successfully connected to Docker STT endpoint: ws://localhost:5002/ws/transcribe
+2025-03-15 01:53:54,074 - voice_core.stt.nemo_stt - INFO - Docker STT client initialized successfully
+2025-03-15 01:53:54,074 - audio_pipeline_test - INFO - STT service initialized successfully
+2025-03-15 01:53:54,075 - audio_pipeline_test - INFO - Loading test audio from test_data/test_audio.wav
+2025-03-15 01:53:54,075 - audio_pipeline_test - INFO - Loaded 96044 bytes of audio data
+2025-03-15 01:53:54,075 - audio_pipeline_test - INFO - Simulating audio streaming with 96044 bytes in chunks of 1600 bytes
+2025-03-15 01:53:54,076 - audio_pipeline_test - DEBUG - Processing chunk 1/61: 1600 bytes
+2025-03-15 01:53:54,129 - audio_pipeline_test - DEBUG - Processing chunk 2/61: 1600 bytes
+2025-03-15 01:53:54,190 - audio_pipeline_test - DEBUG - Processing chunk 3/61: 1600 bytes
+2025-03-15 01:53:54,250 - audio_pipeline_test - DEBUG - Processing chunk 4/61: 1600 bytes
+2025-03-15 01:53:54,313 - audio_pipeline_test - DEBUG - Processing chunk 5/61: 1600 bytes
+2025-03-15 01:53:54,374 - audio_pipeline_test - DEBUG - Processing chunk 6/61: 1600 bytes
+2025-03-15 01:53:54,437 - audio_pipeline_test - DEBUG - Processing chunk 7/61: 1600 bytes
+2025-03-15 01:53:54,501 - audio_pipeline_test - DEBUG - Processing chunk 8/61: 1600 bytes
+2025-03-15 01:53:54,562 - audio_pipeline_test - DEBUG - Processing chunk 9/61: 1600 bytes
+2025-03-15 01:53:54,623 - audio_pipeline_test - DEBUG - Processing chunk 10/61: 1600 bytes
+2025-03-15 01:53:54,684 - audio_pipeline_test - DEBUG - Processing chunk 11/61: 1600 bytes
+2025-03-15 01:53:54,745 - audio_pipeline_test - DEBUG - Processing chunk 12/61: 1600 bytes
+2025-03-15 01:53:54,809 - audio_pipeline_test - DEBUG - Processing chunk 13/61: 1600 bytes
+2025-03-15 01:53:54,869 - audio_pipeline_test - DEBUG - Processing chunk 14/61: 1600 bytes
+2025-03-15 01:53:54,929 - audio_pipeline_test - DEBUG - Processing chunk 15/61: 1600 bytes
+2025-03-15 01:53:54,992 - audio_pipeline_test - DEBUG - Processing chunk 16/61: 1600 bytes
+2025-03-15 01:53:55,054 - audio_pipeline_test - DEBUG - Processing chunk 17/61: 1600 bytes
+2025-03-15 01:53:55,114 - audio_pipeline_test - DEBUG - Processing chunk 18/61: 1600 bytes
+2025-03-15 01:53:55,175 - audio_pipeline_test - DEBUG - Processing chunk 19/61: 1600 bytes
+2025-03-15 01:53:55,237 - audio_pipeline_test - DEBUG - Processing chunk 20/61: 1600 bytes
+2025-03-15 01:53:55,297 - audio_pipeline_test - DEBUG - Processing chunk 21/61: 1600 bytes
+2025-03-15 01:53:55,358 - audio_pipeline_test - DEBUG - Processing chunk 22/61: 1600 bytes
+2025-03-15 01:53:55,421 - audio_pipeline_test - DEBUG - Processing chunk 23/61: 1600 bytes
+2025-03-15 01:53:55,483 - audio_pipeline_test - DEBUG - Processing chunk 24/61: 1600 bytes
+2025-03-15 01:53:55,547 - audio_pipeline_test - DEBUG - Processing chunk 25/61: 1600 bytes
+2025-03-15 01:53:55,608 - audio_pipeline_test - DEBUG - Processing chunk 26/61: 1600 bytes
+2025-03-15 01:53:55,670 - audio_pipeline_test - DEBUG - Processing chunk 27/61: 1600 bytes
+2025-03-15 01:53:55,731 - audio_pipeline_test - DEBUG - Processing chunk 28/61: 1600 bytes
+2025-03-15 01:53:55,793 - audio_pipeline_test - DEBUG - Processing chunk 29/61: 1600 bytes
+2025-03-15 01:53:55,855 - audio_pipeline_test - DEBUG - Processing chunk 30/61: 1600 bytes
+2025-03-15 01:53:55,918 - audio_pipeline_test - DEBUG - Processing chunk 31/61: 1600 bytes
+2025-03-15 01:53:55,977 - audio_pipeline_test - DEBUG - Processing chunk 32/61: 1600 bytes
+2025-03-15 01:53:56,039 - audio_pipeline_test - DEBUG - Processing chunk 33/61: 1600 bytes
+2025-03-15 01:53:56,099 - audio_pipeline_test - DEBUG - Processing chunk 34/61: 1600 bytes
+2025-03-15 01:53:56,161 - audio_pipeline_test - DEBUG - Processing chunk 35/61: 1600 bytes
+2025-03-15 01:53:56,224 - audio_pipeline_test - DEBUG - Processing chunk 36/61: 1600 bytes
+2025-03-15 01:53:56,287 - audio_pipeline_test - DEBUG - Processing chunk 37/61: 1600 bytes
+2025-03-15 01:53:56,349 - audio_pipeline_test - DEBUG - Processing chunk 38/61: 1600 bytes
+2025-03-15 01:53:56,412 - audio_pipeline_test - DEBUG - Processing chunk 39/61: 1600 bytes
+2025-03-15 01:53:56,474 - audio_pipeline_test - DEBUG - Processing chunk 40/61: 1600 bytes
+2025-03-15 01:53:56,535 - audio_pipeline_test - DEBUG - Processing chunk 41/61: 1600 bytes
+2025-03-15 01:53:56,598 - audio_pipeline_test - DEBUG - Processing chunk 42/61: 1600 bytes
+2025-03-15 01:53:56,660 - audio_pipeline_test - DEBUG - Processing chunk 43/61: 1600 bytes
+2025-03-15 01:53:56,721 - audio_pipeline_test - DEBUG - Processing chunk 44/61: 1600 bytes
+2025-03-15 01:53:56,783 - audio_pipeline_test - DEBUG - Processing chunk 45/61: 1600 bytes
+2025-03-15 01:53:56,843 - audio_pipeline_test - DEBUG - Processing chunk 46/61: 1600 bytes
+2025-03-15 01:53:56,906 - audio_pipeline_test - DEBUG - Processing chunk 47/61: 1600 bytes
+2025-03-15 01:53:56,967 - audio_pipeline_test - DEBUG - Processing chunk 48/61: 1600 bytes
+2025-03-15 01:53:57,029 - audio_pipeline_test - DEBUG - Processing chunk 49/61: 1600 bytes
+2025-03-15 01:53:57,090 - audio_pipeline_test - DEBUG - Processing chunk 50/61: 1600 bytes
+2025-03-15 01:53:57,091 - audio_pipeline_test - INFO - Processing audio buffer: 80000 bytes, 3.01s since last transcription
+2025-03-15 01:53:57,091 - audio_pipeline_test - DEBUG - Sending 80000 bytes to STT service
+2025-03-15 01:53:57,091 - audio_pipeline_test - INFO - Calling stt_service.transcribe...
+2025-03-15 01:53:57,091 - voice_core.stt.nemo_stt - INFO - Starting transcription (data type: <class 'bytes'>, size: 80000)
+2025-03-15 01:53:57,091 - voice_core.stt.nemo_stt - DEBUG - Sending transcription request to Docker service (ID: 5ba69f05-5871-4634-b488-0228a7c1b1ec)
+2025-03-15 01:53:57,091 - voice_core.stt.nemo_stt - DEBUG - Sending 80000 bytes to Docker STT service
+2025-03-15 01:53:57,091 - voice_core.stt.nemo_stt - DEBUG - Sending 80000 bytes of audio data
+2025-03-15 01:53:57,091 - websockets.client - DEBUG - > BINARY 52 49 46 46 24 77 01 00 57 41 56 45 66 6d 74 20 ... 74 3e 20 3b 09 36 55 2f [80000 bytes]
+2025-03-15 01:53:57,094 - websockets.client - DEBUG - < TEXT '{"type":"status","message":"Processing audio..."}' [49 bytes]
+2025-03-15 01:53:57,096 - voice_core.stt.nemo_stt - DEBUG - Received response: {"type":"status","message":"Processing audio..."}
+2025-03-15 01:53:57,096 - voice_core.stt.nemo_stt - INFO - Docker STT service returned result: {'type': 'status', 'message': 'Processing audio...'}
+2025-03-15 01:53:57,096 - voice_core.stt.nemo_stt - INFO - Triggering on_transcription callbacks with result: {'type': 'status', 'message': 'Processing audio...', 'request_id': '5ba69f05-5871-4634-b488-0228a7c1b1ec'}
+2025-03-15 01:53:57,096 - audio_pipeline_test - INFO - Received transcription: {'type': 'status', 'message': 'Processing audio...', 'request_id': '5ba69f05-5871-4634-b488-0228a7c1b1ec'}
+2025-03-15 01:53:57,097 - voice_core.stt.nemo_stt - INFO - Transcription completed in 0.01 seconds
+2025-03-15 01:53:57,152 - audio_pipeline_test - DEBUG - Processing chunk 51/61: 1600 bytes
+2025-03-15 01:53:57,214 - audio_pipeline_test - DEBUG - Processing chunk 52/61: 1600 bytes
+2025-03-15 01:53:57,276 - audio_pipeline_test - DEBUG - Processing chunk 53/61: 1600 bytes
+2025-03-15 01:53:57,339 - audio_pipeline_test - DEBUG - Processing chunk 54/61: 1600 bytes
+2025-03-15 01:53:57,401 - audio_pipeline_test - DEBUG - Processing chunk 55/61: 1600 bytes
+2025-03-15 01:53:57,463 - audio_pipeline_test - DEBUG - Processing chunk 56/61: 1600 bytes
+2025-03-15 01:53:57,525 - audio_pipeline_test - DEBUG - Processing chunk 57/61: 1600 bytes
+2025-03-15 01:53:57,586 - audio_pipeline_test - DEBUG - Processing chunk 58/61: 1600 bytes
+2025-03-15 01:53:57,648 - audio_pipeline_test - DEBUG - Processing chunk 59/61: 1600 bytes
+2025-03-15 01:53:57,711 - audio_pipeline_test - DEBUG - Processing chunk 60/61: 1600 bytes
+2025-03-15 01:53:57,774 - audio_pipeline_test - DEBUG - Processing chunk 61/61: 44 bytes
+2025-03-15 01:53:57,834 - audio_pipeline_test - INFO - Processing remaining audio buffer: 16044 bytes
+2025-03-15 01:53:57,835 - voice_core.stt.nemo_stt - INFO - Starting transcription (data type: <class 'bytes'>, size: 16044)
+2025-03-15 01:53:57,835 - voice_core.stt.nemo_stt - DEBUG - Sending transcription request to Docker service (ID: 1db8189f-ba0e-40b6-a0b4-79468b53d6d0)
+2025-03-15 01:53:57,835 - voice_core.stt.nemo_stt - DEBUG - Converting raw audio bytes to WAV format (size: 16044 bytes)
+2025-03-15 01:53:57,835 - voice_core.stt.nemo_stt - DEBUG - Successfully converted to WAV format (new size: 16088 bytes)
+2025-03-15 01:53:57,836 - voice_core.stt.nemo_stt - DEBUG - Sending 16088 bytes to Docker STT service
+2025-03-15 01:53:57,836 - voice_core.stt.nemo_stt - DEBUG - Sending 16088 bytes of audio data
+2025-03-15 01:53:57,837 - websockets.client - DEBUG - > BINARY 52 49 46 46 c8 3e 00 00 57 41 56 45 66 6d 74 20 ... 35 d7 4b e0 53 ea 00 f5 [16088 bytes]
+2025-03-15 01:53:58,700 - websockets.client - DEBUG - < TEXT '{"type":"transcription","text":"I\'m going to g...me":1.6040270328521729}' [121 bytes]
+2025-03-15 01:53:58,700 - websockets.client - DEBUG - < TEXT '{"type":"status","message":"Processing semantic data..."}' [57 bytes]
+2025-03-15 01:53:58,701 - voice_core.stt.nemo_stt - DEBUG - Received response: {"type":"transcription","text":"I'm going to go to the next one.","confidence":0.95,"processing_time":1.6040270328521729}
+2025-03-15 01:53:58,701 - voice_core.stt.nemo_stt - INFO - Docker STT service returned result: {'text': "I'm going to go to the next one.", 'confidence': 0.95}
+2025-03-15 01:53:58,701 - voice_core.stt.nemo_stt - INFO - Triggering on_transcription callbacks with result: {'text': "I'm going to go to the next one.", 'confidence': 0.95, 'request_id': '1db8189f-ba0e-40b6-a0b4-79468b53d6d0'}
+2025-03-15 01:53:58,701 - audio_pipeline_test - INFO - Received transcription: {'text': "I'm going to go to the next one.", 'confidence': 0.95, 'request_id': '1db8189f-ba0e-40b6-a0b4-79468b53d6d0'}
+2025-03-15 01:53:58,701 - voice_core.stt.nemo_stt - INFO - Transcription completed in 0.87 seconds
+2025-03-15 01:53:58,702 - audio_pipeline_test - INFO - Waiting for transcription or error response...
+2025-03-15 01:53:58,702 - websockets.client - DEBUG - < TEXT '{"type":"status","message":"Processing audio..."}' [49 bytes]
+2025-03-15 01:53:58,702 - audio_pipeline_test - INFO - Test PASSED! Received transcription: {'text': "I'm going to go to the next one.", 'confidence': 0.95, 'request_id': '1db8189f-ba0e-40b6-a0b4-79468b53d6d0'}
+2025-03-15 01:53:58,702 - audio_pipeline_test - INFO - === AUDIO PIPELINE TEST COMPLETED ===

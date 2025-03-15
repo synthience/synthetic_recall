@@ -1,0 +1,9 @@
+{
+    "vosk": {
+        "enabled": false
+    },
+    "whisper": {
+        "model_name": "nvidia/canary-1b",
+        "device": "cpu"
+    }
+}

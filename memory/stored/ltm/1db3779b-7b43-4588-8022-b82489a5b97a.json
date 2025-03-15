@@ -395,8 +395,10 @@
     "timestamp": 1741754413.8306348,
     "session_id": "5d766947-2536-4998-9b11-3f42642930d8",
     "significance": 0.95,
-    "memory_type": "important"
+    "memory_type": "important",
+    "last_access": 1741889648.2091105,
+    "access_count": 3
   },
-  "access_count": 0,
-  "last_access": 1741754413.830649
+  "access_count": 3,
+  "last_access": 1741889648.2091105
 }

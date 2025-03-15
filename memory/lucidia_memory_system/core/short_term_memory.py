@@ -38,7 +38,9 @@ class ShortTermMemory:
         # Performance stats
         self.stats = {
             'additions': 0,
+            'cross_session_imports': 0,
             'retrievals': 0,
+            'cross_session_retrievals': 0,
             'matches': 0
         }
         
@@ -77,6 +79,48 @@ class ShortTermMemory:
             self.stats['additions'] += 1
             
             return memory_id
+
+    async def import_from_ltm(self, ltm_memory: Dict[str, Any]) -> str:
+        """
+        Import a memory from long-term memory into short-term memory.
+        This is used to bring cross-session memories into the current session.
+        
+        Args:
+            ltm_memory: Memory from long-term memory
+            
+        Returns:
+            Memory ID
+        """
+        async with self._lock:
+            # Extract needed fields
+            memory_id = ltm_memory.get('id')
+            content = ltm_memory.get('content', '')
+            embedding = ltm_memory.get('embedding')
+            
+            # Create metadata with cross-session flag
+            metadata = ltm_memory.get('metadata', {}).copy()
+            metadata['cross_session'] = True
+            metadata['original_timestamp'] = ltm_memory.get('timestamp', 0)
+            
+            # Boost significance for cross-session memories
+            if 'significance' in metadata:
+                metadata['significance'] = min(1.0, metadata['significance'] * 1.2)
+            
+            # Add to STM
+            memory = {
+                'id': memory_id,
+                'content': content,
+                'embedding': embedding,
+                'timestamp': time.time(),  # Current time
+                'metadata': metadata
+            }
+            
+            # Add to FIFO queue
+            self.memory.append(memory)
+            self.stats['cross_session_imports'] += 1
+            
+            logger.info(f"Imported cross-session memory {memory_id} from LTM to STM")
+            return memory_id
     
     async def get_recent(self, query: Optional[str] = None, limit: int = 5, 
                         min_similarity: float = 0.0) -> List[Dict[str, Any]]:
@@ -105,7 +149,8 @@ class ShortTermMemory:
                     'content': memory.get('content', ''),
                     'timestamp': memory.get('timestamp', 0),
                     'similarity': 1.0,  # Default similarity for recent entries
-                    'significance': memory.get('metadata', {}).get('significance', 0.5)
+                    'significance': memory.get('metadata', {}).get('significance', 0.5),
+                    'cross_session': memory.get('metadata', {}).get('cross_session', False)
                 } for memory in results]
                 
                 return formatted_results
@@ -142,7 +187,8 @@ class ShortTermMemory:
                                     'content': memory.get('content', ''),
                                     'timestamp': memory.get('timestamp', 0),
                                     'similarity': similarity,
-                                    'significance': memory.get('metadata', {}).get('significance', 0.5)
+                                    'significance': memory.get('metadata', {}).get('significance', 0.5),
+                                    'cross_session': memory.get('metadata', {}).get('cross_session', False)
                                 })
                     
                     # Sort by similarity
@@ -179,7 +225,8 @@ class ShortTermMemory:
                         'content': memory.get('content', ''),
                         'timestamp': memory.get('timestamp', 0),
                         'similarity': similarity,
-                        'significance': memory.get('metadata', {}).get('significance', 0.5)
+                        'significance': memory.get('metadata', {}).get('significance', 0.5),
+                        'cross_session': memory.get('metadata', {}).get('cross_session', False)
                     })
             
             # Sort by similarity
@@ -239,7 +286,8 @@ class ShortTermMemory:
                     'content': memory.get('content', ''),
                     'timestamp': memory.get('timestamp', 0),
                     'similarity': 1.0,  # Default similarity for keyword matches
-                    'significance': memory.get('metadata', {}).get('significance', 0.5)
+                    'significance': memory.get('metadata', {}).get('significance', 0.5),
+                    'cross_session': memory.get('metadata', {}).get('cross_session', False)
                 })
                 
                 # Stop once we reach the limit
@@ -319,7 +367,8 @@ class ShortTermMemory:
                                 'content': memory.get('content', ''),
                                 'timestamp': memory.get('timestamp', 0),
                                 'similarity': similarity,
-                                'significance': memory.get('metadata', {}).get('significance', 0.5)
+                                'significance': memory.get('metadata', {}).get('significance', 0.5),
+                                'cross_session': memory.get('metadata', {}).get('cross_session', False)
                             })
         except Exception as e:
             logger.warning(f"Error in semantic search during recency-biased search: {e}")
@@ -348,7 +397,8 @@ class ShortTermMemory:
                     'content': memory.get('content', ''),
                     'timestamp': memory.get('timestamp', 0),
                     'similarity': similarity,
-                    'significance': memory.get('metadata', {}).get('significance', 0.5)
+                    'significance': memory.get('metadata', {}).get('significance', 0.5),
+                    'cross_session': memory.get('metadata', {}).get('cross_session', False)
                 })
         
         # Apply recency bias
@@ -370,7 +420,8 @@ class ShortTermMemory:
                 'timestamp': result['timestamp'],
                 'similarity': result['similarity'],
                 'significance': result['significance'],
-                'combined_score': combined_score
+                'combined_score': combined_score,
+                'cross_session': result.get('cross_session', False)
             })
         
         # Sort by combined score
@@ -388,7 +439,9 @@ class ShortTermMemory:
             'additions': self.stats['additions'],
             'retrievals': self.stats['retrievals'],
             'matches': self.stats['matches'],
-            'match_ratio': self.stats['matches'] / max(1, self.stats['retrievals'])
+            'match_ratio': self.stats['matches'] / max(1, self.stats['retrievals']),
+            'cross_session_imports': self.stats['cross_session_imports'],
+            'cross_session_retrievals': self.stats.get('cross_session_retrievals', 0)
         }
         
     async def update_access_timestamp(self, memory_id: str) -> bool:

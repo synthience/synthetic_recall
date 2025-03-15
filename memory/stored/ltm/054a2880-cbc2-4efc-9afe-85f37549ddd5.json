@@ -395,8 +395,10 @@
     "timestamp": 1741755285.939198,
     "model": "qwen2.5-7b-instruct-1m",
     "significance": 0.7,
-    "memory_type": "semantic"
+    "memory_type": "semantic",
+    "last_access": 1741886073.914896,
+    "access_count": 3
   },
-  "access_count": 0,
-  "last_access": 1741755285.9392228
+  "access_count": 3,
+  "last_access": 1741886073.914896
 }

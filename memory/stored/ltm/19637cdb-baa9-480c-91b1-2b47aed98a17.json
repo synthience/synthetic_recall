@@ -4,7 +4,10 @@
   "embedding": null,
   "timestamp": 1741804785.5661952,
   "significance": 0.5,
-  "metadata": {},
-  "access_count": 0,
-  "last_access": 1741804785.5661952
+  "metadata": {
+    "last_access": 1741889391.4149525,
+    "access_count": 1
+  },
+  "access_count": 1,
+  "last_access": 1741889391.4149525
 }

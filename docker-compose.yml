@@ -129,6 +129,41 @@ services:
       memlock: -1
       stack: 67108864
 
+  stt_transcription:
+    container_name: stt_transcription
+    image: nemo_sig_v3:latest
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONPATH=/workspace/project
+      - MODELS_PATH=/workspace/models
+      - LIVEKIT_URL=ws://livekit-server:7880
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-devkey}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-secret}
+      - HPC_SERVER_URL=hpc_server:5005
+      - STT_SERVER_PORT=5002
+    volumes:
+      - .:/workspace/project
+      - ${MODELS_PATH}:/workspace/models
+      - ./setup_stt.sh:/workspace/setup_stt.sh
+      - ./patch_nemo.py:/workspace/project/patch_nemo.py
+      - ./fix_nemo.py:/workspace/project/fix_nemo.py
+    networks:
+      - lucid-net
+    ports:
+      - "5002:5002"
+    command: >
+      bash -c "chmod +x /workspace/setup_stt.sh && /workspace/setup_stt.sh"
+    depends_on:
+      - livekit
+
 networks:
   lucid-net:
     driver: bridge

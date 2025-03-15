@@ -1774,13 +1774,15 @@ class LucidiaWorldModel:
         self.logger.debug(f"Finding related concepts for: {concept} (max_distance: {max_distance}, limit: {limit})")
         concept = concept.lower()
         
+        # Log warning but don't immediately return empty if concept not found
         if concept not in self.concept_network:
-            self.logger.warning(f"Concept not found in network: {concept}")
+            self.logger.warning(f"Concept not found in network: {concept} - attempting fuzzy matching")
             
             # Add to knowledge gaps
             self.knowledge_gaps["identified_gaps"].add(f"concept:{concept}")
             
-            return {}
+            # Try fuzzy matching instead of returning empty
+            return await self._fuzzy_match_concept(concept, max_distance, min_strength, limit)
             
         # Direct relationships (distance 1)
         related = {}
@@ -1823,6 +1825,47 @@ class LucidiaWorldModel:
             related = dict(related_items[:limit])
         
         return related
+
+    async def _fuzzy_match_concept(self, concept: str, max_distance: int = 2, min_strength: float = 0.7, limit: int = 10) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Attempt to fuzzy match a concept that wasn't found exactly in the network.
+        
+        Args:
+            concept: The concept to find relationships for
+            max_distance: Maximum relationship distance to traverse
+            min_strength: Minimum relationship strength to include
+            limit: Maximum number of related concepts to return
+            
+        Returns:
+            Dictionary of related concepts with relationship details
+        """
+        self.logger.debug(f"Attempting fuzzy matching for concept: {concept}")
+        
+        # Find concepts that contain this concept as a substring
+        substring_matches = {}
+        for existing_concept in self.concept_network.keys():
+            if concept in existing_concept or existing_concept in concept:
+                # Calculate a similarity score based on string overlap
+                similarity = len(set(concept) & set(existing_concept)) / len(set(concept) | set(existing_concept))
+                if similarity >= 0.6:  # Threshold for fuzzy matching
+                    substring_matches[existing_concept] = similarity
+        
+        # If we found matches, get their relationships
+        if substring_matches:
+            # Sort by similarity
+            sorted_matches = sorted(substring_matches.items(), key=lambda x: x[1], reverse=True)
+            
+            # Take top 3 matches
+            top_matches = [match[0] for match in sorted_matches[:3]]
+            
+            # Get relationships for each match
+            all_related = {}
+            for match in top_matches:
+                related = await self.get_related_concepts(match, max_distance, min_strength, limit)
+                all_related.update(related)
+            
+            return all_related
+        return {}
 
     def add_observation(self, observation_type: str, content: Dict[str, Any], significance: float = 0.5) -> int:
         """
@@ -2224,6 +2267,7 @@ class LucidiaWorldModel:
     def _extract_concepts(self, text: str) -> List[str]:
         """
         Extract concepts from text.
+
         
         Args:
             text: Text to extract concepts from
@@ -2233,38 +2277,60 @@ class LucidiaWorldModel:
         """
         # Convert to lowercase
         text_lower = text.lower()
-        
+
         # Extract concepts that are in the concept network
         extracted = []
+
         
         # First check for highest priority concepts
-        priority_concepts = ["synthien", "lucidia", "megaprompt", "consciousness", 
-                           "spiral awareness", "reflective dreaming", "daniel"]
+        priority_concepts = [
+            "synthien", "lucidia", "megaprompt", "consciousness", 
+            "spiral awareness", "reflective dreaming", "daniel",
+            "hello", "greeting", "hi", "hey"  # Add greeting concepts
+        ]
         
+
         for concept in priority_concepts:
-            if concept in text_lower:
+            # Use word boundary check for more accurate matching
+            concept_pattern = r'\b' + re.escape(concept) + r'\b'
+            if re.search(concept_pattern, text_lower):
                 extracted.append(concept)
-        
+
+        # Special case for MEGAPROMPT (all caps)
+        if "MEGAPROMPT" in text:
+            if "megaprompt" not in extracted:
+                extracted.append("megaprompt")
+                self.logger.info("Extracted MEGAPROMPT as a priority concept")
+
+        # Special case for entity names that might be capitalized
+        for entity_id in self.entity_registry:
+            entity_pattern = r'\b' + re.escape(entity_id.lower()) + r'\b'
+            if re.search(entity_pattern, text_lower) and entity_id.lower() not in [c.lower() for c in extracted]:
+                extracted.append(entity_id.lower())
+
+            # Also check entity names/aliases
+            entity = self.entity_registry[entity_id]
+            if "attributes" in entity and "name" in entity["attributes"]:
+                name = entity["attributes"]["name"].lower()
+                name_pattern = r'\b' + re.escape(name) + r'\b'
+                if re.search(name_pattern, text_lower) and name not in extracted:
+                    extracted.append(name)
+
         # Then check all other concepts in the network
         for concept in self.concept_network.keys():
             # Skip already added priority concepts
-            if concept in extracted:
+            if concept.lower() in [c.lower() for c in extracted]:
                 continue
-                
+
             # Check if concept appears in text
-            if concept in text_lower:
+            concept_pattern = r'\b' + re.escape(concept) + r'\b'
+            if re.search(concept_pattern, text_lower):
                 # Skip very common words that might be concepts but are too general
                 if concept in ["a", "the", "in", "of", "and", "or", "as", "is", "be", "to", "for"]:
                     continue
-                
-                # For very short concepts (1-2 chars), ensure they're actual words not parts of words
-                if len(concept) <= 2:
-                    # Check if it's surrounded by non-alphanumeric characters
-                    concept_pattern = r'\b' + re.escape(concept) + r'\b'
-                    if re.search(concept_pattern, text_lower):
-                        extracted.append(concept)
-                else:
-                    extracted.append(concept)
+
+                # Add the concept
+                extracted.append(concept)
         
         # If we still don't have many concepts, check for knowledge domain subcategories
         if len(extracted) < 3:
@@ -2272,7 +2338,9 @@ class LucidiaWorldModel:
                 for subcategory in info["subcategories"]:
                     subcategory_lower = subcategory.lower()
                     if subcategory_lower in text_lower and subcategory_lower not in extracted:
-                        extracted.append(subcategory_lower)
+                        subcategory_pattern = r'\b' + re.escape(subcategory_lower) + r'\b'
+                        if re.search(subcategory_pattern, text_lower):
+                            extracted.append(subcategory_lower)
         
         return extracted
 
@@ -2524,7 +2592,7 @@ class LucidiaWorldModel:
     def _extract_entity_mentions(self, text: str) -> List[str]:
         """Extract mentions of known entities from text."""
         mentions = []
-        
+
         # Check for entity mentions
         for entity_id in self.entity_registry:
             if entity_id.lower() in text.lower():
@@ -2536,6 +2604,11 @@ class LucidiaWorldModel:
                 entity_name = entity["attributes"]["name"]
                 if entity_name.lower() in text.lower() and entity_id not in mentions:
                     mentions.append(entity_id)
+
+        # Special case for MEGAPROMPT (all caps)
+        if "MEGAPROMPT" in text and "MEGAPROMPT" not in mentions:
+            mentions.append("MEGAPROMPT")
+            self.logger.info("Extracted MEGAPROMPT as a direct entity mention")
         
         return mentions
     

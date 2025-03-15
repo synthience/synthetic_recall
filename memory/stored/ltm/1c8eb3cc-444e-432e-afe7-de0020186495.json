@@ -394,8 +394,10 @@
     "session_id": "20250312170337",
     "timestamp": 1741799081.612985,
     "significance": 0.46951640844345094,
-    "memory_type": "episodic"
+    "memory_type": "episodic",
+    "last_access": 1741889391.4149427,
+    "access_count": 1
   },
-  "access_count": 0,
-  "last_access": 1741799081.613026
+  "access_count": 1,
+  "last_access": 1741889391.4149427
 }

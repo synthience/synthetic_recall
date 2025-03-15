@@ -30,7 +30,8 @@ class EnhancedSTTService:
         min_speech_duration: float = 0.3,  # Reduced from 0.5
         max_speech_duration: float = 30.0,
         energy_threshold: float = 0.05,
-        on_transcript: Optional[Callable[[str], Any]] = None
+        on_transcript: Optional[Callable[[str], Any]] = None,
+        nemo_stt: Optional[Any] = None  # Add NemoSTT parameter
     ):
         """
         Initialize the enhanced STT service with modular components.
@@ -43,9 +44,11 @@ class EnhancedSTTService:
             max_speech_duration: Maximum duration for a speech segment
             energy_threshold: Initial energy threshold for speech detection
             on_transcript: Optional callback for final transcripts
+            nemo_stt: Optional NemoSTT instance for high-quality transcription
         """
         self.state_manager = state_manager
         self.on_transcript = on_transcript
+        self.nemo_stt = nemo_stt  # Store NemoSTT instance
         
         # Initialize modular components
         self.identity_manager = LiveKitIdentityManager()
@@ -82,7 +85,7 @@ class EnhancedSTTService:
         
         # Setup logger
         self.logger = logging.getLogger(__name__)
-        
+
     async def initialize(self) -> None:
         """Initialize all STT components."""
         try:
@@ -220,17 +223,30 @@ class EnhancedSTTService:
                         # Combine buffer into a single array
                         full_audio = np.concatenate(self.buffer)
                         
-                        # Transcribe the full segment
+                        # Transcribe the full segment with built-in transcriber
                         transcription_result = await self.transcriber.transcribe(full_audio, self.sample_rate)
+                        
+                        # Also send to NemoSTT if available for higher quality transcription
+                        nemo_task = None
+                        if self.nemo_stt:
+                            try:
+                                self.logger.info("Sending audio to NemoSTT for high-quality transcription")
+                                # Create a non-blocking task to process with NemoSTT
+                                nemo_task = asyncio.create_task(
+                                    self.nemo_stt.transcribe(full_audio)
+                                )
+                                # We don't await this here - it's handled by callbacks in voice_agent_NEMO
+                            except Exception as nemo_e:
+                                self.logger.error(f"Error sending to NemoSTT: {nemo_e}", exc_info=True)
                         
                         if transcription_result["success"] and transcription_result["text"]:
                             transcript = transcription_result["text"]
                             
-                            # Publish transcript
+                            # Publish preliminary transcript
                             await self.publisher.publish_transcript(
                                 transcript,
                                 self._participant_identity,
-                                is_final=True
+                                is_final=not bool(self.nemo_stt)  # Mark as preliminary if NemoSTT is processing
                             )
                             
                             # Update stats
@@ -243,7 +259,7 @@ class EnhancedSTTService:
                                 else:
                                     self.on_transcript(transcript)
                                     
-                            self.logger.info(f"Published transcript: '{transcript[:50]}...'")
+                            self.logger.info(f"Published {'preliminary' if self.nemo_stt else 'final'} transcript: '{transcript[:50]}...'")
                         
                         # Clear buffer for next segment
                         self.buffer = []
@@ -347,3 +363,8 @@ class EnhancedSTTService:
             "interruptions_detected": self.interruptions_detected,
             **component_stats
         }
+
+    async def set_nemo_stt(self, nemo_stt: Any) -> None:
+        """Set the NemoSTT instance after initialization."""
+        self.nemo_stt = nemo_stt
+        self.logger.info("NemoSTT instance set in EnhancedSTTService")

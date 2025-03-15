@@ -396,8 +396,10 @@
     "confidence": 0.9,
     "timestamp": 1741754994.9183478,
     "significance": 0.9,
-    "memory_type": "important"
+    "memory_type": "important",
+    "last_access": 1741889686.102247,
+    "access_count": 4
   },
-  "access_count": 0,
-  "last_access": 1741754994.9183662
+  "access_count": 4,
+  "last_access": 1741889686.102247
 }

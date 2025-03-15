@@ -94,7 +94,90 @@ class HPCServer:
                         geometry_info = self.get_geometry(model_version)
                         logger.info(f"Sending geometry information for model version {model_version}")
                         await websocket.send(json.dumps(geometry_info))
-
+                    
+                    elif data['type'] == 'ping':
+                        # Handle ping - respond with pong
+                        logger.info("Received ping, responding with pong")
+                        await websocket.send(json.dumps({
+                            'type': 'pong',
+                            'timestamp': int(time.time() * 1000)
+                        }))
+                    
+                    elif data['type'] == 'health_check':
+                        # Handle health check
+                        logger.info("Received health_check request")
+                        await websocket.send(json.dumps({
+                            'type': 'health_check_response',
+                            'status': 'ok',
+                            'timestamp': int(time.time() * 1000)
+                        }))
+                    
+                    elif data['type'] == 'embedding':
+                        # Process text to generate embedding
+                        text = data.get('text', '')
+                        source = data.get('source', 'unknown')
+                        
+                        if not text.strip():
+                            # Empty text
+                            await websocket.send(json.dumps({
+                                'type': 'error',
+                                'message': 'Empty text provided for embedding generation'
+                            }))
+                            continue
+                        
+                        logger.info(f"Processing embedding for text from {source}: {text[:50]}..." if len(text) > 50 else f"Processing embedding for text from {source}: {text}")
+                        
+                        try:
+                            # In a real implementation, this would use a text encoder model
+                            # For now, create a mock embedding (random vector, normalized)
+                            embedding_dim = self.hpc_sig_manager.config['embedding_dim']
+                            mock_embedding = torch.randn(embedding_dim, dtype=torch.float32)
+                            mock_embedding = torch.nn.functional.normalize(mock_embedding, p=2, dim=0)
+                            
+                            await websocket.send(json.dumps({
+                                'type': 'embedding_result',
+                                'embedding': mock_embedding.tolist(),
+                                'source_text': text[:100] + '...' if len(text) > 100 else text
+                            }))
+                        except Exception as e:
+                            logger.error(f"Error generating embedding: {e}")
+                            await websocket.send(json.dumps({
+                                'type': 'error',
+                                'message': f'Error generating embedding: {str(e)}'
+                            }))
+                    
+                    elif data['type'] == 'stats':
+                        # Process embedding for stats
+                        embedding = data.get('embedding', [])
+                        source = data.get('source', 'unknown')
+                        
+                        if not embedding or len(embedding) == 0:
+                            # Invalid embedding
+                            await websocket.send(json.dumps({
+                                'type': 'error',
+                                'message': 'Invalid embedding provided for stats calculation'
+                            }))
+                            continue
+                        
+                        logger.info(f"Calculating stats for embedding from {source}")
+                        
+                        try:
+                            # In a real implementation, this would calculate actual significance
+                            # For now, return a mock significance score
+                            mock_significance = 0.85  # High significance value for testing
+                            
+                            await websocket.send(json.dumps({
+                                'type': 'stats_result',
+                                'significance': mock_significance,
+                                'timestamp': int(time.time() * 1000)
+                            }))
+                        except Exception as e:
+                            logger.error(f"Error calculating stats: {e}")
+                            await websocket.send(json.dumps({
+                                'type': 'error',
+                                'message': f'Error calculating stats: {str(e)}'
+                            }))
+                    
                     else:
                         # Unknown message type
                         error_msg = {

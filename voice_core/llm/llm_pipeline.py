@@ -190,17 +190,49 @@ class LocalLLMPipeline:
         max_attempts = 2
         for attempt in range(max_attempts):
             try:
+                # Log the request attempt
+                self.logger.info(f"Sending LLM request attempt {attempt+1}/{max_attempts} to {self.base_url}/chat/completions")
+                
                 async with self.session.post(f"{self.base_url}/chat/completions", json=payload, timeout=30) as resp:
+                    # Log the response status and headers for debugging
+                    self.logger.info(f"LLM API response status: {resp.status}, content-type: {resp.headers.get('content-type')}")
+                    
                     if resp.status != 200:
-                        self.logger.error(f"LLM API error: {await resp.text()}")
+                        error_text = await resp.text()
+                        self.logger.error(f"LLM API error (status {resp.status}): {error_text}")
+                        if attempt == max_attempts - 1:  # Last attempt
+                            return f"I'm sorry, I encountered a service error (HTTP {resp.status})."
                         continue
-                    data = await resp.json()
+                    
+                    # Try to parse the response as JSON
+                    try:
+                        data = await resp.json()
+                    except Exception as json_error:
+                        response_text = await resp.text()
+                        self.logger.error(f"Failed to parse LLM API response as JSON: {json_error}")
+                        self.logger.error(f"Raw response: {response_text[:500]}..." if len(response_text) > 500 else f"Raw response: {response_text}")
+                        return "I'm sorry, I received an invalid response format."
+                    
+                    # Extract the response text
                     response = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                    return response if response else "I'm not sure how to answer that."
-            except Exception as e:
-                self.logger.error(f"Error in LLM request: {e}")
+                    
+                    # Log if response is empty
+                    if not response:
+                        self.logger.warning(f"LLM returned empty content. Full API response: {data}")
+                        return "I'm not sure how to respond to that. Could you rephrase your question?"
+                    
+                    self.logger.info(f"Successful LLM response: {response[:100]}..." if len(response) > 100 else f"Successful LLM response: {response}")
+                    return response
+                    
+            except asyncio.TimeoutError:
+                self.logger.error(f"Timeout waiting for LLM API response (attempt {attempt+1}/{max_attempts})")
                 await asyncio.sleep(1.5 * (attempt + 1))
-        return "I'm having trouble processing that request right now."
+            except Exception as e:
+                self.logger.error(f"Error in LLM request (attempt {attempt+1}/{max_attempts}): {e}")
+                self.logger.error(f"Request payload: {json.dumps(payload)[:500]}..." if len(json.dumps(payload)) > 500 else f"Request payload: {json.dumps(payload)}")
+                await asyncio.sleep(1.5 * (attempt + 1))
+        
+        return "I'm having trouble processing that request right now. Please try again later."
     
     async def _ensure_connection(self):
         """Ensure a valid connection to the LLM API."""

@@ -69,7 +69,7 @@ class WhisperConfig:
 @dataclass
 class LLMConfig:
     """Configuration for LLM service."""
-    model: str = "qwen2.5-7b-instruct-1m"
+    model: str = "qweniversal_studios-1m-7b"
     api_endpoint: str = "http://localhost:1234/v1"
     temperature: float = 0.7
     max_tokens: int = 150

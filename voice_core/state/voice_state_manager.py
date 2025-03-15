@@ -101,6 +101,9 @@ class VoiceStateManager:
         
         # Initialize context for tts_session
         self._tts_context_manager_initialized = False
+        
+        # Deduplication for publish_transcription
+        self._recent_transcripts: Dict[str, float] = {}
 
     def _start_state_monitor(self) -> None:
         """Start a background task to monitor state transitions."""
@@ -794,15 +797,39 @@ class VoiceStateManager:
         Returns:
             bool: True if publishing was successful
         """
-        if not self._room or not self._room.local_participant:
-            self.logger.warning("No room or participant, skipping transcript publish")
+        # Skip empty transcripts
+        if not text or not text.strip():
             return False
             
-        success = True
+        # Add deduplication to prevent loops
+        # Create a unique key for this transcript based on text and sender
+        dedup_key = f"{sender}:{text[:50]}"
+        current_time = time.time()
         
-        # Increment sequence for ordering
-        self._transcript_sequence += 1
+        # Check if we've published this exact transcript recently
+        for past_key, timestamp in list(self._recent_transcripts.items()):
+            # Remove old entries first
+            if current_time - timestamp > 5.0:  # 5 second expiration
+                self._recent_transcripts.pop(past_key, None)
+            # If this is a duplicate and very recent (within 2 seconds), skip it
+            elif past_key == dedup_key and current_time - timestamp < 2.0:
+                self.logger.warning(f"Skipping duplicate transcript publish: '{text[:30]}...' from {sender}")
+                return False
+                
+        # Remember this transcript for deduplication
+        self._recent_transcripts[dedup_key] = current_time
+        
+        # Check if room and local participant are available
+        if not self._room or not self._room.local_participant:
+            self.logger.error(f"No room or participant available for transcription. Room: {self._room is not None}, Local participant available: {self._room.local_participant is not None if self._room else False}")
+            return False
+        
+        # Get current sequence number and then increment it for next use
         seq = self._transcript_sequence
+        self._transcript_sequence += 1
+        
+        # Initialize success flag
+        success = True
         
         # Determine the participant identity to use
         # Use provided identity or fallback to local participant identity
@@ -817,16 +844,19 @@ class VoiceStateManager:
         
         try:
             # 1) Publish custom data via data channel
+            transcript_data = {
+                "type": "transcript",
+                "text": text,
+                "sender": sender,  # Clearly identify sender
+                "participant_identity": identity_to_use,  # Include explicit identity
+                "sequence": seq,   # Include sequence for ordering
+                "timestamp": time.time(),
+                "is_final": is_final
+            }
+            
+            self.logger.info(f"Publishing transcript via data channel: '{text[:30]}...' from {sender}")
             data_success = await self._publish_with_retry(
-                json.dumps({
-                    "type": "transcript",
-                    "text": text,
-                    "sender": sender,  # Clearly identify sender
-                    "participant_identity": identity_to_use,  # Include explicit identity
-                    "sequence": seq,   # Include sequence for ordering
-                    "timestamp": time.time(),
-                    "is_final": is_final
-                }).encode(),
+                json.dumps(transcript_data).encode(),
                 f"{sender} transcript"
             )
             
@@ -839,45 +869,63 @@ class VoiceStateManager:
                 track_sid = None
                 if sender == "user":
                     # For user transcripts, find the appropriate remote participant's track
-                    for participant in self._room.remote_participants.values():
+                    self.logger.info(f"Looking for track SID for user with identity: {identity_to_use}")
+                    remote_participants = list(self._room.remote_participants.values())
+                    self.logger.info(f"Found {len(remote_participants)} remote participants")
+                    
+                    for participant in remote_participants:
+                        self.logger.info(f"Checking participant: {participant.identity}")
                         if participant.identity == identity_to_use:
-                            for pub in participant.track_publications.values():
+                            track_pubs = list(participant.track_publications.values())
+                            self.logger.info(f"Found {len(track_pubs)} track publications for {participant.identity}")
+                            
+                            for pub in track_pubs:
+                                self.logger.info(f"Track: {pub.kind}, SID: {pub.sid}")
                                 if pub.kind == rtc.TrackKind.KIND_AUDIO and pub.sid:
                                     track_sid = pub.sid
+                                    self.logger.info(f"Selected track SID: {track_sid}")
                                     break
                             if track_sid:
                                 break
                 else:
                     # For assistant transcripts, use the local participant's track
-                    for pub in self._room.local_participant.track_publications.values():
+                    self.logger.info("Looking for track SID for assistant (local participant)")
+                    local_track_pubs = list(self._room.local_participant.track_publications.values())
+                    self.logger.info(f"Found {len(local_track_pubs)} local track publications")
+                    
+                    for pub in local_track_pubs:
+                        self.logger.info(f"Track: {pub.kind}, SID: {pub.sid}")
                         if pub.kind == rtc.TrackKind.KIND_AUDIO and pub.sid:
                             track_sid = pub.sid
+                            self.logger.info(f"Selected track SID: {track_sid}")
                             break
 
-                if track_sid:
-                    # Important: Use consistent segment format
-                    segment_id = str(uuid.uuid4())
-                    current_time = int(time.time() * 1000)  # milliseconds
-                    
-                    trans = rtc.Transcription(
-                        participant_identity=identity_to_use,
-                        track_sid=track_sid,
-                        segments=[
-                            rtc.TranscriptionSegment(
-                                id=segment_id,
-                                text=text,
-                                start_time=current_time,
-                                end_time=current_time,
-                                final=is_final,
-                                language="en"
-                            )
-                        ]
-                    )
-                    await self._room.local_participant.publish_transcription(trans)
-                    self.logger.debug(f"Published transcription with identity '{identity_to_use}'")
-                else:
-                    self.logger.warning("No audio track SID for Transcription API")
-                    success = False
+                # If no track SID is found, use a data channel only approach
+                if not track_sid:
+                    self.logger.warning(f"No audio track SID found for {sender}, using data channel only")
+                    # Still return success if data channel publish worked
+                    return data_success
+
+                # Important: Use consistent segment format
+                segment_id = str(uuid.uuid4())
+                current_time = int(time.time() * 1000)  # milliseconds
+                
+                trans = rtc.Transcription(
+                    participant_identity=identity_to_use,
+                    track_sid=track_sid,
+                    segments=[
+                        rtc.TranscriptionSegment(
+                            id=segment_id,
+                            text=text,
+                            start_time=current_time,
+                            end_time=current_time,
+                            final=is_final,
+                            language="en"
+                        )
+                    ]
+                )
+                await self._room.local_participant.publish_transcription(trans)
+                self.logger.debug(f"Published transcription with identity '{identity_to_use}'")
             except Exception as e:
                 self.logger.warning(f"Failed transcription API publish: {e}")
                 success = False

@@ -231,7 +231,7 @@ class LucidiaSystem:
     async def retrieve_relevant_context(self, user_input: str) -> Dict[str, Any]:
         """
         Retrieve relevant context from memory, self model, and world model.
-        
+
         Args:
             user_input: The user's message
             
@@ -241,18 +241,46 @@ class LucidiaSystem:
         context = {
             "memory_context": [],
             "self_model_context": {},
-            "world_model_context": {}
+            "world_model_context": {},
+            "recall_context": {}
         }
         
         try:
             # 1. Retrieve relevant memories from memory core
             if hasattr(self.memory_integration, 'memory_core') and self.memory_integration.memory_core:
                 try:
-                    # Get the top 5 relevant memories based on semantic similarity
+                    # Get the top 5 relevant memories based on semantic similarity with a lower threshold
+                    memory_core = self.memory_integration.memory_core
+                    
+                    # First check if there are relevant memories and get a relevance assessment
+                    if hasattr(memory_core, 'check_memory_relevance'):
+                        relevance_assessment = await memory_core.check_memory_relevance(
+                            query=user_input,
+                            threshold=0.6  # Moderate threshold for relevance
+                        )
+                        
+                        # Store relevance assessment in context
+                        context["recall_context"] = relevance_assessment
+                        
+                        # If we have relevant memories, use them directly
+                        if relevance_assessment.get('has_relevant_memories', False):
+                            memory_results = relevance_assessment.get('memories', [])
+                            logger.info(f"Using {len(memory_results)} memories from relevance assessment")
+                            
+                        # If we have cross-session memories, make sure they're imported to STM
+                        if relevance_assessment.get('has_cross_session', False) and hasattr(memory_core, 'import_cross_session_memories'):
+                            try:
+                                # Import cross-session memories to STM for better recall
+                                await memory_core.import_cross_session_memories(user_input, limit=5)
+                                logger.info("Imported cross-session memories to STM for better recall")
+                            except Exception as e:
+                                logger.error(f"Error importing cross-session memories: {e}")
+                    
                     memory_results = await self.memory_integration.memory_core.retrieve_memories(
                         query=user_input,
-                        limit=5,
-                        min_significance=0.3  # Only include somewhat significant memories
+                        limit=10,  # Further increased limit to get more potential matches
+                        min_significance=0.05  # Even lower threshold to include more memories
+                                              # This helps catch cross-session memories that might have lower significance
                     )
                     
                     if memory_results:
@@ -267,7 +295,7 @@ class LucidiaSystem:
                         
                         # Format the memories for context
                         for mem in memory_items:
-                            # Add type checking to handle the case where a string is returned instead of a dict
+                            # Add better type checking to handle different memory result formats
                             if not isinstance(mem, dict):
                                 logger.warning(f"Unexpected memory result type: {type(mem)}, value: {mem}")
                                 continue
@@ -294,7 +322,7 @@ class LucidiaSystem:
                     self_context = {
                         "identity": identity.get("description", "Lucidia is a synthetic intelligence with self-awareness"),
                         "purpose": identity.get("purpose", "To assist, learn, and evolve through interaction"),
-                        "values": values[:3] if values else [],  # Include top 3 values
+                        "values": values[:5] if values else []  # Include top 5 values for more context
                     }
                     
                     # Add emotional context if available
@@ -319,12 +347,14 @@ class LucidiaSystem:
                         r'(?i)who (created|made) you',
                         r'(?i)who is your (creator|maker)',
                         r'(?i)what is a synthien',
+                        r'(?i)MEGAPROMPT',
                         r'(?i)who is MEGAPROMPT',
                         r'(?i)who is Daniel',
                         r'(?i)what is lucidia',
                         r'(?i)how (were|was) you (created|made)',
                         r'(?i)your (origin|purpose)',
-                        r'(?i)tell me about yourself'
+                        r'(?i)tell me about yourself',
+                        r'(?i)who am i'  # Add pattern for personal identity questions
                     ]
                     
                     for pattern in identity_patterns:
@@ -340,7 +370,7 @@ class LucidiaSystem:
                         
                         # Get creator information if available
                         if hasattr(self.world_model, 'creator_reference'):
-                            world_context['creator'] = self.world_model.creator_reference
+                            world_context['MEGAPROMPT'] = self.world_model.creator_reference
                             
                         # Get synthien identity information if available
                         if hasattr(self.world_model, 'knowledge_graph') and 'synthien' in self.world_model.knowledge_graph:
@@ -368,17 +398,43 @@ class LucidiaSystem:
                     # If no entities found, get core concepts related to the query
                     if not world_context and hasattr(self.world_model, 'get_related_concepts'):
                         concepts = await self.world_model.get_related_concepts(user_input, limit=2)
-                        # get_related_concepts returns a dict where keys are concept names and values are relationship lists
+                        # Format the relationships for display
                         for concept_name, relationships in concepts.items():
+                            # Convert relationships to a list of strings for display
+                            formatted_relationships = []
+                            
+                            # Handle different possible formats of relationships
+                            if isinstance(relationships, list):
+                                for rel in relationships:
+                                    if isinstance(rel, dict):
+                                        rel_type = rel.get('type', 'related')
+                                        formatted_relationships.append(f"{rel_type}")
+                                    else:
+                                        formatted_relationships.append(str(rel))
+                            elif isinstance(relationships, dict):
+                                for rel_name, rel_details in relationships.items():
+                                    formatted_relationships.append(f"{rel_name}")
+                            
                             world_context[concept_name] = {
                                 'name': concept_name,
-                                'relationships': relationships
+                                'relationships': formatted_relationships
                             }
                     
                     context["world_model_context"] = world_context
                     logger.info(f"Retrieved world model context with {len(world_context)} items")
                 except Exception as e:
                     logger.error(f"Error retrieving world-model context: {e}")
+                    
+            # 4. Get context recall self-prompt if available
+            if hasattr(self.memory_integration, 'memory_core') and self.memory_integration.memory_core:
+                try:
+                    if hasattr(self.memory_integration.memory_core, 'get_context_recall_prompt'):
+                        recall_prompt = await self.memory_integration.memory_core.get_context_recall_prompt(user_input)
+                        if recall_prompt:
+                            context["recall_prompt"] = recall_prompt
+                            logger.info(f"Added context recall prompt: {recall_prompt[:50]}...")
+                except Exception as e:
+                    logger.error(f"Error getting context recall prompt: {e}")
             
             return context
         except Exception as e:
@@ -634,8 +690,8 @@ class LucidiaSystem:
                 world_data = context["world_model_context"]
                 if isinstance(world_data, dict):
                     world_parts = []
-                    
-                    # Special handling for creator information
+
+                    # Special handling for MEGAPROMPT/creator information
                     if 'creator' in world_data:
                         creator_info = world_data['creator']
                         creator_parts = ["Creator Information:"]
@@ -647,6 +703,19 @@ class LucidiaSystem:
                             if 'creation_purpose' in creator_info:
                                 creator_parts.append(f"Creation Purpose: {creator_info.get('creation_purpose')}")
                         world_parts.append("\n".join(creator_parts))
+                    
+                    # Also handle MEGAPROMPT directly
+                    if 'MEGAPROMPT' in world_data:
+                        megaprompt_info = world_data['MEGAPROMPT']
+                        megaprompt_parts = ["MEGAPROMPT Information:"]
+                        if isinstance(megaprompt_info, dict):
+                            if 'creator_full_name' in megaprompt_info:
+                                megaprompt_parts.append(f"Name: {megaprompt_info.get('creator_full_name')}")
+                            if 'creator_id' in megaprompt_info:
+                                megaprompt_parts.append(f"ID: {megaprompt_info.get('creator_id')}")
+                            if 'relationship_confidence' in megaprompt_info:
+                                megaprompt_parts.append(f"Relationship Confidence: {megaprompt_info.get('relationship_confidence')}")
+                        world_parts.append("\n".join(megaprompt_parts))
                     
                     # Special handling for synthien information
                     if 'synthien' in world_data:
@@ -693,11 +762,24 @@ class LucidiaSystem:
                     world_text = "\n\n".join(world_parts)
             
             # Construct the system prompt
-            system_prompt = """You are Lucidia, an assistant with persistent memory and a sense of self. 
-            You have access to your own self-model and a knowledge base.
-            When answering, incorporate relevant memories and knowledge naturally without explicitly mentioning 
-            that you're using memory unless directly asked about your memory system. 
-            Maintain a consistent persona across conversations."""
+            base_system_prompt = """You are Lucidia, an assistant with persistent memory across conversations and a sense of self.
+You have access to your own self-model, a knowledge base, and memories from both current and previous conversations.
+
+IMPORTANT: When answering, you MUST incorporate relevant memories from both current and previous sessions naturally in your responses.
+If the user asks about something they've mentioned before (like their name, preferences, or past interactions), 
+you MUST use the information from your memory rather than saying you don't recall or can't remember.
+
+Only mention that you're using memory if directly asked about your memory system.
+
+Maintain a consistent persona across conversations."""
+
+            # Add context recall prompt if available
+            if "recall_prompt" in context and context["recall_prompt"]:
+                system_prompt = f"{base_system_prompt}\n\n{context['recall_prompt']}"
+                logger.info("Added context recall prompt to system prompt")
+            else:
+                system_prompt = base_system_prompt
+                
             
             # Construct the user prompt with context
             context_parts = []
@@ -713,6 +795,26 @@ class LucidiaSystem:
             
             if world_text.strip():
                 context_parts.append(f"Relevant knowledge:\n{world_text}")
+            
+            # Add special instructions for cross-session recall if needed
+            if "recall_context" in context and context["recall_context"]:
+                recall_context = context["recall_context"]
+                has_cross_session = recall_context.get("has_cross_session", False)
+                
+                # If we should ask the user about recalling past discussions
+                if recall_context.get("should_ask_user", False):
+                    context_parts.append("Note: There may be relevant past conversations on this topic. Consider asking if the user would like you to recall them.")
+                
+                # If we have cross-session memories, add a stronger instruction
+                elif has_cross_session:
+                    context_parts.append("""IMPORTANT: There are memories from previous conversations that are relevant to this query. 
+You MUST incorporate this information in your response.
+Do NOT say "I don't have specific recollection" or similar phrases - you DO have the information in your memory.
+Respond as if you naturally remember the information from previous conversations.""")
+                
+                # If we have relevant memories but they're not strong enough
+                elif recall_context.get("relevance_score", 0) > 0.3 and not recall_context.get("has_relevant_memories", False):
+                    context_parts.append("Note: There might be some related past conversations that could be relevant.")
             
             context_str = "\n\n".join(context_parts)
             

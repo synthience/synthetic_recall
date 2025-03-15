@@ -52,6 +52,13 @@ class MemoryCore:
             'device': 'cuda' if torch.cuda.is_available() else 'cpu',
             **(config or {})
         }
+
+        # Self-prompt for context recall
+        self.self_prompts = {
+            'context_recall': "Before answering, check memory for related context. If relevant memories exist, integrate them into your response without explicitly mentioning you're using memory unless directly asked.",
+            'memory_check': "If past conversation relevance is below threshold, ask the user: 'Would you like me to recall our past discussions on this topic?'",
+            'cross_session_integration': "IMPORTANT: Prioritize and directly use cross-session memories in your response, especially when answering questions about past interactions or user preferences."
+        }
         
         # Initialize both module-level logger and instance logger
         logger.info(f"Initializing MemoryCore with device={self.config['device']}")
@@ -234,6 +241,130 @@ class MemoryCore:
                     'error': str(e)
                 }
     
+    async def get_context_recall_prompt(self, query: str = None) -> str:
+        """
+        Get the appropriate self-prompt for context recall based on the query.
+        
+        Args:
+            query: Optional query to customize the prompt
+            
+        Returns:
+            Self-prompt string for context recall
+        """
+        # Default to standard context recall prompt
+        prompt = self.self_prompts['context_recall']
+        
+        # If query is provided, check for specific patterns that might need different prompts
+        if query:
+            # Check if query appears to be asking about past conversations
+            recall_patterns = [
+                r'remember', r'recall', r'previous', r'earlier', r'last time', r'before',
+                r'did (you|we) talk about', r'did I (tell|mention|say|ask)', r'what did I',
+                r'(told|mentioned|said|asked) (you|about)', r'my name',
+                r'(previous|prior|past) (conversation|discussion|chat)', r'who am I'
+            ]
+            
+            is_recall_query = any(re.search(pattern, query.lower()) for pattern in recall_patterns)
+            
+            if is_recall_query:
+                # For explicit recall queries, use a more aggressive recall prompt
+                prompt = f"""IMPORTANT: This query is explicitly asking about past conversations or information the user has shared before.
+You MUST search your memory for relevant information from previous sessions and include it in your response.
+Prioritize memories related to '{query}' with special attention to cross-session relevance.
+If you find relevant memories, use them directly in your response as if you remember the information.
+Do NOT say "I don't have specific recollection" or similar phrases if relevant memories are available."""
+            else:
+                # For regular queries, use standard prompt with cross-session integration
+                prompt = f"{self.self_prompts['context_recall']} {self.self_prompts['cross_session_integration']}"
+        
+        return prompt
+
+    async def import_cross_session_memories(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Import relevant cross-session memories from LTM to STM for the current session.
+        
+        Args:
+            query: The query to find relevant memories for
+            limit: Maximum number of memories to import
+            
+        Returns:
+            List of imported memory IDs
+        """
+        try:
+            # Search LTM for relevant memories with lower threshold
+            ltm_results = await self.long_term_memory.search_memory(
+                query, 
+                limit=limit * 2,  # Request more to filter from
+                min_significance=0.3  # Lower threshold for cross-session imports
+            )
+            
+            if not ltm_results:
+                return []
+                
+            # Filter for memories not already in STM
+            stm_ids = {memory.get('id') for memory in self.short_term_memory.memory}
+            ltm_memories_to_import = [mem for mem in ltm_results if mem.get('id') not in stm_ids]
+            
+            # Import memories to STM
+            imported_ids = []
+            for memory in ltm_memories_to_import[:limit]:
+                memory_id = await self.short_term_memory.import_from_ltm(memory)
+                imported_ids.append(memory_id)
+                
+            if imported_ids:
+                logger.info(f"Imported {len(imported_ids)} cross-session memories from LTM to STM")
+                
+            return imported_ids
+        except Exception as e:
+            logger.error(f"Error importing cross-session memories: {e}")
+            return []
+    
+    async def check_memory_relevance(self, query: str, threshold: float = 0.6) -> Dict[str, Any]:
+        """
+        Check if there are relevant memories for a query and return a relevance assessment.
+        
+        Args:
+            query: The query to check for relevant memories
+            threshold: Relevance threshold
+            
+        Returns:
+            Dict with relevance assessment
+        """
+        # Retrieve memories for the query
+        memories = await self.retrieve_memories(query, limit=5, min_significance=threshold * 0.7)
+        
+        # Import relevant cross-session memories to STM
+        try:
+            # This will make cross-session memories available in STM for future queries
+            await self.import_cross_session_memories(query, limit=3)
+        except Exception as e:
+            logger.warning(f"Error importing cross-session memories during relevance check: {e}")
+        
+        # Calculate overall relevance score
+        if not memories:
+            return {'has_relevant_memories': False, 'relevance_score': 0.0, 'should_ask_user': False}
+        
+        # Calculate average significance of retrieved memories
+        avg_significance = sum(m.get('metadata', {}).get('significance', 0) for m in memories) / len(memories)
+        
+        # Check if any cross-session memories were found
+        cross_session_memories = [m for m in memories if m.get('metadata', {}).get('cross_session', False)]
+        has_cross_session = len(cross_session_memories) > 0
+        
+        # Determine if we should ask the user about recalling past discussions
+        # If relevance is moderate (not too high or too low)
+        should_ask_user = (0.4 <= avg_significance < threshold) or \
+                         (has_cross_session and avg_significance < threshold)
+        
+        return {
+            'has_relevant_memories': avg_significance >= threshold,
+            'relevance_score': avg_significance,
+            'should_ask_user': should_ask_user,
+            'memory_count': len(memories),
+            'memories': memories if avg_significance >= threshold else [],
+            'has_cross_session': has_cross_session
+        }
+    
     async def retrieve_memories(self, query: str, limit: int = 5, 
                              min_significance: float = 0.0) -> List[Dict[str, Any]]:
         """
@@ -251,7 +382,7 @@ class MemoryCore:
             # Implement parallel search with multiple strategies
             results = await self._parallel_memory_search(
                 query=query,
-                limit=limit,
+                limit=limit * 2,  # Request more results to ensure we get enough after filtering
                 min_significance=min_significance
             )
             
@@ -282,7 +413,7 @@ class MemoryCore:
         })
         search_tasks.append(mpl_search)
         
-        # Strategy 2: Direct keyword search in both STM and LTM
+        # Strategy 2: Direct keyword search in both STM and LTM with lower threshold
         # This helps find exact matches even if semantic similarity is low
         # Implementation inside STM and LTM components
         stm_keyword_search = self.short_term_memory.keyword_search(query, limit)
@@ -294,7 +425,7 @@ class MemoryCore:
         # Uses regex patterns to identify personal information requests
         personal_info_patterns = [
             r'\bname\b', r'\bemail\b', r'\baddress\b', r'\bphone\b', 
-            r'\bage\b', r'\bbirth\b', r'\bfamily\b', r'\bjob\b',
+            r'\bage\b', r'\bbirth\b', r'\bfamily\b', r'\bjob\b', r'\bmega\b', r'\bdaniel\b',
             r'\bwork\b', r'\bprefer\b', r'\blike\b', r'\bdislike\b'
         ]
         
@@ -305,8 +436,8 @@ class MemoryCore:
                 # Boost significance threshold for personal data
                 personal_info_search = self.memory_prioritization.personal_info_search(
                     query, 
-                    context={'limit': limit},
-                    min_personal_significance=min_significance
+                    context={'limit': limit * 2},  # Increase limit for personal info
+                    min_personal_significance=min_significance * 0.5  # Lower threshold for personal info
                 )
                 search_tasks.append(personal_info_search)
                 break
@@ -423,7 +554,7 @@ class MemoryCore:
             # Fix: properly await the coroutine
             routed_results = await self.memory_prioritization.route_query(query, {
                 'limit': limit,
-                'min_significance': min_significance
+                'min_significance': min_significance * 0.5  # Lower threshold for fallback search
             })
             if routed_results and 'memories' in routed_results:
                 self.logger.debug(f"Fallback search: prioritization layer returned {len(routed_results['memories'])} results")
@@ -437,7 +568,7 @@ class MemoryCore:
         # Try short-term memory first
         if hasattr(self, 'short_term_memory') and self.short_term_memory:
             try:
-                stm_results = await self.short_term_memory.search(query, limit, min_significance)
+                stm_results = await self.short_term_memory.search(query, limit, min_significance * 0.5)  # Lower threshold
                 all_results.extend(stm_results)
             except Exception as e:
                 self.logger.warning(f"Error searching short-term memory in fallback: {e}")
@@ -446,7 +577,7 @@ class MemoryCore:
         remaining_limit = limit - len(all_results)
         if remaining_limit > 0 and hasattr(self, 'long_term_memory') and self.long_term_memory:
             try:
-                ltm_results = await self.long_term_memory.search(
+                ltm_results = await self.long_term_memory.search_memory(
                     query, 
                     remaining_limit,
                     min_significance=max(0.0, min_significance - 0.2)  # Lower threshold for LTM
@@ -460,7 +591,7 @@ class MemoryCore:
             keywords = query.split()
             try:
                 if hasattr(self, 'short_term_memory') and self.short_term_memory:
-                    keyword_results = await self.short_term_memory.keyword_search(keywords, limit, min_significance)
+                    keyword_results = await self.short_term_memory.keyword_search(keywords, limit, min_significance * 0.3)  # Even lower threshold
                     all_results.extend(keyword_results)
             except Exception as e:
                 self.logger.warning(f"Error in keyword search during fallback: {e}")
