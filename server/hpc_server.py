@@ -5,8 +5,7 @@ import logging
 import torch
 import time
 
-# Import the HPCSIGFlowManager from the memory system
-from memory.lucidia_memory_system.core.integration.hpc_sig_flow_manager import HPCSIGFlowManager
+from memory.lucidia_memory_system.core.integration.hpc_qr_flow_manager import HPCQRFlowManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -14,52 +13,29 @@ logger = logging.getLogger(__name__)
 class HPCServer:
     """
     HPCServer listens on ws://0.0.0.0:5005
-    Expects JSON messages:
-      {
-        "type": "process",
-        "embeddings": [...]
-      }
-    or
-      {
-        "type": "stats"
-      }
-    or
-      {
-        "type": "get_geometry"
-      }
+    Expects JSON messages of various types (process, stats, etc.)
     """
     def __init__(self, host='0.0.0.0', port=5005):
         self.host = host
         self.port = port
-        # HPC manager that does hypothetical processing
-        self.hpc_sig_manager = HPCSIGFlowManager({
-            'embedding_dim': 384
-        })
-        logger.info("Initialized HPCServer with HPC-SIG manager")
+        self.hpc_qr_manager = HPCQRFlowManager({'embedding_dim': 384})
+        logger.info("Initialized HPCServer with HPC-QR manager")
 
     def get_stats(self):
-        # Return HPC state
         return { 
             'type': 'stats',
-            **self.hpc_sig_manager.get_stats()
+            **self.hpc_qr_manager.get_stats()
         }
 
     def get_geometry(self, model_version="latest"):
-        # Return hypersphere geometry information
         geometry_info = {
             'type': 'geometry',
             'model_version': model_version,
-            'embedding_dim': self.hpc_sig_manager.config['embedding_dim'],
-            'hypersphere_radius': 1.0,  # Normalized embeddings typically have unit radius
+            'embedding_dim': self.hpc_qr_manager.config['embedding_dim'],
+            'hypersphere_radius': 1.0,
             'coordinate_system': 'hyperspherical',
-            'timestamp': int(time.time() * 1000)  # Current timestamp in milliseconds
+            'timestamp': int(time.time() * 1000)
         }
-        
-        # Add additional geometry information if available from the manager
-        if hasattr(self.hpc_sig_manager, 'get_geometry_info'):
-            additional_info = self.hpc_sig_manager.get_geometry_info(model_version)
-            geometry_info.update(additional_info)
-            
         return geometry_info
 
     async def handle_websocket(self, websocket):
@@ -71,15 +47,12 @@ class HPCServer:
                     logger.info(f"Received message: {data}")
 
                     if data['type'] == 'process':
-                        # Perform HPC pipeline
                         embeddings = torch.tensor(data['embeddings'], dtype=torch.float32)
-                        processed_embedding, significance = await self.hpc_sig_manager.process_embedding(embeddings)
-
-                        # Example response
+                        processed_embedding, quickrecal_score = await self.hpc_qr_manager.process_embedding(embeddings)
                         response = {
                             'type': 'processed',
                             'embeddings': processed_embedding.tolist(),
-                            'significance': significance
+                            'quickrecal_score': quickrecal_score
                         }
                         logger.info(f"Sending HPC response: {response}")
                         await websocket.send(json.dumps(response))
@@ -89,14 +62,12 @@ class HPCServer:
                         await websocket.send(json.dumps(stats))
 
                     elif data['type'] == 'get_geometry':
-                        # Handle geometry request
                         model_version = data.get('model_version', 'latest')
                         geometry_info = self.get_geometry(model_version)
                         logger.info(f"Sending geometry information for model version {model_version}")
                         await websocket.send(json.dumps(geometry_info))
                     
                     elif data['type'] == 'ping':
-                        # Handle ping - respond with pong
                         logger.info("Received ping, responding with pong")
                         await websocket.send(json.dumps({
                             'type': 'pong',
@@ -104,7 +75,6 @@ class HPCServer:
                         }))
                     
                     elif data['type'] == 'health_check':
-                        # Handle health check
                         logger.info("Received health_check request")
                         await websocket.send(json.dumps({
                             'type': 'health_check_response',
@@ -113,24 +83,22 @@ class HPCServer:
                         }))
                     
                     elif data['type'] == 'embedding':
-                        # Process text to generate embedding
                         text = data.get('text', '')
                         source = data.get('source', 'unknown')
                         
                         if not text.strip():
-                            # Empty text
                             await websocket.send(json.dumps({
                                 'type': 'error',
                                 'message': 'Empty text provided for embedding generation'
                             }))
                             continue
                         
-                        logger.info(f"Processing embedding for text from {source}: {text[:50]}..." if len(text) > 50 else f"Processing embedding for text from {source}: {text}")
+                        logger.info(f"Processing embedding for text from {source}: {text[:50]}..." 
+                                    if len(text) > 50 else f"Processing embedding for text from {source}: {text}")
                         
                         try:
-                            # In a real implementation, this would use a text encoder model
-                            # For now, create a mock embedding (random vector, normalized)
-                            embedding_dim = self.hpc_sig_manager.config['embedding_dim']
+                            # Mock embedding
+                            embedding_dim = self.hpc_qr_manager.config['embedding_dim']
                             mock_embedding = torch.randn(embedding_dim, dtype=torch.float32)
                             mock_embedding = torch.nn.functional.normalize(mock_embedding, p=2, dim=0)
                             
@@ -146,40 +114,7 @@ class HPCServer:
                                 'message': f'Error generating embedding: {str(e)}'
                             }))
                     
-                    elif data['type'] == 'stats':
-                        # Process embedding for stats
-                        embedding = data.get('embedding', [])
-                        source = data.get('source', 'unknown')
-                        
-                        if not embedding or len(embedding) == 0:
-                            # Invalid embedding
-                            await websocket.send(json.dumps({
-                                'type': 'error',
-                                'message': 'Invalid embedding provided for stats calculation'
-                            }))
-                            continue
-                        
-                        logger.info(f"Calculating stats for embedding from {source}")
-                        
-                        try:
-                            # In a real implementation, this would calculate actual significance
-                            # For now, return a mock significance score
-                            mock_significance = 0.85  # High significance value for testing
-                            
-                            await websocket.send(json.dumps({
-                                'type': 'stats_result',
-                                'significance': mock_significance,
-                                'timestamp': int(time.time() * 1000)
-                            }))
-                        except Exception as e:
-                            logger.error(f"Error calculating stats: {e}")
-                            await websocket.send(json.dumps({
-                                'type': 'error',
-                                'message': f'Error calculating stats: {str(e)}'
-                            }))
-                    
                     else:
-                        # Unknown message type
                         error_msg = {
                             'type': 'error',
                             'error': f"Unknown message type: {data['type']}"
@@ -205,7 +140,7 @@ class HPCServer:
             await asyncio.Future()  # keep running
 
 class HPCClient:
-    """Client for the HPCServer to handle hyperdimensional computing operations via WebSocket."""
+    """Client for the HPCServer to handle HPC-QR operations via WebSocket."""
     
     def __init__(self, url: str = 'ws://localhost:5005', ping_interval: int = 20, ping_timeout: int = 20):
         self.url = url
@@ -216,7 +151,6 @@ class HPCClient:
         logger.info(f"Initializing HPCClient, will connect to {url}")
     
     async def connect(self):
-        """Connect to the HPCServer."""
         try:
             self.websocket = await websockets.connect(
                 self.url,
@@ -232,14 +166,12 @@ class HPCClient:
             return False
     
     async def disconnect(self):
-        """Disconnect from the HPCServer."""
         if self.websocket:
             await self.websocket.close()
             self.connected = False
             logger.info("Disconnected from HPCServer")
     
     async def process_embeddings(self, embeddings):
-        """Process embeddings through the HPC system."""
         if not self.connected:
             await self.connect()
         
@@ -257,7 +189,6 @@ class HPCClient:
             return {'type': 'error', 'error': str(e)}
     
     async def get_stats(self):
-        """Get server statistics."""
         if not self.connected:
             await self.connect()
         
@@ -274,14 +205,6 @@ class HPCClient:
             return {'type': 'error', 'error': str(e)}
 
     async def get_geometry(self, model_version="latest"):
-        """Get hypersphere geometry information.
-        
-        Args:
-            model_version: Version of the model to get geometry for (default: "latest")
-            
-        Returns:
-            Dict containing geometry information
-        """
         if not self.connected:
             await self.connect()
 
