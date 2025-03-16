@@ -16,9 +16,9 @@ services:
     networks:
       - lucid-net
 
-  nemo_sig_v3:
-    image: nemo_sig_v3:latest
-    container_name: nemo_sig_v3
+  quickrecal:
+    image: nemo_qr_v1:latest
+    container_name: quickrecal
     runtime: nvidia
     deploy:
       resources:
@@ -67,29 +67,29 @@ services:
     image: alpine/socat
     container_name: port-forward-5000
     depends_on:
-      - nemo_sig_v3
-    command: tcp-listen:5000,fork,reuseaddr tcp-connect:nemo_sig_v3:5000
+      - quickrecal
+    command: tcp-listen:5000,fork,reuseaddr tcp-connect:quickrecal:5000
     network_mode: host
 
   port-forward-5004:
     image: alpine/socat
     container_name: port-forward-5004
     depends_on:
-      - nemo_sig_v3
-    command: tcp-listen:5005,fork,reuseaddr tcp-connect:nemo_sig_v3:5005
+      - quickrecal
+    command: tcp-listen:5005,fork,reuseaddr tcp-connect:quickrecal:5005
     network_mode: host
 
   port-forward-5410:
     image: alpine/socat
     container_name: port-forward-5410
     depends_on:
-      - nemo_sig_v3
-    command: tcp-listen:5410,fork,reuseaddr tcp-connect:nemo_sig_v3:5410
+      - quickrecal
+    command: tcp-listen:5410,fork,reuseaddr tcp-connect:quickrecal:5410
     network_mode: host
 
   luciddream:
     container_name: luciddream
-    image: nemo_sig_v3:latest
+    image: nemo_qr_v1:latest
     runtime: nvidia
     deploy:
       resources:
@@ -109,8 +109,8 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - PYTHONPATH=/workspace/project
-      - TENSOR_SERVER_URL=ws://nemo_sig_v3:5001
-      - HPC_SERVER_URL=ws://nemo_sig_v3:5005
+      - TENSOR_SERVER_URL=ws://quickrecal:5001
+      - HPC_SERVER_URL=ws://quickrecal:5005
       - DREAM_API_PORT=8080
       - LOG_LEVEL=INFO
       - LUCIDIA_STORAGE_PATH=/app/memory
@@ -119,7 +119,7 @@ services:
       - "8080:8080"
       - "8081:8081"
     depends_on:
-      - nemo_sig_v3
+      - quickrecal
     command: >
       bash -c "pip uninstall -y numpy && pip install numpy==1.24.3 && 
                pip install websockets sentence-transformers scikit-learn==1.3.2 torch==2.0.1 fastapi uvicorn && 
@@ -131,7 +131,7 @@ services:
 
   stt_transcription:
     container_name: stt_transcription
-    image: nemo_sig_v3:latest
+    image: nemo_qr_v1:latest
     runtime: nvidia
     deploy:
       resources:

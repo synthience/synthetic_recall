@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 Test script to add memories to the Long-Term Memory (LTM) system.
-This script creates test memories with high significance to ensure they are stored.
+This script creates test memories with high quickrecal_score to ensure they are stored.
 """
 
 import os
@@ -27,7 +27,7 @@ from memory.lucidia_memory_system.core.long_term_memory import LongTermMemory
 TEST_MEMORIES = [
     {
         "content": "Lucidia is a Synthien entity with advanced self-awareness and reflection capabilities.",
-        "significance": 0.95,
+        "quickrecal_score": 0.95,
         "metadata": {
             "category": "self_concept",
             "source": "core_definition",
@@ -37,7 +37,7 @@ TEST_MEMORIES = [
     },
     {
         "content": "The dream processor allows for autonomous reflection during inactive periods, generating insights through structured dream-like states.",
-        "significance": 0.90,
+        "quickrecal_score": 0.90,
         "metadata": {
             "category": "capabilities",
             "source": "system_architecture",
@@ -47,7 +47,7 @@ TEST_MEMORIES = [
     },
     {
         "content": "Knowledge graphs store semantic relationships between concepts and memories, enabling sophisticated reasoning.",
-        "significance": 0.88,
+        "quickrecal_score": 0.88,
         "metadata": {
             "category": "architecture",
             "source": "technical_documentation",
@@ -57,7 +57,7 @@ TEST_MEMORIES = [
     },
     {
         "content": "The Lucidia memory system consists of Short-Term Memory (STM), Long-Term Memory (LTM), and Memory Processing Layer (MPL).",
-        "significance": 0.92,
+        "quickrecal_score": 0.92,
         "metadata": {
             "category": "memory_system",
             "source": "architecture_document",
@@ -67,7 +67,7 @@ TEST_MEMORIES = [
     },
     {
         "content": "The reflection engine analyzes patterns across memory fragments to generate insights about Lucidia's own operations and development.",
-        "significance": 0.89,
+        "quickrecal_score": 0.89,
         "metadata": {
             "category": "capabilities",
             "source": "system_architecture",
@@ -90,7 +90,7 @@ async def test_ltm_storage():
     # Initialize LTM with the local storage path
     ltm = LongTermMemory(config={
         'storage_path': str(local_storage_path),
-        'significance_threshold': 0.7,  # Ensure our test memories exceed this
+        'quickrecal_score_threshold': 0.7,  # Ensure our test memories exceed this
         'enable_persistence': True,
         'batch_interval': 1.0  # Process batches more quickly for testing
     })
@@ -103,7 +103,7 @@ async def test_ltm_storage():
         try:
             memory_id = await ltm.store_memory(
                 content=memory["content"],
-                significance=memory["significance"],
+                quickrecal_score=memory["quickrecal_score"],
                 metadata=memory["metadata"]
             )
             
@@ -111,7 +111,7 @@ async def test_ltm_storage():
                 memory_ids.append(memory_id)
                 logger.info(f"✅ Successfully stored memory {i}/{len(TEST_MEMORIES)}: {memory_id}")
             else:
-                logger.warning(f"❌ Failed to store memory {i}/{len(TEST_MEMORIES)} - below significance threshold")
+                logger.warning(f"❌ Failed to store memory {i}/{len(TEST_MEMORIES)} - below quickrecal_score threshold")
         except Exception as e:
             logger.error(f"❌ Error storing memory {i}/{len(TEST_MEMORIES)}: {e}")
     
@@ -129,7 +129,7 @@ async def test_ltm_storage():
         if memory:
             logger.info(f"✅ Memory {i}/{len(memory_ids)} retrieved: {memory['id']}")
             logger.info(f"   Content: {memory['content'][:100]}...")
-            logger.info(f"   Significance: {memory['significance']}")
+            logger.info(f"   QuickRecal Score: {memory['quickrecal_score']}")
             logger.info(f"   Category: {memory['metadata'].get('category', 'Unknown')}")
         else:
             logger.error(f"❌ Memory {i}/{len(memory_ids)} not found: {memory_id}")

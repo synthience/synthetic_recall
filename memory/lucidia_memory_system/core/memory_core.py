@@ -18,7 +18,7 @@ import re
 from .short_term_memory import ShortTermMemory
 from .long_term_memory import LongTermMemory
 from .memory_prioritization_layer import MemoryPrioritizationLayer
-from .integration.hpc_sig_flow_manager import HPCSIGFlowManager
+from .integration.hpc_qr_flow_manager import HPCQRFlowManager
 from .memory_types import MemoryTypes, MemoryEntry
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ class MemoryCore:
             'max_memories': 10000,
             'memory_path': Path('/app/memory/stored'),  # Use the consistent Docker path
             'stm_max_size': 10,
-            'significance_threshold': 0.3,
+            'quickrecal_threshold': 0.3,  # Renamed from significance_threshold to align with HPC-QR approach
             'enable_persistence': True,
             'decay_rate': 0.05,
             'device': 'cuda' if torch.cuda.is_available() else 'cpu',
@@ -65,7 +65,7 @@ class MemoryCore:
         self.logger = logger  # Initialize instance logger
         
         # Initialize HPC Manager for embeddings and significance
-        self.hpc_manager = HPCSIGFlowManager({
+        self.hpc_manager = HPCQRFlowManager({
             'embedding_dim': self.config['embedding_dim'],
             'device': self.config['device']
         })
@@ -78,7 +78,7 @@ class MemoryCore:
         
         self.long_term_memory = LongTermMemory({
             'storage_path': self.config['memory_path'] / 'ltm',
-            'significance_threshold': self.config['significance_threshold'],
+            'significance_threshold': self.config['quickrecal_threshold'],
             'max_memories': self.config['max_memories'],
             'decay_rate': self.config['decay_rate'],
             'embedding_dim': self.config['embedding_dim'],
@@ -190,7 +190,7 @@ class MemoryCore:
                 
                 # Store in LTM if above significance threshold or forced
                 ltm_id = None
-                if force_ltm or significance >= self.config['significance_threshold']:
+                if force_ltm or significance >= self.config['quickrecal_threshold']:
                     ltm_id = await self.long_term_memory.store_memory(
                         content=content_str,
                         embedding=embedding,
@@ -295,7 +295,7 @@ Do NOT say "I don't have specific recollection" or similar phrases if relevant m
             ltm_results = await self.long_term_memory.search_memory(
                 query, 
                 limit=limit * 2,  # Request more to filter from
-                min_significance=0.3  # Lower threshold for cross-session imports
+                min_quickrecal=0.3  # Lower threshold for cross-session imports
             )
             
             if not ltm_results:
@@ -331,7 +331,7 @@ Do NOT say "I don't have specific recollection" or similar phrases if relevant m
             Dict with relevance assessment
         """
         # Retrieve memories for the query
-        memories = await self.retrieve_memories(query, limit=5, min_significance=threshold * 0.7)
+        memories = await self.retrieve_memories(query, limit=5, min_quickrecal=threshold * 0.7)
         
         # Import relevant cross-session memories to STM
         try:
@@ -366,34 +366,39 @@ Do NOT say "I don't have specific recollection" or similar phrases if relevant m
         }
     
     async def retrieve_memories(self, query: str, limit: int = 5, 
-                             min_significance: float = 0.0) -> List[Dict[str, Any]]:
+                             min_quickrecal: float = 0.0) -> List[Dict[str, Any]]:
         """
         Retrieve memories based on query using multiple parallel search strategies.
         
         Args:
             query: Query text
             limit: Maximum number of results to return
-            min_significance: Minimum significance threshold
+            min_quickrecal: Minimum QuickRecal threshold (replaces significance)
             
         Returns:
             List of memory results
         """
+        logger.info(f"Retrieving memories for query: '{query}', limit: {limit}, min_quickrecal: {min_quickrecal}")
+        
+        # Don't process empty queries
+        if not query or not query.strip():
+            return []
+        
         try:
-            # Implement parallel search with multiple strategies
-            results = await self._parallel_memory_search(
-                query=query,
-                limit=limit * 2,  # Request more results to ensure we get enough after filtering
-                min_significance=min_significance
-            )
+            # Add a timestamp to the request for metrics
+            request_ts = time.time()
+            
+            # Get memories using multiple parallel search strategies
+            results = await self._parallel_memory_search(query, limit, min_quickrecal)
             
             return results
             
         except Exception as e:
             logger.error(f"Error retrieving memories: {e}")
             # Attempt fallback to basic search on error
-            return await self._fallback_memory_search(query, limit, min_significance)
+            return await self._fallback_memory_search(query, limit, min_quickrecal)
     
-    async def _parallel_memory_search(self, query: str, limit: int, min_significance: float) -> List[Dict[str, Any]]:
+    async def _parallel_memory_search(self, query: str, limit: int, min_quickrecal: float) -> List[Dict[str, Any]]:
         """
         Execute multiple search strategies in parallel for optimal retrieval.
         
@@ -409,7 +414,7 @@ Do NOT say "I don't have specific recollection" or similar phrases if relevant m
         # Strategy 1: Normal MPL-routed search (semantic)
         mpl_search = self.memory_prioritization.route_query(query, {
             'limit': limit * 2,  # Request more results to filter from
-            'min_significance': min_significance
+            'min_quickrecal': min_quickrecal
         })
         search_tasks.append(mpl_search)
         
@@ -437,7 +442,7 @@ Do NOT say "I don't have specific recollection" or similar phrases if relevant m
                 personal_info_search = self.memory_prioritization.personal_info_search(
                     query, 
                     context={'limit': limit * 2},  # Increase limit for personal info
-                    min_personal_significance=min_significance * 0.5  # Lower threshold for personal info
+                    min_personal_quickrecal=min_quickrecal * 0.5  # Lower threshold for personal info
                 )
                 search_tasks.append(personal_info_search)
                 break
@@ -534,7 +539,7 @@ Do NOT say "I don't have specific recollection" or similar phrases if relevant m
         
         return sorted_memories
     
-    async def _fallback_memory_search(self, query: str, limit: int = 5, min_significance: float = 0.0) -> List[Dict[str, Any]]:
+    async def _fallback_memory_search(self, query: str, limit: int = 5, min_quickrecal: float = 0.0) -> List[Dict[str, Any]]:
         """
         Fallback search method when other search methods fail.
         Tries multiple approaches to find relevant memories.
@@ -542,7 +547,7 @@ Do NOT say "I don't have specific recollection" or similar phrases if relevant m
         Args:
             query: Search query
             limit: Maximum number of results to return
-            min_significance: Minimum significance threshold
+            min_quickrecal: Minimum QuickRecal threshold
             
         Returns:
             List of matching memories
@@ -554,7 +559,7 @@ Do NOT say "I don't have specific recollection" or similar phrases if relevant m
             # Fix: properly await the coroutine
             routed_results = await self.memory_prioritization.route_query(query, {
                 'limit': limit,
-                'min_significance': min_significance * 0.5  # Lower threshold for fallback search
+                'min_quickrecal': min_quickrecal * 0.5  # Lower threshold for fallback search
             })
             if routed_results and 'memories' in routed_results:
                 self.logger.debug(f"Fallback search: prioritization layer returned {len(routed_results['memories'])} results")
@@ -568,7 +573,7 @@ Do NOT say "I don't have specific recollection" or similar phrases if relevant m
         # Try short-term memory first
         if hasattr(self, 'short_term_memory') and self.short_term_memory:
             try:
-                stm_results = await self.short_term_memory.search(query, limit, min_significance * 0.5)  # Lower threshold
+                stm_results = await self.short_term_memory.search(query, limit, min_quickrecal * 0.5)  # Lower threshold
                 all_results.extend(stm_results)
             except Exception as e:
                 self.logger.warning(f"Error searching short-term memory in fallback: {e}")
@@ -580,7 +585,7 @@ Do NOT say "I don't have specific recollection" or similar phrases if relevant m
                 ltm_results = await self.long_term_memory.search_memory(
                     query, 
                     remaining_limit,
-                    min_significance=max(0.0, min_significance - 0.2)  # Lower threshold for LTM
+                    min_quickrecal=max(0.0, min_quickrecal - 0.2)  # Lower threshold for LTM
                 )
                 all_results.extend(ltm_results)
             except Exception as e:
@@ -591,7 +596,7 @@ Do NOT say "I don't have specific recollection" or similar phrases if relevant m
             keywords = query.split()
             try:
                 if hasattr(self, 'short_term_memory') and self.short_term_memory:
-                    keyword_results = await self.short_term_memory.keyword_search(keywords, limit, min_significance * 0.3)  # Even lower threshold
+                    keyword_results = await self.short_term_memory.keyword_search(keywords, limit, min_quickrecal * 0.3)  # Even lower threshold
                     all_results.extend(keyword_results)
             except Exception as e:
                 self.logger.warning(f"Error in keyword search during fallback: {e}")

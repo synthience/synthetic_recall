@@ -251,6 +251,10 @@ class HPCClient:
         Args:
             url: WebSocket URL for HPC server
         """
+        # Ensure the URL has the proper WebSocket scheme
+        if not url.startswith('ws://') and not url.startswith('wss://'):
+            url = f'ws://{url}'  # Default to ws:// if no scheme is provided
+        
         self.url = url
         self.ws = None
         self.connected = False

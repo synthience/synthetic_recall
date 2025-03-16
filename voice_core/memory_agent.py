@@ -257,7 +257,7 @@ class LucidiaMemoryAgent:
         try:
             query = data.get("query", "")
             limit = data.get("limit", 5)
-            min_significance = data.get("min_significance", 0.3)
+            min_quickrecal_score = data.get("min_quickrecal_score", 0.3)
             
             if not query:
                 return {"success": False, "error": "No query provided"}
@@ -265,7 +265,7 @@ class LucidiaMemoryAgent:
             memories = await self.memory_client.retrieve_memories(
                 query=query,
                 limit=limit,
-                min_significance=min_significance
+                min_quickrecal_score=min_quickrecal_score
             )
             
             # Update stats
@@ -536,7 +536,7 @@ class LucidiaMemoryAgent:
         try:
             query = data.get("query", "")
             max_tokens = data.get("max_tokens", 1000)
-            min_significance = data.get("min_significance", 0.3)
+            min_quickrecal_score = data.get("min_quickrecal_score", 0.3)
             
             if not query:
                 return {"success": False, "error": "No query provided"}
@@ -544,7 +544,7 @@ class LucidiaMemoryAgent:
             context = await self.memory_client.get_rag_context(
                 query=query,
                 max_tokens=max_tokens,
-                min_significance=min_significance
+                min_quickrecal_score=min_quickrecal_score
             )
             
             # Update stats

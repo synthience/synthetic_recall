@@ -50,8 +50,18 @@ class MemoryClientProxy:
             
         return response.get("query_type", "other")
     
-    async def retrieve_memories(self, query: str, limit: int = 5, min_significance: float = 0.3) -> List[Dict[str, Any]]:
-        """Retrieve memories via the memory agent."""
+    async def retrieve_memories(self, query: str, limit: int = 5, min_quickrecal: float = 0.3) -> List[Dict[str, Any]]:
+        """
+        Retrieve memories via the memory agent.
+        
+        Args:
+            query: The search query
+            limit: Maximum number of memories to return
+            min_quickrecal: Minimum QuickRecal score threshold (0.0-1.0)
+            
+        Returns:
+            List of matching memories
+        """
         if not self.broker:
             await self.connect()
             
@@ -60,7 +70,7 @@ class MemoryClientProxy:
             {
                 "query": query,
                 "limit": limit,
-                "min_significance": min_significance
+                "min_quickrecal": min_quickrecal
             },
             client_id=self.client_id
         )
@@ -208,17 +218,33 @@ class MemoryClientProxy:
             
         return response.get("embedding", [])
 
-    async def get_rag_context(self, query: str, max_tokens: int = 1000, min_significance: float = 0.3) -> str:
-        """Get RAG context for a query via the memory agent."""
+    async def get_rag_context(self, query: str, max_tokens: int = 1000, min_quickrecal: float = 0.3, min_quickrecal_score: float = None, limit: int = 5) -> str:
+        """
+        Get RAG context for a query via the memory agent.
+        
+        Args:
+            query: The query to get context for
+            max_tokens: Maximum number of tokens in the context
+            min_quickrecal: Minimum QuickRecal score threshold (0.0-1.0)
+            min_quickrecal_score: Alternative parameter name for min_quickrecal (for compatibility)
+            limit: Maximum number of memories to include
+            
+        Returns:
+            Generated context string
+        """
         if not self.broker:
             await self.connect()
+        
+        # Use min_quickrecal_score if provided, otherwise use min_quickrecal
+        quickrecal_threshold = min_quickrecal_score if min_quickrecal_score is not None else min_quickrecal
             
         response = await self.broker.send_request(
             "get_rag_context", 
             {
                 "query": query,
                 "max_tokens": max_tokens,
-                "min_significance": min_significance
+                "min_quickrecal": quickrecal_threshold,
+                "limit": limit
             },
             client_id=self.client_id
         )
@@ -227,3 +253,39 @@ class MemoryClientProxy:
             raise Exception(response.get("error", "Unknown error"))
             
         return response.get("context", "")
+    
+    # Legacy method to maintain backward compatibility
+    async def retrieve_memories_legacy(self, query: str, limit: int = 5, min_significance: float = 0.3) -> List[Dict[str, Any]]:
+        """
+        Legacy method for retrieving memories with significance parameter (deprecated).
+        
+        This method is maintained for backward compatibility and redirects to retrieve_memories.
+        
+        Args:
+            query: The search query
+            limit: Maximum number of memories to return
+            min_significance: Minimum significance threshold (0.0-1.0)
+            
+        Returns:
+            List of matching memories
+        """
+        logger.warning("retrieve_memories_legacy with min_significance parameter is deprecated. Use retrieve_memories with min_quickrecal instead.")
+        return await self.retrieve_memories(query, limit, min_significance)
+    
+    # Legacy method to maintain backward compatibility
+    async def get_rag_context_legacy(self, query: str, max_tokens: int = 1000, min_significance: float = 0.3) -> str:
+        """
+        Legacy method for getting RAG context with significance parameter (deprecated).
+        
+        This method is maintained for backward compatibility and redirects to get_rag_context.
+        
+        Args:
+            query: The query to get context for
+            max_tokens: Maximum number of tokens in the context
+            min_significance: Minimum significance threshold (0.0-1.0)
+            
+        Returns:
+            Generated context string
+        """
+        logger.warning("get_rag_context_legacy with min_significance parameter is deprecated. Use get_rag_context with min_quickrecal instead.")
+        return await self.get_rag_context(query, max_tokens, min_significance)

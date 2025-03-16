@@ -54,7 +54,7 @@ class SpiralPhaseManager:
                 'max_depth': 0.3,
                 'min_creativity': 0.2,
                 'max_creativity': 0.5,
-                'transition_threshold': 0.85,  # Significance threshold to trigger phase transition
+                'transition_threshold': 0.85,  # QuickRecal threshold to trigger phase transition
                 'insight_weight': 0.5,  # Weight given to insights in this phase
                 'focus_areas': ['perception', 'categorization', 'organization'],
                 'typical_duration': timedelta(hours=3)
@@ -142,12 +142,12 @@ class SpiralPhaseManager:
         phase = phase or self.current_phase
         return self.phase_config[phase]
     
-    def transition_phase(self, significance: float) -> bool:
+    def transition_phase(self, quickrecal_score: float) -> bool:
         """
-        Consider a phase transition based on insight significance.
+        Consider a phase transition based on insight QuickRecal score.
         
         Args:
-            significance: Significance value that might trigger transition (0.0 to 1.0)
+            quickrecal_score: QuickRecal value that might trigger transition (0.0 to 1.0)
             
         Returns:
             True if transition occurred, False otherwise
@@ -155,17 +155,13 @@ class SpiralPhaseManager:
         # Get current phase parameters
         current_params = self.phase_config[self.current_phase]
         
-        # Check if significance exceeds transition threshold
-        if significance >= current_params['transition_threshold']:
-            # Determine next phase
-            next_phase = self._determine_next_phase()
-            
-            # Update phase statistics before transition
+        # Check if QuickRecal score is high enough to trigger transition
+        if quickrecal_score >= current_params["transition_threshold"]:
             self._update_phase_stats()
             
-            # Transition to next phase
+            # Determine and set the next phase
             old_phase = self.current_phase
-            self.current_phase = next_phase
+            self.current_phase = self._determine_next_phase()
             
             # Update statistics for new phase
             self.phase_stats[self.current_phase]['transitions'] += 1
@@ -175,16 +171,16 @@ class SpiralPhaseManager:
             self.phase_history.append({
                 'phase': self.current_phase.value,
                 'timestamp': datetime.now().isoformat(),
-                'reason': f'significance_threshold ({significance:.2f})',
+                'reason': f'quickrecal_threshold ({quickrecal_score:.2f})',
                 'previous_phase': old_phase.value
             })
             
             self.logger.info(f"Transitioned from {old_phase.value} to {self.current_phase.value} "
-                            f"with significance {significance:.2f}")
+                            f"with QuickRecal score {quickrecal_score:.2f}")
             
             # Update self model if available
             if self.self_model and hasattr(self.self_model, 'update_spiral_phase'):
-                self.self_model.update_spiral_phase(self.current_phase.value, significance)
+                self.self_model.update_spiral_phase(self.current_phase.value, quickrecal_score)
             
             return True
         

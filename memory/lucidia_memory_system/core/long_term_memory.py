@@ -2,8 +2,8 @@
 LUCID RECALL PROJECT
 Long-Term Memory (LTM) with Asynchronous Batch Persistence
 
-Persistent significance-weighted storage where only important memories remain long-term.
-Implements dynamic significance decay to ensure only critical memories persist.
+Persistent QuickRecal-weighted storage where only important memories remain long-term.
+Implements dynamic QuickRecal decay to ensure only critical memories persist.
 Features fully asynchronous memory persistence with efficient batch processing.
 """
 
@@ -38,11 +38,11 @@ class BatchOperation:
 
 class LongTermMemory:
     """
-    Long-Term Memory with significance-weighted storage and dynamic decay.
+    Long-Term Memory with QuickRecal-weighted storage and dynamic decay.
     
-    Stores memories persistently with significance weighting to ensure
+    Stores memories persistently with QuickRecal weighting to ensure
     only important memories are retained long-term. Implements dynamic
-    significance decay to allow unimportant memories to fade naturally.
+    QuickRecal decay to allow unimportant memories to fade naturally.
     Features fully asynchronous batch persistence for improved performance.
     """
     
@@ -55,14 +55,14 @@ class LongTermMemory:
         """
         self.config = {
             'storage_path': os.path.join('/app/memory/stored', 'ltm'),  # Use the consistent Docker path
-            'significance_threshold': 0.7,  # Minimum significance for storage
+            'quickrecal_threshold': 0.7,  # Minimum QuickRecal score for storage
             'max_memories': 10000,          # Maximum number of memories to store
             'decay_rate': 0.05,             # Base decay rate (per day)
             'decay_check_interval': 86400,  # Time between decay checks (1 day)
             'min_retention_time': 604800,   # Minimum retention time regardless of decay (1 week)
             'embedding_dim': 384,           # Embedding dimension
             'enable_persistence': True,     # Whether to persist memories to disk
-            'purge_threshold': 0.3,         # Memories below this significance get purged
+            'purge_threshold': 0.3,         # Memories below this QuickRecal score get purged
             
             # Batch persistence configuration
             'batch_size': 50,               # Max operations in a batch
@@ -210,24 +210,24 @@ class LongTermMemory:
             logger.error(f"Error loading memories: {e}")
     
     async def store_memory(self, content: str, embedding: Optional[torch.Tensor] = None,
-                         significance: float = 0.5, metadata: Optional[Dict[str, Any]] = None,
+                         quickrecal_score: float = 0.5, metadata: Optional[Dict[str, Any]] = None,
                          memory_id: Optional[str] = None) -> Optional[str]:
         """
-        Store a memory in long-term storage if it meets significance threshold.
+        Store a memory in long-term storage if it meets QuickRecal threshold.
         
         Args:
             content: The memory content text
             embedding: Optional pre-computed embedding
-            significance: Memory significance (0.0-1.0)
+            quickrecal_score: Memory QuickRecal score (0.0-1.0)
             metadata: Optional additional metadata
             memory_id: Optional custom memory ID
             
         Returns:
-            Memory ID if stored, None if rejected due to low significance
+            Memory ID if stored, None if rejected due to low QuickRecal score
         """
-        # Check significance threshold
-        if significance < self.config['significance_threshold']:
-            logger.debug(f"Memory significance {significance} below threshold {self.config['significance_threshold']}, not storing")
+        # Check QuickRecal threshold
+        if quickrecal_score < self.config['quickrecal_threshold']:
+            logger.debug(f"Memory QuickRecal score {quickrecal_score} below threshold {self.config['quickrecal_threshold']}, not storing")
             return None
         
         async with self._lock:
@@ -244,7 +244,7 @@ class LongTermMemory:
                 'content': content,
                 'embedding': embedding,
                 'timestamp': timestamp,
-                'significance': significance,
+                'quickrecal_score': quickrecal_score,
                 'metadata': metadata or {},
                 'access_count': 0,
                 'last_access': timestamp
@@ -270,7 +270,7 @@ class LongTermMemory:
             if len(self.memories) > self.config['max_memories']:
                 asyncio.create_task(self._run_decay_and_purge())
             
-            logger.info(f"Stored memory {memory_id} with significance {significance}")
+            logger.info(f"Stored memory {memory_id} with QuickRecal score {quickrecal_score}")
             return memory_id
     
     async def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
@@ -296,8 +296,8 @@ class LongTermMemory:
             memory['access_count'] = memory.get('access_count', 0) + 1
             memory['last_access'] = time.time()
             
-            # Update memory significance based on access
-            self._boost_significance(memory)
+            # Update memory QuickRecal score based on access
+            self._boost_quickrecal_score(memory)
             
             # Add to batch queue for persistence (update operation)
             if self.config['enable_persistence']:
@@ -310,7 +310,7 @@ class LongTermMemory:
             return copy.deepcopy(memory)
     
     async def search_memory(self, query: str, limit: int = 5, 
-                          min_significance: float = 0.0,
+                          min_quickrecal_score: float = 0.0,
                           categories: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """
         Search for memories based on text content.
@@ -318,7 +318,7 @@ class LongTermMemory:
         Args:
             query: Text query to search for
             limit: Maximum number of results to return
-            min_significance: Minimum significance threshold
+            min_quickrecal_score: Minimum QuickRecal score threshold
             categories: Optional list of categories to search within
             
         Returns:
@@ -343,8 +343,8 @@ class LongTermMemory:
             for memory_id in memory_ids:
                 memory = self.memories[memory_id]
                 
-                # Check significance threshold
-                if memory.get('significance', 0) < min_significance:
+                # Check QuickRecal score threshold
+                if memory.get('quickrecal_score', 0) < min_quickrecal_score:
                     continue
                 
                 # Calculate simple text match score
@@ -362,11 +362,11 @@ class LongTermMemory:
                 else:
                     similarity = 0.0
                 
-                # Calculate effective significance with decay
-                effective_significance = self._calculate_effective_significance(memory)
+                # Calculate effective QuickRecal score with decay
+                effective_quickrecal_score = self._calculate_effective_quickrecal_score(memory)
                 
-                # Combine similarity and significance for final score
-                score = (similarity * 0.7) + (effective_significance * 0.3)
+                # Combine similarity and QuickRecal score for final score
+                score = (similarity * 0.7) + (effective_quickrecal_score * 0.3)
                 
                 # Add to results if score is positive
                 if score > 0:
@@ -375,7 +375,7 @@ class LongTermMemory:
                         'content': memory.get('content', ''),
                         'timestamp': memory.get('timestamp', 0),
                         'similarity': similarity,
-                        'significance': effective_significance,
+                        'quickrecal_score': effective_quickrecal_score,
                         'score': score,
                         'metadata': memory.get('metadata', {})
                     })
@@ -390,14 +390,14 @@ class LongTermMemory:
             # Return top results
             return results[:limit]
     
-    async def keyword_search(self, query: str, limit: int = 5, min_significance: float = 0.0) -> List[Dict[str, Any]]:
+    async def keyword_search(self, query: str, limit: int = 5, min_quickrecal_score: float = 0.0) -> List[Dict[str, Any]]:
         """
         Search for memories based on keyword matching.
         
         Args:
             query: Text query containing keywords to search for
             limit: Maximum number of results to return
-            min_significance: Minimum significance threshold
+            min_quickrecal_score: Minimum QuickRecal score threshold
             
         Returns:
             List of matching memories sorted by relevance
@@ -414,8 +414,8 @@ class LongTermMemory:
             
             # Search through all memories
             for memory_id, memory in self.memories.items():
-                # Check significance threshold
-                if memory.get('significance', 0) < min_significance:
+                # Check QuickRecal score threshold
+                if memory.get('quickrecal_score', 0) < min_quickrecal_score:
                     continue
                 
                 # Extract content and convert to lowercase
@@ -430,11 +430,11 @@ class LongTermMemory:
                 # Calculate match score based on number of matching keywords
                 keyword_score = len(matching_keywords) / len(keywords)
                 
-                # Calculate effective significance with decay
-                effective_significance = self._calculate_effective_significance(memory)
+                # Calculate effective QuickRecal score with decay
+                effective_quickrecal_score = self._calculate_effective_quickrecal_score(memory)
                 
                 # Combined relevance score
-                score = (keyword_score * 0.7) + (effective_significance * 0.3)
+                score = (keyword_score * 0.7) + (effective_quickrecal_score * 0.3)
                 
                 # Add to results
                 results.append({
@@ -442,7 +442,7 @@ class LongTermMemory:
                     'content': memory.get('content', ''),
                     'timestamp': memory.get('timestamp', 0),
                     'matching_keywords': list(matching_keywords),
-                    'significance': effective_significance,
+                    'quickrecal_score': effective_quickrecal_score,
                     'score': score,
                     'metadata': memory.get('metadata', {})
                 })
@@ -457,9 +457,9 @@ class LongTermMemory:
             # Return top results
             return results[:limit]
     
-    def _boost_significance(self, memory: Dict[str, Any]) -> None:
+    def _boost_quickrecal_score(self, memory: Dict[str, Any]) -> None:
         """
-        Boost memory significance based on access patterns.
+        Boost memory QuickRecal score based on access patterns.
         
         Args:
             memory: The memory to boost
@@ -480,20 +480,20 @@ class LongTermMemory:
         boost_amount = 0.05 * recency_factor * access_factor
         
         # Apply boost with cap at 1.0
-        memory['significance'] = min(1.0, memory.get('significance', 0.5) + boost_amount)
+        memory['quickrecal_score'] = min(1.0, memory.get('quickrecal_score', 0.5) + boost_amount)
     
-    def _calculate_effective_significance(self, memory: Dict[str, Any]) -> float:
+    def _calculate_effective_quickrecal_score(self, memory: Dict[str, Any]) -> float:
         """
-        Calculate effective significance with time decay applied.
+        Calculate effective QuickRecal score with time decay applied.
         
         Args:
             memory: The memory to evaluate
             
         Returns:
-            Effective significance after decay
+            Effective QuickRecal score after decay
         """
-        # Get base significance and timestamp
-        base_significance = memory.get('significance', 0.5)
+        # Get base QuickRecal score and timestamp
+        base_quickrecal_score = memory.get('quickrecal_score', 0.5)
         timestamp = memory.get('timestamp', time.time())
         
         # Calculate age in days
@@ -503,22 +503,22 @@ class LongTermMemory:
         # Skip recent memories (retention period)
         min_retention_days = self.config['min_retention_time'] / 86400
         if age_days < min_retention_days:
-            return base_significance
+            return base_quickrecal_score
         
         # Calculate importance factor (more important memories decay slower)
-        importance_factor = 0.5 + (0.5 * base_significance)
+        importance_factor = 0.5 + (0.5 * base_quickrecal_score)
         
         # Calculate effective decay rate (decay slower for important memories)
         effective_decay_rate = self.config['decay_rate'] / importance_factor
         
         # Apply exponential decay
         decay_factor = math.exp(-effective_decay_rate * (age_days - min_retention_days))
-        effective_significance = base_significance * decay_factor
+        effective_quickrecal_score = base_quickrecal_score * decay_factor
         
-        return effective_significance
+        return effective_quickrecal_score
     
     async def _run_decay_and_purge(self) -> None:
-        """Run decay calculations and purge low-significance memories."""
+        """Run decay calculations and purge low-QuickRecal score memories."""
         # Only one instance should run at a time
         async with self._lock:
             current_time = time.time()
@@ -531,22 +531,22 @@ class LongTermMemory:
             
             logger.info("Running memory decay and purge")
             
-            # Calculate effective significance for each memory
-            memories_with_significance = []
+            # Calculate effective QuickRecal score for each memory
+            memories_with_quickrecal_score = []
             for memory_id, memory in self.memories.items():
-                effective_significance = self._calculate_effective_significance(memory)
-                memories_with_significance.append((memory_id, effective_significance))
+                effective_quickrecal_score = self._calculate_effective_quickrecal_score(memory)
+                memories_with_quickrecal_score.append((memory_id, effective_quickrecal_score))
             
-            # Sort by effective significance (ascending)
-            memories_with_significance.sort(key=lambda x: x[1])
+            # Sort by effective QuickRecal score (ascending)
+            memories_with_quickrecal_score.sort(key=lambda x: x[1])
             
             # Determine how many to purge
             excess_count = len(self.memories) - self.config['max_memories']
             purge_count = max(excess_count, 0)
             
             # Also purge memories below threshold
-            purge_ids = [memory_id for memory_id, significance in memories_with_significance 
-                       if significance < self.config['purge_threshold']]
+            purge_ids = [memory_id for memory_id, quickrecal_score in memories_with_quickrecal_score 
+                       if quickrecal_score < self.config['purge_threshold']]
             
             # Ensure we don't purge too many
             if len(purge_ids) > purge_count:
@@ -574,10 +574,10 @@ class LongTermMemory:
         
         # Get memory for logging
         memory = self.memories[memory_id]
-        significance = memory.get('significance', 0)
+        quickrecal_score = memory.get('quickrecal_score', 0)
         age_days = (time.time() - memory.get('timestamp', 0)) / 86400
         
-        logger.debug(f"Purging memory {memory_id} with significance {significance} (age: {age_days:.1f} days)")
+        logger.debug(f"Purging memory {memory_id} with QuickRecal score {quickrecal_score} (age: {age_days:.1f} days)")
         
         # Remove from memory dictionary
         del self.memories[memory_id]
@@ -868,20 +868,20 @@ class LongTermMemory:
         # Calculate category distribution
         category_counts = {category: len(ids) for category, ids in self.memory_index.items()}
         
-        # Calculate significance distribution
-        significance_values = [memory.get('significance', 0) for memory in self.memories.values()]
-        significance_bins = [0, 0, 0, 0, 0]  # 0.0-0.2, 0.2-0.4, 0.4-0.6, 0.6-0.8, 0.8-1.0
+        # Calculate QuickRecal score distribution
+        quickrecal_scores = [memory.get('quickrecal_score', 0) for memory in self.memories.values()]
+        quickrecal_bins = [0, 0, 0, 0, 0]  # 0.0-0.2, 0.2-0.4, 0.4-0.6, 0.6-0.8, 0.8-1.0
         
-        for sig in significance_values:
-            bin_index = min(int(sig * 5), 4)
-            significance_bins[bin_index] += 1
+        for score in quickrecal_scores:
+            bin_index = min(int(score * 5), 4)
+            quickrecal_bins[bin_index] += 1
         
-        significance_distribution = {
-            '0.0-0.2': significance_bins[0],
-            '0.2-0.4': significance_bins[1],
-            '0.4-0.6': significance_bins[2],
-            '0.6-0.8': significance_bins[3],
-            '0.8-1.0': significance_bins[4]
+        quickrecal_distribution = {
+            '0.0-0.2': quickrecal_bins[0],
+            '0.2-0.4': quickrecal_bins[1],
+            '0.4-0.6': quickrecal_bins[2],
+            '0.6-0.8': quickrecal_bins[3],
+            '0.8-1.0': quickrecal_bins[4]
         }
         
         # Batch persistence stats
@@ -900,7 +900,7 @@ class LongTermMemory:
         return {
             'total_memories': len(self.memories),
             'categories': category_counts,
-            'significance_distribution': significance_distribution,
+            'quickrecal_distribution': quickrecal_distribution,
             'stores': self.stats['stores'],
             'retrievals': self.stats['retrievals'],
             'hits': self.stats['hits'],

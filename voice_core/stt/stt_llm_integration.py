@@ -145,12 +145,12 @@ Final Layer: Lucidia's Chaos Variable
         """Handle semantic processing results.
         
         Args:
-            data: Semantic data with significance score
+            data: Semantic data with quickrecal_score
         """
-        self.logger.info(f"Semantic result: text='{data['text']}', significance={data.get('significance', 0)}")
+        self.logger.info(f"Semantic result: text='{data['text']}', quickrecal_score={data.get('quickrecal_score', 0)}")
         
-        # If significance is high enough, prioritize this text
-        if data.get('significance', 0) >= 0.5:
+        # If quickrecal_score is high enough, prioritize this text
+        if data.get('quickrecal_score', 0) >= 0.5:
             # Update the request priority in current_conversations
             request_id = data.get('request_id')
             if request_id in self.current_conversations:

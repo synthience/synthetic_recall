@@ -30,11 +30,12 @@ class LocalLLMPipeline:
         self._memory_config = {
             'stm_priority': 0.8,        # Priority for Short-Term Memory
             'ltm_priority': 0.5,        # Priority for Long-Term Memory
-            'min_significance': 0.3,    # Minimum significance threshold
+            'min_quickrecal_score': 0.3,    # Minimum quickrecal_score threshold
             'max_context_tokens': 1024,  # Maximum tokens for memory context
             'similarity_threshold': 0.75, # Threshold for similar query detection
             'enable_embedding_cache': True, # Cache embeddings for faster retrieval
             'enable_query_optimization': True, # Optimize queries before processing
+            'enable_cache': True,
         }
 
     def set_memory_client(self, memory_client):
@@ -156,7 +157,7 @@ class LocalLLMPipeline:
                 context = await self.memory_client.get_rag_context(
                     query=prompt, 
                     limit=5, 
-                    min_significance=self._memory_config['min_significance'],
+                    min_quickrecal_score=self._memory_config['min_quickrecal_score'],
                     max_tokens=self._memory_config['max_context_tokens']
                 )
                 return context if context else ""
@@ -178,7 +179,7 @@ class LocalLLMPipeline:
             context = await self.memory_client.get_rag_context(
                 query=prompt, 
                 limit=5, 
-                min_significance=self._memory_config['min_significance']
+                min_quickrecal_score=self._memory_config['min_quickrecal_score']
             )
             return context if context else ""
         except Exception as e:

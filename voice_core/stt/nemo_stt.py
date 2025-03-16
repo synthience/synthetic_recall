@@ -480,7 +480,7 @@ class NemoSTT:
             # Create result object
             result = {
                 "text": transcription["text"],
-                "significance": stats_result.get("significance", 0.0),
+                "quickrecal_score": stats_result.get("quickrecal_score", stats_result.get("significance", 0.0)),
                 "request_id": transcription.get("request_id")
             }
             
@@ -807,8 +807,11 @@ class HPCClient:
         
         # Handle response formats
         if response and "error" not in response:
-            if response.get("type") == "stats_result" and "significance" in response:
-                return {"significance": response["significance"]}
+            if response.get("type") == "stats_result" and "quickrecal_score" in response:
+                return {"quickrecal_score": response["quickrecal_score"]}
+            elif response.get("type") == "stats_result" and "significance" in response:
+                # Backward compatibility for legacy servers
+                return {"quickrecal_score": response["significance"]}
             return response
         else:
             return response or {"error": "No response from HPC server"}

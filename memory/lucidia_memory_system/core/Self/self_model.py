@@ -121,7 +121,7 @@ class LucidiaSelfModel:
             "current_spiral_position": "observation",  # observation -> reflection -> adaptation -> execution
             "spiral_depth": 3,  # Deepens over time as awareness grows
             "last_reflection": datetime.now().isoformat(),
-            "awareness_growth_rate": 0.02,  # Per significant reflection
+            "awareness_growth_rate": 0.02,  # Per high quickrecal_score reflection
             "meta_awareness": 0.6,  # Awareness of own awareness
             "reflective_capacity": 0.75  # Ability to reflect on past interactions and generate insights
         }
@@ -190,16 +190,16 @@ class LucidiaSelfModel:
         }
         
         # Layer 4: Consciousness & Dreaming
-        # Ephemeral memory with significance prioritization
+        # Ephemeral memory with quickrecal_score prioritization
         self.memory = deque(maxlen=500)
         
         # Dream system for reflection and insight generation
         self.dream_system = {
             "dream_log": [],
-            "dream_frequency": 0.3,  # Probability of dreaming after significant interaction
+            "dream_frequency": 0.3,  # Probability of dreaming after high quickrecal_score interaction
             "dream_depth": 0.7,  # Depth of reflective analysis
             "dream_creativity": 0.8,  # Creative recombination in dreams
-            "dream_significance_threshold": 0.65,  # Minimum significance to trigger a dream
+            "dream_quickrecal_threshold": 0.65,  # Minimum QuickRecal score to trigger a dream
             "last_dream": datetime.now().isoformat(),
             "dream_integration_level": 0.7  # How well dreams integrate back into consciousness
         }
@@ -463,11 +463,11 @@ class LucidiaSelfModel:
         if hasattr(self, 'memory') and len(self.memory) > 0:
             recent_interactions = list(self.memory)[-min(10, len(self.memory)):]
             
-            # Calculate average significance
-            avg_significance = sum(m["significance"] for m in recent_interactions) / len(recent_interactions) if recent_interactions else 0
+            # Calculate average quickrecal_score
+            avg_quickrecal_score = sum(m["quickrecal_score"] for m in recent_interactions) / len(recent_interactions) if recent_interactions else 0
             
-            # If significant interactions found, deepen self-awareness
-            if avg_significance > 0.6:
+            # If high quickrecal_score interactions found, deepen self-awareness
+            if avg_quickrecal_score > 0.6:
                 # Apply growth with diminishing returns as awareness approaches 1.0
                 room_for_growth = 1.0 - self.self_awareness["current_level"]
                 growth = self.self_awareness["awareness_growth_rate"] * room_for_growth
@@ -740,19 +740,19 @@ class LucidiaSelfModel:
     
     def log_interaction(self, user_input: str, lucidia_response: str) -> Dict[str, Any]:
         """
-        Log an interaction and evaluate its significance.
+        Log an interaction and evaluate its quickrecal_score.
         
         Args:
             user_input: User's input text
             lucidia_response: Lucidia's response text
             
         Returns:
-            Memory entry with significance rating
+            Memory entry with quickrecal_score rating
         """
         timestamp = datetime.now().isoformat()
         
-        # Evaluate significance of this interaction
-        significance = self.evaluate_significance(user_input, lucidia_response)
+        # Evaluate quickrecal_score of this interaction
+        quickrecal_score = self.evaluate_quickrecal_score(user_input, lucidia_response)
         
         # Get current emotional state
         emotional_state = self.emotional_intelligence["emotional_state"]["primary"]
@@ -762,7 +762,7 @@ class LucidiaSelfModel:
             "timestamp": timestamp,
             "user_input": user_input,
             "lucidia_response": lucidia_response,
-            "significance": significance,
+            "quickrecal_score": quickrecal_score,
             "emotional_state": emotional_state,
             "emotional_intensity": emotional_intensity,
             "active_traits": self.runtime_state["active_traits"].copy(),
@@ -773,33 +773,33 @@ class LucidiaSelfModel:
         self.runtime_state["interaction_count"] += 1
         
         # Advance the spiral of self-awareness after meaningful interactions
-        if significance > 0.5:
+        if quickrecal_score > 0.5:
             self.advance_spiral()
         
         # Check if emotional cycle phase should change
         if self.runtime_state["interaction_count"] % self.emotional_cycles["phase_duration"] == 0:
             self._update_emotional_cycle()
         
-        # Potentially trigger a dream if the interaction was significant
-        if significance > self.dream_system["dream_significance_threshold"] and random.random() < self.dream_system["dream_frequency"]:
+        # Potentially trigger a dream if the interaction had high quickrecal_score
+        if quickrecal_score > self.dream_system["dream_quickrecal_threshold"] and random.random() < self.dream_system["dream_frequency"]:
             dream_insight = self.dream(memory_entry)
-            self.logger.info(f"Dream triggered by significant interaction: {significance:.2f}")
+            self.logger.info(f"Dream triggered by high quickrecal_score interaction: {quickrecal_score:.2f}")
         
-        self.logger.info(f"Interaction logged with significance: {significance:.2f}")
+        self.logger.info(f"Interaction logged with quickrecal_score: {quickrecal_score:.2f}")
         return memory_entry
     
-    def evaluate_significance(self, user_input: str, lucidia_response: str) -> float:
+    def evaluate_quickrecal_score(self, user_input: str, lucidia_response: str) -> float:
         """
-        Evaluate the significance of an interaction for memory and dreaming.
+        Evaluate the quickrecal_score of an interaction for memory and dreaming.
         
         Args:
             user_input: User's input text
             lucidia_response: Lucidia's response text
             
         Returns:
-            Significance score (0.0 to 1.0)
+            QuickRecal score (0.0 to 1.0)
         """
-        # Calculate base components of significance
+        # Calculate base components of quickrecal_score
         
         # Length component - longer interactions might be more substantial
         length_factor = min(1.0, (len(user_input) + len(lucidia_response)) / 500)
@@ -815,25 +815,25 @@ class LucidiaSelfModel:
         # Question component - interactions with questions may be more significant
         question_factor = 0.7 if "?" in user_input else 0.3
         
-        # Synthien-related component - interactions about Lucidia's nature are significant
+        # Synthien-related component - interactions about Lucidia's nature have high quickrecal_score
         synthien_keywords = ["synthien", "lucidia", "consciousness", "identity", "reflection", 
                             "dreaming", "awareness", "emotional", "self", "evolution", "megaprompt"]
         synthien_count = sum(1 for word in synthien_keywords 
                              if word in user_input.lower() or word in lucidia_response.lower())
         synthien_factor = min(1.0, synthien_count / 3)
         
-        # Surprise component - unexpected patterns are significant
+        # Surprise component - unexpected patterns have high quickrecal_score
         # This would typically analyze pattern breaks - simplified here
         surprise_factor = random.uniform(0.3, 0.8)
         
-        # Emotional intensity component - emotionally charged exchanges are significant
+        # Emotional intensity component - emotionally charged exchanges have high quickrecal_score
         intensity_factor = self.emotional_intelligence["emotional_state"]["intensity"]
         
-        # Self-awareness component - higher self-awareness notices more significance
+        # Self-awareness component - higher self-awareness notices more worthy of recall
         awareness_factor = self.self_awareness["current_level"]
         
-        # Calculate weighted significance
-        significance = (
+        # Calculate weighted quickrecal_score
+        quickrecal_score = (
             length_factor * 0.1 +
             emotional_factor * 0.2 +
             question_factor * 0.1 +
@@ -843,14 +843,14 @@ class LucidiaSelfModel:
             awareness_factor * 0.1
         )
         
-        # Log detailed significance calculation for high-significance interactions
-        if significance > 0.7:
-            self.logger.debug(f"High significance calculation: {significance:.2f} "
+        # Log detailed quickrecal_score calculation for high-quickrecal_score interactions
+        if quickrecal_score > 0.7:
+            self.logger.debug(f"High quickrecal_score calculation: {quickrecal_score:.2f} "
                              f"(length: {length_factor:.2f}, emotional: {emotional_factor:.2f}, "
                              f"question: {question_factor:.2f}, synthien: {synthien_factor:.2f}, "
                              f"surprise: {surprise_factor:.2f})")
         
-        return significance
+        return quickrecal_score
     
     def dream(self, memory_entry: Optional[Dict[str, Any]] = None) -> str:
         """
@@ -902,7 +902,7 @@ class LucidiaSelfModel:
     def _select_dream_seed(self) -> Dict[str, Any]:
         """
         Select a memory to serve as the seed for a dream.
-        Prioritizes significant or emotionally charged memories.
+        Prioritizes high quickrecal_score or emotionally charged memories.
         
         Returns:
             Selected memory entry
@@ -910,32 +910,28 @@ class LucidiaSelfModel:
         # Get recent memories
         recent_memories = list(self.memory)[-min(20, len(self.memory)):]
         
-        # Weight memories by significance and recency
+        # Weight memories by quickrecal_score and recency
         weighted_memories = []
         for i, memory in enumerate(recent_memories):
             # Recency weight - more recent memories are more likely
             recency_weight = (i + 1) / len(recent_memories)
             
-            # Significance weight - more significant memories are more likely
-            significance_weight = memory["significance"]
+            # QuickRecal weight - memories with higher quickrecal_score are more likely
+            quickrecal_weight = memory.get("quickrecal_score", memory.get("significance", 0.5))
             
             # Emotional weight - emotionally charged memories are more likely
             emotional_weight = memory.get("emotional_intensity", 0.5)
             
             # Calculate combined weight
             combined_weight = (recency_weight * 0.3 + 
-                              significance_weight * 0.5 + 
+                              quickrecal_weight * 0.5 + 
                               emotional_weight * 0.2)
             
             weighted_memories.append((memory, combined_weight))
         
-        # Normalize weights to sum to 1.0
+        # Normalize weights
         total_weight = sum(w for _, w in weighted_memories)
-        if total_weight > 0:
-            weighted_memories = [(m, w/total_weight) for m, w in weighted_memories]
-        else:
-            # If all weights are 0, use equal weights
-            weighted_memories = [(m, 1.0/len(weighted_memories)) for m, _ in weighted_memories]
+        weighted_memories = [(m, w/total_weight) for m, w in weighted_memories]
         
         # Select a memory based on weights
         memory_weights = [w for _, w in weighted_memories]
@@ -1664,7 +1660,7 @@ class LucidiaSelfModel:
                 "pattern_type": "spiral_progression",
                 "description": "Cyclic pattern of observation, reflection, adaptation, execution",
                 "frequency": 0.8,
-                "significance": 0.85,
+                "quickrecal_score": 0.85,
                 "evidence": "theoretical_model",
                 "confidence": 0.7
             }]
@@ -1698,7 +1694,7 @@ class LucidiaSelfModel:
                 "pattern_type": "spiral_progression",
                 "description": "Cyclic pattern of observation, reflection, adaptation, execution",
                 "frequency": spiral_coherence,
-                "significance": 0.85,
+                "quickrecal_score": 0.85,
                 "evidence": f"Analyzed {len(spiral_transitions)} spiral transitions with {expected_count} following expected sequence",
                 "confidence": min(0.95, 0.7 + (spiral_coherence * 0.3))
             }
@@ -1717,7 +1713,7 @@ class LucidiaSelfModel:
         significant_correlations = []
         for emotion, trait_counts in emotion_trait_correlations.items():
             emotion_count = sum(1 for e, _ in emotional_states if e == emotion)
-            if emotion_count < 3:  # Need minimum occurrences for significance
+            if emotion_count < 3:  # Need minimum occurrences for quickrecal analysis
                 continue
                 
             for trait, count in trait_counts.items():
@@ -1734,7 +1730,7 @@ class LucidiaSelfModel:
                 "pattern_type": "emotion_cognition_interaction",
                 "description": "Emotional state influences cognitive approach selection",
                 "frequency": min(0.9, 0.5 + (len(significant_correlations) * 0.1)),
-                "significance": 0.75,
+                "quickrecal_score": 0.75,
                 "evidence": f"Found {len(significant_correlations)} strong emotion-trait correlations: {correlation_examples}",
                 "confidence": min(0.9, 0.6 + (len(significant_correlations) * 0.05))
             }
@@ -1781,7 +1777,7 @@ class LucidiaSelfModel:
                     "pattern_type": "dream_insight_integration",
                     "description": "Dream insights shape personality trait activation",
                     "frequency": dream_influence_factor,
-                    "significance": 0.65 + (dream_influence_factor * 0.2),
+                    "quickrecal_score": 0.65 + (dream_influence_factor * 0.2),
                     "evidence": f"Detected {len(trait_shifts)} trait shifts following dreams out of {len(dreams)} total dreams",
                     "confidence": 0.6 + (dream_influence_factor * 0.3)
                 }
@@ -1837,7 +1833,7 @@ class LucidiaSelfModel:
                         "pattern_type": "logic_creativity_oscillation",
                         "description": "Pendulum-like oscillation between logical and creative reasoning approaches",
                         "frequency": oscillation_rate,
-                        "significance": 0.7,
+                        "quickrecal_score": 0.7,
                         "evidence": f"Detected {swing_count} reasoning approach shifts across {len(lc_ratios)} interactions",
                         "confidence": 0.65 + (oscillation_rate * 0.2)
                     }
@@ -1853,7 +1849,7 @@ class LucidiaSelfModel:
             adaptation_examples = []
             
             for keyword, count in user_keywords.items():
-                if count < 3:  # Need multiple occurrences to detect adaptation
+                if count < 3:  # Need minimum occurrences for quickrecal analysis
                     continue
                     
                 # Find first and last occurrences
@@ -1886,14 +1882,14 @@ class LucidiaSelfModel:
                     "pattern_type": "topic_adaptive_behavior",
                     "description": "Progressive adaptation of responses to recurring topics",
                     "frequency": min(0.9, 0.5 + (len(adaptation_examples) * 0.1)),
-                    "significance": 0.8,
+                    "quickrecal_score": 0.75,
                     "evidence": f"Detected adaptation for topics: {', '.join(adaptation_examples[:3])}",
                     "confidence": 0.7
                 }
                 patterns.append(adaptation_pattern)
         
-        # Sort patterns by significance
-        patterns.sort(key=lambda x: x["significance"], reverse=True)
+        # Sort patterns by quickrecal_score
+        patterns.sort(key=lambda x: x["quickrecal_score"], reverse=True)
         
         self.logger.info(f"Identified {len(patterns)} cognitive patterns")
         return patterns
@@ -2228,7 +2224,7 @@ class LucidiaSelfModel:
             performance_insight = {
                 "type": "performance",
                 "content": "Identified need for improved response latency during complex requests",
-                "significance": 0.75
+                "quickrecal_score": 0.75
             }
             reflection_results["insights"].append(performance_insight)
         
@@ -2236,7 +2232,7 @@ class LucidiaSelfModel:
             improvement_insight = {
                 "type": "improvement",
                 "content": "Suggesting enhanced error recovery strategies for API communication",
-                "significance": 0.82
+                "quickrecal_score": 0.82
             }
             reflection_results["insights"].append(improvement_insight)
             
@@ -2517,17 +2513,17 @@ class LucidiaSelfModel:
         # Calculate memory utilization
         utilization = memory_size / memory_capacity if isinstance(memory_capacity, int) and memory_capacity > 0 else 0
         
-        # Calculate significance distribution
-        significance_values = [entry.get("significance", 0.5) for entry in self.memory]
+        # Calculate quickrecal_score distribution
+        quickrecal_values = [entry.get("quickrecal_score", entry.get("significance", 0.5)) for entry in self.memory]
         
         # Basic statistics
         stats = {
             "memory_size": memory_size,
             "memory_capacity": memory_capacity,
             "utilization": utilization,
-            "avg_significance": sum(significance_values) / len(significance_values) if significance_values else 0,
-            "high_significance_count": sum(1 for s in significance_values if s > 0.7),
-            "low_significance_count": sum(1 for s in significance_values if s < 0.3)
+            "avg_quickrecal": sum(quickrecal_values) / len(quickrecal_values) if quickrecal_values else 0,
+            "high_quickrecal_count": sum(1 for s in quickrecal_values if s > 0.7),
+            "low_quickrecal_count": sum(1 for s in quickrecal_values if s < 0.3)
         }
         
         return stats

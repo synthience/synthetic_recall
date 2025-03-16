@@ -53,7 +53,7 @@ hpc_lock = asyncio.Lock()
 
 # Server connection settings
 TENSOR_SERVER_URL = os.environ.get('TENSOR_SERVER_URL', 'ws://localhost:5001/tensor')
-HPC_SERVER_URL = os.environ.get('HPC_SERVER_URL', 'ws://localhost:5002/hpc')
+HPC_SERVER_URL = os.environ.get('HPC_SERVER_URL', 'ws://localhost:5005/hpc')
 CONNECTION_TIMEOUT = float(os.environ.get('CONNECTION_TIMEOUT', '10.0'))
 CONNECTION_RETRY_LIMIT = int(os.environ.get('CONNECTION_RETRY_LIMIT', '3'))
 CONNECTION_RETRY_DELAY = float(os.environ.get('CONNECTION_RETRY_DELAY', '2.0'))

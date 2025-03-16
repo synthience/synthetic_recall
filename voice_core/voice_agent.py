@@ -126,7 +126,7 @@ class LucidiaVoiceAgent:
                     'embedding_dim': 384,
                     'max_memories': 10000,
                     'stm_max_size': 10,
-                    'significance_threshold': 0.3,
+                    'quickrecal_score_threshold': 0.3,
                     'enable_persistence': True,
                     'decay_rate': 0.05,
                     'device': 'cuda' if torch.cuda.is_available() else 'cpu',

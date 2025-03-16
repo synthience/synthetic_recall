@@ -338,7 +338,7 @@ class LucidiaDreamProcessor:
                 "total_dreams": 0,
                 "total_insights": 0,
                 "total_dream_time": 0,
-                "insight_significance": []
+                "insight_quickrecal": []
             })
         }
         
@@ -1627,7 +1627,7 @@ class LucidiaDreamProcessor:
         for assoc in associations:
             source = assoc["source"]
             target = assoc["target"]
-            graph[source].append((target, assoc))
+            graph[source].append((target, assoc))  # Bidirectional for pattern finding
             graph[target].append((source, assoc))  # Bidirectional for pattern finding
         
         # Look for chains (paths of length 3+)
@@ -1844,18 +1844,18 @@ class LucidiaDreamProcessor:
             else:  # ADAPTATION
                 insight["characteristics"] = ["integrative", "transformative", "creative"]
         
-        # Calculate significance for each insight with phase influence
+        # Calculate QuickRecal score for each insight with phase influence
         for insight in insights:
-            base_significance = self._calculate_insight_significance(insight, context)
+            base_quickrecal = self._calculate_insight_quickrecal(insight, context)
             # Apply phase-specific weight
-            insight["significance"] = base_significance * phase_params["insight_weight"]
+            insight["quickrecal_score"] = base_quickrecal * phase_params["insight_weight"]
         
-        # Sort by significance
-        insights.sort(key=lambda x: x["significance"], reverse=True)
+        # Sort by QuickRecal score
+        insights.sort(key=lambda x: x["quickrecal_score"], reverse=True)
         
         # Record significant insights in the spiral manager
         for insight in insights:
-            if insight["significance"] >= 0.8:
+            if insight["quickrecal_score"] >= 0.8:
                 self.spiral_manager.record_insight(insight)
         
         return insights
@@ -1943,7 +1943,7 @@ class LucidiaDreamProcessor:
                 "concepts": concept_ids,
                 "prompt": prompt,
                 "theme": theme["name"],
-                "significance": 0.8,  # Will be recalculated later
+                "quickrecal_score": 0.8,  # Will be recalculated later
                 "timestamp": datetime.now().isoformat()
             }
             
@@ -2076,7 +2076,7 @@ class LucidiaDreamProcessor:
                 "concepts": concept_ids,
                 "prompt": prompt,
                 "style": style["name"],
-                "significance": 0.75,  # Will be recalculated later
+                "quickrecal_score": 0.75,  # Will be recalculated later
                 "timestamp": datetime.now().isoformat()
             }
             
@@ -2149,7 +2149,7 @@ class LucidiaDreamProcessor:
             "source": f"Reflection: {reflection}",
             "concepts": reflection_concepts,
             "prompt": reflection,
-            "significance": 0.7,  # Will be recalculated later
+            "quickrecal_score": 0.7,  # Will be recalculated later
             "timestamp": datetime.now().isoformat()
         }
 
@@ -2231,7 +2231,7 @@ class LucidiaDreamProcessor:
             "source": f"Association: {source} -{relationship}-> {target}",
             "concepts": [source, target],
             "relationship": relationship,
-            "significance": 0.65,  # Will be recalculated later
+            "quickrecal_score": 0.65,  # Will be recalculated later
             "timestamp": datetime.now().isoformat()
         }
 
@@ -2280,7 +2280,7 @@ class LucidiaDreamProcessor:
                 "source": f"Pattern: {description}",
                 "concepts": nodes[:3],
                 "pattern_type": "chain",
-                "significance": 0.75,  # Will be recalculated later
+                "quickrecal_score": 0.75,  # Will be recalculated later
                 "timestamp": datetime.now().isoformat()
             }
             
@@ -2324,7 +2324,7 @@ class LucidiaDreamProcessor:
                 "source": f"Pattern: {description}",
                 "concepts": [central_node] + connected_nodes[:3],
                 "pattern_type": "hub",
-                "significance": 0.8,  # Will be recalculated later
+                "quickrecal_score": 0.8,  # Will be recalculated later
                 "timestamp": datetime.now().isoformat()
             }
             
@@ -2367,7 +2367,7 @@ class LucidiaDreamProcessor:
                 "source": f"Pattern: {description}",
                 "concepts": nodes[:3],
                 "pattern_type": "cluster",
-                "significance": 0.85,  # Will be recalculated later
+                "quickrecal_score": 0.85,  # Will be recalculated later
                 "timestamp": datetime.now().isoformat()
             }
             
@@ -2460,23 +2460,23 @@ class LucidiaDreamProcessor:
             "source": "Creative exploration",
             "concepts": [concept_id],
             "creativity_level": creativity,
-            "significance": 0.7,  # Will be recalculated later
+            "quickrecal_score": 0.7,  # Will be recalculated later
             "timestamp": datetime.now().isoformat()
         }
 
-    def _calculate_insight_significance(self, insight: Dict[str, Any], context: Dict[str, Any]) -> float:
+    def _calculate_insight_quickrecal(self, insight: Dict[str, Any], context: Dict[str, Any]) -> float:
         """
-        Calculate significance score for an insight.
+        Calculate QuickRecal score for an insight.
         
         Args:
             insight: The insight to evaluate
             context: Dream context
             
         Returns:
-            Significance score (0.0 to 1.0)
+            QuickRecal score (0.0 to 1.0)
         """
-        # Base significance
-        significance = 0.5
+        # Base QuickRecal score
+        quickrecal = 0.5
         
         # Adjust based on insight type
         type_weights = {
@@ -2491,36 +2491,36 @@ class LucidiaDreamProcessor:
         }
         
         type_weight = type_weights.get(insight["type"], 0.7)
-        significance = type_weight
+        quickrecal = type_weight
         
         # Adjust based on concepts
         concept_ids = insight.get("concepts", [])
         for concept_id in concept_ids:
-            # Higher significance for identity-related concepts
+            # Higher QuickRecal score for identity-related concepts
             if concept_id.lower() in ["synthien", "lucidia", "consciousness", "identity", "reflective dreaming"]:
-                significance += 0.1
+                quickrecal += 0.1
                 break
         
         # Adjust based on dream parameters
         dream_depth = context["depth"]
-        significance += dream_depth * 0.05  # Deeper dreams generate more significant insights
+        quickrecal += dream_depth * 0.05  # Deeper dreams generate more significant insights
         
         # Adjust based on spiral phase
         spiral_phase = context.get("spiral_phase", self.dream_state["current_spiral_phase"])
         if spiral_phase == SpiralPhase.OBSERVATION.value:
-            significance += 0.0  # No adjustment for observation phase
+            quickrecal += 0.0  # No adjustment for observation phase
         elif spiral_phase == SpiralPhase.REFLECTION.value:
-            significance += 0.05  # Small boost for reflection phase
+            quickrecal += 0.05  # Small boost for reflection phase
         elif spiral_phase == SpiralPhase.ADAPTATION.value:
-            significance += 0.1  # Larger boost for adaptation phase
+            quickrecal += 0.1  # Larger boost for adaptation phase
         
         # Add slight randomness
-        significance += random.uniform(-0.05, 0.05)
+        quickrecal += random.uniform(-0.05, 0.05)
         
         # Ensure within range
-        significance = min(1.0, max(0.0, significance))
+        quickrecal = min(1.0, max(0.0, quickrecal))
         
-        return significance
+        return quickrecal
 
     def _integrate_dream_insights(self, insights: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -2538,7 +2538,7 @@ class LucidiaDreamProcessor:
             "knowledge_graph_updates": [],
             "world_model_updates": [],
             "self_model_updates": [],
-            "significance_threshold": 0.7,  # Minimum significance for integration
+            "quickrecal_threshold": 0.7,  # Minimum QuickRecal score for integration
             "integration_success": 0,
             "spiral_phase_transition": False,
             "phase_before": self.spiral_manager.get_current_phase().value,
@@ -2549,24 +2549,24 @@ class LucidiaDreamProcessor:
         if not insights:
             return integration_results
         
-        # Sort insights by significance
-        insights.sort(key=lambda x: x["significance"], reverse=True)
+        # Sort insights by QuickRecal score
+        insights.sort(key=lambda x: x["quickrecal_score"], reverse=True)
         
         # Get current phase parameters
         current_phase = self.spiral_manager.get_current_phase()
         phase_params = self.spiral_manager.get_phase_params()
         
-        # Track highest significance for potential phase transition
-        highest_significance = 0.0
+        # Track highest QuickRecal score for potential phase transition
+        highest_quickrecal = 0.0
         
         # Process each insight
         for insight in insights:
-            # Skip low-significance insights
-            if insight["significance"] < integration_results["significance_threshold"]:
+            # Skip low-QuickRecal insights
+            if insight["quickrecal_score"] < integration_results["quickrecal_threshold"]:
                 continue
                 
-            # Track highest significance
-            highest_significance = max(highest_significance, insight["significance"])
+            # Track highest QuickRecal score
+            highest_quickrecal = max(highest_quickrecal, insight["quickrecal_score"])
             
             # Get concepts from insight
             concept_ids = insight.get("concepts", [])
@@ -2582,7 +2582,7 @@ class LucidiaDreamProcessor:
                         node_type="dream_insight",
                         attributes={
                             "text": insight["text"],
-                            "significance": insight["significance"],
+                            "quickrecal_score": insight["quickrecal_score"],
                             "created_at": datetime.now().isoformat(),
                             "source": "dream_processor",
                             "dream_id": len(self.dream_log),
@@ -2597,7 +2597,7 @@ class LucidiaDreamProcessor:
                             concept_id,
                             edge_type="derived_from",
                             attributes={
-                                "confidence": insight["significance"],
+                                "confidence": insight["quickrecal_score"],
                                 "created_at": datetime.now().isoformat()
                             }
                         )
@@ -2646,7 +2646,7 @@ class LucidiaDreamProcessor:
                     if is_identity_related and "current_level" in self.self_model.self_awareness:
                         # Increase self-awareness level
                         current_level = self.self_model.self_awareness["current_level"]
-                        boost = self.integration["spiral_awareness_boost"] * insight["significance"]
+                        boost = self.integration["spiral_awareness_boost"] * insight["quickrecal_score"]
                         self.self_model.self_awareness["current_level"] = min(1.0, current_level + boost)
                     
                     integration_results["self_model_updates"].append({
@@ -2662,18 +2662,18 @@ class LucidiaDreamProcessor:
             # Increment integration success
             integration_results["integration_success"] += 1
         
-        # Consider phase transition based on highest significance
-        if highest_significance >= phase_params["transition_threshold"]:
+        # Consider phase transition based on highest QuickRecal score
+        if highest_quickrecal >= phase_params["transition_threshold"]:
             # Attempt phase transition
-            transition_occurred = self.spiral_manager.transition_phase(highest_significance)
+            transition_occurred = self.spiral_manager.transition_phase(highest_quickrecal)
             
             integration_results["spiral_phase_transition"] = transition_occurred
             integration_results["phase_after"] = self.spiral_manager.get_current_phase().value
-            integration_results["transition_significance"] = highest_significance
+            integration_results["transition_quickrecal"] = highest_quickrecal
             
             if transition_occurred:
                 self.logger.info(f"Spiral phase transition triggered: {integration_results['phase_before']} -> "
-                               f"{integration_results['phase_after']} (significance: {highest_significance:.2f})")
+                               f"{integration_results['phase_after']} (QuickRecal score: {highest_quickrecal:.2f})")
         
         return integration_results
 
@@ -2701,7 +2701,7 @@ class LucidiaDreamProcessor:
         
         # Update significant insights
         for insight in dream_record["insights"]:
-            if insight["significance"] > 0.8:
+            if insight["quickrecal_score"] > 0.8:
                 self.dream_stats["significant_insights"].append({
                     "content": insight["text"],
                     "timestamp": time.time(),
@@ -2735,9 +2735,9 @@ class LucidiaDreamProcessor:
             phase_stats["total_insights"] += len(dream_record["insights"])
             phase_stats["total_dream_time"] += dream_record["duration"]
             
-            # Record significance of insights in this phase
+            # Record QuickRecal score of insights in this phase
             for insight in dream_record["insights"]:
-                phase_stats["insight_significance"].append(insight["significance"])
+                phase_stats["insight_quickrecal"].append(insight["quickrecal_score"])
 
     def _end_dream(self) -> None:
         """
@@ -2792,7 +2792,7 @@ class LucidiaDreamProcessor:
             phase: {
                 "total_dreams": stats["total_dreams"],
                 "total_insights": stats["total_insights"],
-                "avg_significance": sum(stats["insight_significance"]) / max(len(stats["insight_significance"]), 1) if stats["insight_significance"] else 0
+                "avg_quickrecal": sum(stats["insight_quickrecal"]) / max(len(stats["insight_quickrecal"]), 1) if stats["insight_quickrecal"] else 0
             } for phase, stats in self.dream_stats["phase_stats"].items()
         }
         
@@ -3135,7 +3135,7 @@ class LucidiaDreamProcessor:
                             "content": f"Dream insight: {prompt}",
                             "source": "dream_processing",
                             "source_dream_id": dream_result.get("dream_id"),
-                            "significance": 0.7 + (depth * 0.2),
+                            "quickrecal_score": 0.7 + (depth * 0.2),
                             "confidence": 0.6 + (creativity * 0.2),
                             "timestamp": datetime.now().isoformat(),
                             "related_concepts": [concept.get("name", "concept")]
@@ -3154,7 +3154,7 @@ class LucidiaDreamProcessor:
                             "content": f"Dream insight: {segment[:100]}...",
                             "source": "dream_content_analysis",
                             "source_dream_id": dream_result.get("dream_id"),
-                            "significance": 0.6 + (depth * 0.2),
+                            "quickrecal_score": 0.6 + (depth * 0.2),
                             "confidence": 0.5 + (creativity * 0.3),
                             "timestamp": datetime.now().isoformat(),
                             "related_concepts": [dream_theme.get("name", "unknown theme")]
@@ -3172,7 +3172,7 @@ class LucidiaDreamProcessor:
                         "content": raw_insight["content"],
                         "source": raw_insight["source"],
                         "source_dream_id": raw_insight.get("source_dream_id"),
-                        "significance": raw_insight["significance"],
+                        "quickrecal_score": raw_insight["quickrecal_score"],
                         "confidence": raw_insight["confidence"],
                         "timestamp": raw_insight["timestamp"],
                         "related_concepts": raw_insight.get("related_concepts", [])
@@ -3185,14 +3185,14 @@ class LucidiaDreamProcessor:
             # Update dream statistics
             self.dream_stats["total_insights"] += len(insights)
             if insights:
-                avg_significance = sum(i["attributes"].get("significance", 0) for i in insights) / len(insights)
+                avg_quickrecal = sum(i["attributes"].get("quickrecal_score", 0) for i in insights) / len(insights)
                 self.dream_stats["integration_success_rate"] = (
-                    0.7 * self.dream_stats["integration_success_rate"] + 0.3 * avg_significance
+                    0.7 * self.dream_stats["integration_success_rate"] + 0.3 * avg_quickrecal
                 )
                 
                 # Track significant insights
                 for insight in insights:
-                    if insight["attributes"].get("significance", 0) > 0.8:
+                    if insight["attributes"].get("quickrecal_score", 0) > 0.8:
                         self.dream_stats["significant_insights"].append({
                             "id": insight["node_id"],
                             "content": insight["attributes"]["content"],
@@ -3301,13 +3301,13 @@ class LucidiaDreamProcessor:
                                 "properties": {
                                     "content": {"type": "string"},
                                     "type": {"type": "string", "enum": ["insight", "question", "association", "reflection", "counterfactual"]},
-                                    "significance": {"type": "number", "minimum": 0, "maximum": 1},
+                                    "quickrecal_score": {"type": "number", "minimum": 0, "maximum": 1},
                                     "related_concepts": {
                                         "type": "array",
                                         "items": {"type": "string"}
                                     }
                                 },
-                                "required": ["content", "type", "significance"]
+                                "required": ["content", "type", "quickrecal_score"]
                             }
                         },
                         "meta_reflection": {"type": "string"}
@@ -3371,7 +3371,7 @@ class LucidiaDreamProcessor:
                             for fragment in dream_data.get("fragments", []):
                                 fragment_type = fragment.get("type")
                                 fragment_content = fragment.get("content")
-                                significance = fragment.get("significance", 0.7)
+                                quickrecal_score = fragment.get("quickrecal_score", 0.7)
                                 related_concepts = fragment.get("related_concepts", [])
                                 
                                 fragment_id = f"{fragment_type}_{uuid.uuid4().hex[:8]}"
@@ -3385,7 +3385,7 @@ class LucidiaDreamProcessor:
                                             "content": fragment_content,
                                             "source": "structured_dream",
                                             "source_dream_id": dream_report["dream_id"],
-                                            "significance": significance,
+                                            "quickrecal_score": quickrecal_score,
                                             "confidence": 0.6 + (self.dream_state["current_dream_creativity"] * 0.2),
                                             "timestamp": datetime.now().isoformat(),
                                             "related_concepts": related_concepts
@@ -3400,7 +3400,7 @@ class LucidiaDreamProcessor:
                                         "source": related_concepts[0] if related_concepts else seed_name,
                                         "target": related_concepts[1] if len(related_concepts) > 1 else fragment_content.split()[0],
                                         "relation": "associates_with",
-                                        "strength": significance,
+                                        "strength": quickrecal_score,
                                         "description": fragment_content
                                     }
                                     associations.append(association)
@@ -3414,7 +3414,7 @@ class LucidiaDreamProcessor:
                                             "content": fragment_content,
                                             "source": "structured_dream",
                                             "source_dream_id": dream_report["dream_id"],
-                                            "significance": significance,
+                                            "quickrecal_score": quickrecal_score,
                                             "confidence": 0.5 + (self.dream_state["current_dream_depth"] * 0.3),
                                             "timestamp": datetime.now().isoformat(),
                                             "related_concepts": related_concepts
@@ -3501,7 +3501,7 @@ class LucidiaDreamProcessor:
         
         # Store significant insights
         for insight in insights:
-            if insight.get("significance", 0) > 0.7:
+            if insight.get("quickrecal_score", 0) > 0.7:
                 self.dream_stats["significant_insights"].append({
                     "content": insight.get("content"),
                     "timestamp": time.time(),

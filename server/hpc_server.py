@@ -114,6 +114,105 @@ class HPCServer:
                                 'message': f'Error generating embedding: {str(e)}'
                             }))
                     
+                    elif data['type'] == 'process_embedding':
+                        # Process embedding directly
+                        try:
+                            embedding = torch.tensor(data['embedding'], dtype=torch.float32)
+                            result = self.hpc_qr_manager.process_embedding(embedding)
+                            
+                            await websocket.send(json.dumps({
+                                'type': 'process_result',
+                                'quickrecal_score': result['quickrecal_score'],
+                                'geometry': result['geometry']
+                            }))
+                        except Exception as e:
+                            logger.error(f"Error processing embedding: {e}")
+                            await websocket.send(json.dumps({
+                                'type': 'error',
+                                'message': f'Error processing embedding: {str(e)}'
+                            }))
+                    
+                    elif data['type'] == 'emotional_analysis':
+                        # Process emotional analysis request
+                        try:
+                            text = data.get('text', '')
+                            if not text:
+                                raise ValueError("No text provided for emotional analysis")
+                                
+                            # Perform emotional analysis
+                            # This is a simplified implementation - in production you might use
+                            # a more sophisticated emotion detection model
+                            emotions = {
+                                "joy": 0.0,
+                                "sadness": 0.0,
+                                "anger": 0.0,
+                                "fear": 0.0,
+                                "surprise": 0.0,
+                                "disgust": 0.0,
+                                "neutral": 0.0
+                            }
+                            
+                            # Simple rule-based analysis as placeholder
+                            # In production, replace with actual emotion detection model
+                            if any(word in text.lower() for word in ['happy', 'glad', 'excited', 'wonderful']):
+                                emotions['joy'] = 0.8
+                            elif any(word in text.lower() for word in ['sad', 'unhappy', 'depressed', 'disappointed']):
+                                emotions['sadness'] = 0.8
+                            elif any(word in text.lower() for word in ['angry', 'mad', 'furious', 'rage']):
+                                emotions['anger'] = 0.8
+                            elif any(word in text.lower() for word in ['afraid', 'scared', 'worried', 'terrified']):
+                                emotions['fear'] = 0.8
+                            elif any(word in text.lower() for word in ['surprised', 'shocked', 'astonished']):
+                                emotions['surprise'] = 0.8
+                            elif any(word in text.lower() for word in ['disgusted', 'gross', 'revolting']):
+                                emotions['disgust'] = 0.8
+                            else:
+                                emotions['neutral'] = 0.8
+                                
+                            # Determine dominant emotion
+                            dominant_emotion = max(emotions.items(), key=lambda x: x[1])[0]
+                            
+                            # Send response
+                            await websocket.send(json.dumps({
+                                'type': 'emotional_analysis_result',
+                                'emotions': emotions,
+                                'dominant_emotion': dominant_emotion,
+                                'confidence': emotions[dominant_emotion],
+                                'text': text[:100] + '...' if len(text) > 100 else text
+                            }))
+                        except Exception as e:
+                            logger.error(f"Error performing emotional analysis: {e}")
+                            await websocket.send(json.dumps({
+                                'type': 'error',
+                                'message': f'Error performing emotional analysis: {str(e)}'
+                            }))
+                    
+                    elif data['type'] == 'generate_embedding':
+                        # Generate embedding
+                        try:
+                            text = data.get('text', '')
+                            if not text:
+                                raise ValueError("No text provided for embedding generation")
+                            
+                            # Generate embedding
+                            # This is a simplified implementation - in production you might use
+                            # a more sophisticated embedding generation model
+                            embedding_dim = self.hpc_qr_manager.config['embedding_dim']
+                            mock_embedding = torch.randn(embedding_dim, dtype=torch.float32)
+                            mock_embedding = torch.nn.functional.normalize(mock_embedding, p=2, dim=0)
+                            
+                            await websocket.send(json.dumps({
+                                'type': 'embedding_result',
+                                'embedding': mock_embedding.tolist(),
+                                'source_text': text[:100] + '...' if len(text) > 100 else text
+                            }))
+                        except Exception as e:
+                            logger.error(f"Error generating embedding: {e}")
+                            await websocket.send(json.dumps({
+                                'type': 'error',
+                                'message': f'Error generating embedding: {str(e)}'
+                            }))
+                    
                     else:
                         error_msg = {
                             'type': 'error',
@@ -215,6 +314,41 @@ class HPCClient:
         await self.websocket.send(json.dumps(request))
         response = await self.websocket.recv()
         return json.loads(response)
+
+    async def analyze_emotions(self, text: str) -> dict:
+        """Analyze emotions in text using the HPC server.
+        
+        Args:
+            text: The text to analyze for emotional content
+            
+        Returns:
+            Dictionary containing emotion analysis results
+        """
+        if not self.connected:
+            await self.connect()
+        
+        request = {
+            'type': 'emotional_analysis',
+            'text': text
+        }
+        
+        try:
+            await self.websocket.send(json.dumps(request))
+            response = await self.websocket.recv()
+            result = json.loads(response)
+            
+            if result.get('type') == 'error':
+                logger.error(f"Error from server: {result.get('message') or result.get('error')}")
+            
+            return result
+        except Exception as e:
+            logger.error(f"Error analyzing emotions: {str(e)}")
+            return {
+                'type': 'error', 
+                'error': str(e),
+                'emotions': {'neutral': 1.0},  # Default fallback
+                'dominant_emotion': 'neutral'
+            }
 
 if __name__ == '__main__':
     server = HPCServer()

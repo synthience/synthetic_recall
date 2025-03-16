@@ -4,6 +4,8 @@ Lucidia's Autobiographical Memory
 This module implements a specialized memory system for identity-relevant experiences,
 providing temporal organization and narrative categorization of memories.
 
+Updated to support QuickRecal architecture.
+
 Created by MEGAPROMPT (Daniel)
 """
 
@@ -31,12 +33,12 @@ class AutobiographicalMemory:
         self.autobiographical_index = {}  # memory_id -> metadata
         self.temporal_index = defaultdict(list)  # timestamp (rounded) -> memory_ids
         self.category_index = defaultdict(set)  # category -> memory_ids
-        self.significance_index = defaultdict(set)  # significance level (rounded) -> memory_ids
+        self.quickrecal_index = defaultdict(set)  # quickrecal level (rounded) -> memory_ids
         self.keyword_index = defaultdict(set)  # keyword -> memory_ids
         self.identity_relevance_index = defaultdict(set)  # relevance level (rounded) -> memory_ids
         
         # Configuration
-        self.significance_threshold = 0.6  # Minimum significance to include in autobiographical memory
+        self.quickrecal_threshold = 0.6  # Minimum QuickRecal score to include in autobiographical memory
         self.max_memories_per_query = 50  # Maximum memories to return in a query
         self.identity_keywords = [
             "identity", "self", "lucidia", "synthien", "consciousness", 
@@ -52,23 +54,23 @@ class AutobiographicalMemory:
         ]
         
         self.logger = logging.getLogger("AutobiographicalMemory")
-        self.logger.info("Autobiographical Memory initialized")
+        self.logger.info("Autobiographical Memory initialized with QuickRecal support")
     
     async def add_experience(self, content: str, metadata: Optional[Dict[str, Any]] = None, 
-                      significance: float = 0.7) -> Optional[str]:
+                      quickrecal_score: float = 0.7) -> Optional[str]:
         """Add an experience to autobiographical memory.
         
         Args:
             content: Experience content text
             metadata: Optional additional metadata
-            significance: Significance of the experience (0.0 to 1.0)
+            quickrecal_score: QuickRecal score of the experience (0.0 to 1.0)
             
         Returns:
             Memory ID if successfully added, None otherwise
         """
-        # Check significance threshold
-        if significance < self.significance_threshold:
-            self.logger.debug(f"Experience below significance threshold ({significance:.2f})")
+        # Check QuickRecal threshold
+        if quickrecal_score < self.quickrecal_threshold:
+            self.logger.debug(f"Experience below QuickRecal threshold ({quickrecal_score:.2f})")
             return None
         
         # Categorize the experience
@@ -80,12 +82,16 @@ class AutobiographicalMemory:
         # Add identity-relevant metadata
         identity_metadata = {
             "memory_type": "AUTOBIOGRAPHICAL",
-            "identity_significance": significance,
+            "identity_quickrecal": quickrecal_score,  # Updated from identity_significance
             "narrative_category": narrative_category,
             "identity_relevance": identity_relevance,
             "temporal_position": len(self.autobiographical_index) + 1,
             "added_timestamp": time.time()
         }
+        
+        # Handle legacy systems that might still use significance
+        if "significance" not in identity_metadata and "quickrecal_score" not in identity_metadata:
+            identity_metadata["quickrecal_score"] = quickrecal_score
         
         # Extract keywords
         keywords = self._extract_keywords(content)
@@ -103,6 +109,11 @@ class AutobiographicalMemory:
                     metadata=full_metadata
                 )
             elif hasattr(self.memory_system, "add_memory"):
+                # Handle both new QuickRecal and legacy interfaces
+                if "quickrecal_score" in full_metadata and not hasattr(self.memory_system, "quickrecal_score"):
+                    # Legacy system might need significance instead of quickrecal_score
+                    full_metadata["significance"] = full_metadata.get("quickrecal_score", 0.5)
+                
                 memory_id = await self.memory_system.add_memory(
                     content=content,
                     metadata=full_metadata
@@ -115,7 +126,7 @@ class AutobiographicalMemory:
             # Index the memory
             self._index_memory(memory_id, content, full_metadata)
             
-            self.logger.info(f"Added autobiographical memory: {memory_id} (category: {narrative_category}, significance: {significance:.2f})")
+            self.logger.info(f"Added autobiographical memory: {memory_id} (category: {narrative_category}, QuickRecal: {quickrecal_score:.2f})")
             return memory_id
             
         except Exception as e:
@@ -142,10 +153,14 @@ class AutobiographicalMemory:
         category = metadata.get("narrative_category", "uncategorized")
         self.category_index[category].add(memory_id)
         
-        # Add to significance index (rounded to 0.1)
-        significance = metadata.get("identity_significance", 0.0)
-        sig_level = round(significance * 10) / 10
-        self.significance_index[sig_level].add(memory_id)
+        # Add to QuickRecal index (rounded to 0.1)
+        # Check for multiple possible field names for compatibility
+        quickrecal = metadata.get("identity_quickrecal", 
+                     metadata.get("quickrecal_score", 
+                     metadata.get("significance", 0.0)))  # Fallback for legacy systems
+        
+        qr_level = round(quickrecal * 10) / 10
+        self.quickrecal_index[qr_level].add(memory_id)
         
         # Add to identity relevance index (rounded to 0.1)
         relevance = metadata.get("identity_relevance", 0.0)
@@ -404,7 +419,7 @@ class AutobiographicalMemory:
     async def query_memories(self, type: Optional[str] = None, 
                       categories: Optional[List[str]] = None,
                       keywords: Optional[List[str]] = None,
-                      significance_threshold: float = 0.0,
+                      quickrecal_threshold: float = 0.0,
                       identity_relevance_threshold: float = 0.0,
                       start_time: Optional[float] = None,
                       end_time: Optional[float] = None,
@@ -415,7 +430,7 @@ class AutobiographicalMemory:
             type: Optional memory type filter
             categories: Optional list of narrative categories
             keywords: Optional list of keywords
-            significance_threshold: Minimum significance threshold
+            quickrecal_threshold: Minimum QuickRecal threshold
             identity_relevance_threshold: Minimum identity relevance threshold
             start_time: Optional start timestamp
             end_time: Optional end timestamp
@@ -461,19 +476,19 @@ class AutobiographicalMemory:
             else:
                 candidate_ids = keyword_matches
         
-        # Filter by significance
-        if significance_threshold > 0:
-            sig_level = round(significance_threshold * 10) / 10
-            sig_matches = set()
+        # Filter by QuickRecal score
+        if quickrecal_threshold > 0:
+            qr_level = round(quickrecal_threshold * 10) / 10
+            qr_matches = set()
             
             # Include all levels at or above the threshold
-            for level in [l/10 for l in range(int(sig_level*10), 11)]:
-                sig_matches.update(self.significance_index.get(level, set()))
+            for level in [l/10 for l in range(int(qr_level*10), 11)]:
+                qr_matches.update(self.quickrecal_index.get(level, set()))
             
             if candidate_ids:
-                candidate_ids &= sig_matches
+                candidate_ids &= qr_matches
             else:
-                candidate_ids = sig_matches
+                candidate_ids = qr_matches
         
         # Filter by identity relevance
         if identity_relevance_threshold > 0:
@@ -512,16 +527,21 @@ class AutobiographicalMemory:
         if not candidate_ids:
             return []
         
-        # Sort by significance and recency
+        # Sort by QuickRecal score and recency
         memory_scores = []
         for memory_id in candidate_ids:
             metadata = self.autobiographical_index[memory_id]
-            significance = metadata.get("identity_significance", 0.0)
+            
+            # Get QuickRecal score from multiple possible fields for compatibility
+            quickrecal = metadata.get("identity_quickrecal", 
+                         metadata.get("quickrecal_score", 
+                         metadata.get("significance", 0.0)))  # Fallback for legacy systems
+            
             timestamp = metadata.get("added_timestamp", 0)
             
-            # Score is a combination of significance and recency
+            # Score is a combination of QuickRecal and recency
             recency_factor = min(1.0, (time.time() - timestamp) / (30 * 24 * 3600))  # 30 days
-            score = significance * 0.7 + (1.0 - recency_factor) * 0.3
+            score = quickrecal * 0.7 + (1.0 - recency_factor) * 0.3
             
             memory_scores.append((score, timestamp, memory_id))
         
@@ -541,7 +561,7 @@ class AutobiographicalMemory:
         return memories
     
     async def get_significant_memories(self, limit: int = 5) -> List[Dict[str, Any]]:
-        """Get the most significant autobiographical memories.
+        """Get the most significant autobiographical memories (high QuickRecal score).
         
         Args:
             limit: Maximum number of memories to return
@@ -549,9 +569,9 @@ class AutobiographicalMemory:
         Returns:
             List of significant memories
         """
-        # Query with high significance threshold
+        # Query with high QuickRecal threshold
         return await self.query_memories(
-            significance_threshold=0.8,
+            quickrecal_threshold=0.8,
             limit=limit
         )
     
@@ -633,8 +653,8 @@ class AutobiographicalMemory:
         # Category distribution
         category_counts = {category: len(memories) for category, memories in self.category_index.items()}
         
-        # Significance distribution
-        significance_counts = {f"{level:.1f}": len(memories) for level, memories in self.significance_index.items()}
+        # QuickRecal distribution
+        quickrecal_counts = {f"{level:.1f}": len(memories) for level, memories in self.quickrecal_index.items()}
         
         # Identity relevance distribution
         relevance_counts = {f"{level:.1f}": len(memories) for level, memories in self.identity_relevance_index.items()}
@@ -657,7 +677,7 @@ class AutobiographicalMemory:
         return {
             "total_memories": total_memories,
             "category_distribution": category_counts,
-            "significance_distribution": significance_counts,
+            "quickrecal_distribution": quickrecal_counts,  # Updated from significance_distribution
             "relevance_distribution": relevance_counts,
             "time_distribution": time_distribution,
             "top_keywords": dict(top_keywords)
@@ -676,7 +696,7 @@ class AutobiographicalMemory:
             # Prepare state data
             state = {
                 "autobiographical_index": self.autobiographical_index,
-                "significance_threshold": self.significance_threshold,
+                "quickrecal_threshold": self.quickrecal_threshold,  # Updated from significance_threshold
                 "identity_keywords": self.identity_keywords,
                 "narrative_categories": self.narrative_categories,
                 "timestamp": time.time()
@@ -691,9 +711,9 @@ class AutobiographicalMemory:
             for category, memories in self.category_index.items():
                 category_index[category] = list(memories)
             
-            significance_index = {}
-            for level, memories in self.significance_index.items():
-                significance_index[str(level)] = list(memories)
+            quickrecal_index = {}  # Updated from significance_index
+            for level, memories in self.quickrecal_index.items():
+                quickrecal_index[str(level)] = list(memories)
             
             keyword_index = {}
             for keyword, memories in self.keyword_index.items():
@@ -706,7 +726,7 @@ class AutobiographicalMemory:
             state["indices"] = {
                 "temporal_index": temporal_index,
                 "category_index": category_index,
-                "significance_index": significance_index,
+                "quickrecal_index": quickrecal_index,  # Updated from significance_index
                 "keyword_index": keyword_index,
                 "identity_relevance_index": identity_relevance_index
             }
@@ -738,7 +758,11 @@ class AutobiographicalMemory:
             
             # Restore state
             self.autobiographical_index = state.get("autobiographical_index", {})
-            self.significance_threshold = state.get("significance_threshold", 0.6)
+            
+            # Support both new and legacy field names
+            self.quickrecal_threshold = state.get("quickrecal_threshold", 
+                                       state.get("significance_threshold", 0.6))
+            
             self.identity_keywords = state.get("identity_keywords", self.identity_keywords)
             self.narrative_categories = state.get("narrative_categories", self.narrative_categories)
             
@@ -755,10 +779,11 @@ class AutobiographicalMemory:
             for category, memories in indices.get("category_index", {}).items():
                 self.category_index[category] = set(memories)
             
-            # Restore significance index
-            self.significance_index = defaultdict(set)
-            for level_str, memories in indices.get("significance_index", {}).items():
-                self.significance_index[float(level_str)] = set(memories)
+            # Restore QuickRecal index (support both new and legacy field names)
+            self.quickrecal_index = defaultdict(set)
+            quickrecal_data = indices.get("quickrecal_index", indices.get("significance_index", {}))
+            for level_str, memories in quickrecal_data.items():
+                self.quickrecal_index[float(level_str)] = set(memories)
             
             # Restore keyword index
             self.keyword_index = defaultdict(set)
@@ -776,3 +801,61 @@ class AutobiographicalMemory:
         except Exception as e:
             self.logger.error(f"Error loading autobiographical memory state: {e}")
             return False
+            
+    # For backward compatibility
+    async def query_memories_legacy(self, type: Optional[str] = None, 
+                      categories: Optional[List[str]] = None,
+                      keywords: Optional[List[str]] = None,
+                      significance_threshold: float = 0.0,
+                      identity_relevance_threshold: float = 0.0,
+                      start_time: Optional[float] = None,
+                      end_time: Optional[float] = None,
+                      limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Legacy method for querying memories with significance parameter (deprecated).
+        
+        This method is maintained for backward compatibility and redirects to query_memories.
+        
+        Args:
+            type: Optional memory type filter
+            categories: Optional list of narrative categories
+            keywords: Optional list of keywords
+            significance_threshold: Minimum significance threshold (deprecated, use quickrecal_threshold)
+            identity_relevance_threshold: Minimum identity relevance threshold
+            start_time: Optional start timestamp
+            end_time: Optional end timestamp
+            limit: Maximum number of memories to return
+            
+        Returns:
+            List of matching memories
+        """
+        self.logger.warning("query_memories_legacy with significance_threshold is deprecated. Use query_memories with quickrecal_threshold instead.")
+        return await self.query_memories(
+            type=type,
+            categories=categories,
+            keywords=keywords,
+            quickrecal_threshold=significance_threshold,
+            identity_relevance_threshold=identity_relevance_threshold,
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit
+        )
+            
+    # For backward compatibility
+    async def add_experience_legacy(self, content: str, metadata: Optional[Dict[str, Any]] = None, 
+                      significance: float = 0.7) -> Optional[str]:
+        """
+        Legacy method for adding experiences with significance parameter (deprecated).
+        
+        This method is maintained for backward compatibility and redirects to add_experience.
+        
+        Args:
+            content: Experience content text
+            metadata: Optional additional metadata
+            significance: Significance of the experience (deprecated, use quickrecal_score)
+            
+        Returns:
+            Memory ID if successfully added, None otherwise
+        """
+        self.logger.warning("add_experience_legacy with significance parameter is deprecated. Use add_experience with quickrecal_score instead.")
+        return await self.add_experience(content, metadata, significance)

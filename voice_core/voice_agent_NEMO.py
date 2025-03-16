@@ -128,7 +128,8 @@ class LucidiaVoiceAgent:
                     'embedding_dim': 384,
                     'max_memories': 10000,
                     'stm_max_size': 10,
-                    'significance_threshold': 0.3,
+                    'min_similarity': 0.3,
+                    'quickrecal_score_threshold': 0.3,
                     'enable_persistence': True,
                     'decay_rate': 0.05,
                     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
@@ -533,14 +534,14 @@ class LucidiaVoiceAgent:
             return
             
         self.logger.info(f"Semantic processing result: '{data.get('text', '')}' "
-                    f"(significance: {data.get('significance', 0.0):.2f})")
+                    f"(quickrecal_score: {data.get('quickrecal_score', data.get('significance', 0.0)):.2f})")
                     
-        if data.get("significance", 0.0) >= 0.3 and data.get("text"):
+        if data.get("quickrecal_score", data.get("significance", 0.0)) >= 0.3 and data.get("text"):
             await self.memory_client.store_memory(
                 content=data["text"],
                 metadata={
                     "type": "semantic_insight",
-                    "significance": data["significance"],
+                    "quickrecal_score": data.get("quickrecal_score", data.get("significance")),
                     "timestamp": time.time()
                 }
             )

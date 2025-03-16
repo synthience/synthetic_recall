@@ -163,35 +163,49 @@ class EnhancedSTTService:
                 self.active_task = None
                 
         try:
-            # Get participant identity
+            # Get participant identity once at the beginning
             self._participant_identity = self.identity_manager.get_participant_identity(track, self.room)
             self.logger.info(f"Processing audio from participant: {self._participant_identity}")
             
             # Create audio stream
             audio_stream = rtc.AudioStream(track)
             
-            # Publish listening state
-            if self.room and self.state_manager and self.state_manager.current_state != VoiceState.SPEAKING:
+            # Cache state information and room validity check to avoid repeated evaluations
+            has_room_and_state = bool(self.room and self.state_manager)
+            current_state = self.state_manager.current_state if self.state_manager else None
+            skip_states = [VoiceState.SPEAKING, VoiceState.PROCESSING]
+            
+            # Publish listening state only once before processing starts
+            if has_room_and_state and current_state != VoiceState.SPEAKING:
                 try:
+                    # Create data once outside the task
+                    listening_data = json.dumps({
+                        "type": "listening_state",
+                        "active": True,
+                        "timestamp": time.time()
+                    }).encode()
+                    
                     asyncio.create_task(self.room.local_participant.publish_data(
-                        json.dumps({
-                            "type": "listening_state",
-                            "active": True,
-                            "timestamp": time.time()
-                        }).encode(),
+                        listening_data,
                         reliable=True
                     ))
                     
-                    if self.state_manager.current_state not in [VoiceState.SPEAKING, VoiceState.PROCESSING]:
+                    if current_state not in skip_states:
                         asyncio.create_task(self.state_manager.transition_to(VoiceState.LISTENING))
                         
                     self.logger.debug("Published listening state to room")
                 except Exception as e:
                     self.logger.error(f"Failed to publish listening state: {e}")
             
+            # Pre-allocate buffer for maximum expected speech duration
+            # This avoids repeated allocations during continuous speech
+            max_buffer_size = int(self.vad_engine.max_speech_duration_sec * self.sample_rate)
+            reserved_buffer = np.zeros(max_buffer_size, dtype=np.float32)
+            buffer_position = 0
+            
             # Process audio frames
             async for event in audio_stream:
-                # Check for error state
+                # Early exit if in error state
                 if self.state_manager.current_state == VoiceState.ERROR:
                     self.logger.info("Stopping audio processing due to ERROR state")
                     await cleanup()
@@ -214,14 +228,39 @@ class EnhancedSTTService:
                 # Process with VAD engine
                 vad_result = self.vad_engine.process_frame(processed_audio, audio_level_db)
                 
+                # Early skip: if not speaking and no completed segment, nothing to do
+                if not vad_result["is_speaking"] and not vad_result["speech_segment_complete"]:
+                    continue
+                
+                # Buffer audio during active speech more efficiently
+                if vad_result["is_speaking"]:
+                    frames_to_add = len(processed_audio)
+                    if buffer_position + frames_to_add <= max_buffer_size:
+                        reserved_buffer[buffer_position:buffer_position + frames_to_add] = processed_audio
+                        buffer_position += frames_to_add
+                        frame_duration = frames_to_add / self.sample_rate
+                        self.buffer_duration += frame_duration
+                        # Keep track of actual buffer contents for processing
+                        if len(self.buffer) < 100:  # Limit buffer list size for memory efficiency
+                            self.buffer.append(processed_audio)
+                        else:
+                            # If we exceed list size limit, use a single concatenated array
+                            if len(self.buffer) == 100:
+                                self.buffer = [np.concatenate(self.buffer)]
+                            # Append new data to the existing array
+                            self.buffer[0] = np.concatenate([self.buffer[0], processed_audio])
+                
                 # Check for a completed speech segment
                 if vad_result["speech_segment_complete"] and vad_result["valid_speech_segment"]:
                     self.logger.info(f"Speech segment complete: {vad_result['speech_duration']:.2f}s")
                     
                     # Process full speech segment
-                    if self.buffer:
-                        # Combine buffer into a single array
-                        full_audio = np.concatenate(self.buffer)
+                    if buffer_position > 0 or self.buffer:
+                        # Get the full audio segment - either from efficient buffer or list
+                        if buffer_position > 0:
+                            full_audio = reserved_buffer[:buffer_position]
+                        else:
+                            full_audio = np.concatenate(self.buffer)
                         
                         # Transcribe the full segment with built-in transcriber
                         transcription_result = await self.transcriber.transcribe(full_audio, self.sample_rate)
@@ -235,7 +274,6 @@ class EnhancedSTTService:
                                 nemo_task = asyncio.create_task(
                                     self.nemo_stt.transcribe(full_audio)
                                 )
-                                # We don't await this here - it's handled by callbacks in voice_agent_NEMO
                             except Exception as nemo_e:
                                 self.logger.error(f"Error sending to NemoSTT: {nemo_e}", exc_info=True)
                         
@@ -252,7 +290,7 @@ class EnhancedSTTService:
                             # Update stats
                             self.successful_recognitions += 1
                             
-                            # Call transcript handler if provided
+                            # Call transcript handler if provided - use a single approach for async/sync
                             if self.on_transcript:
                                 if asyncio.iscoroutinefunction(self.on_transcript):
                                     await self.on_transcript(transcript)
@@ -263,13 +301,8 @@ class EnhancedSTTService:
                         
                         # Clear buffer for next segment
                         self.buffer = []
+                        buffer_position = 0
                         self.buffer_duration = 0.0
-                        
-                # Buffer audio during active speech
-                if vad_result["is_speaking"]:
-                    self.buffer.append(processed_audio)
-                    frame_duration = len(processed_audio) / self.sample_rate
-                    self.buffer_duration += frame_duration
             
             await cleanup()
             return None

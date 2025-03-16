@@ -69,8 +69,8 @@
       }
     }
   },
-  "default_model": "qwen2.5-7b-instruct",
-  "dream_model": "qwen_qwq-32b",
+  "default_model": "qweniversal_studios-1m-7b",
+  "dream_model": "qwen2.5-qwq-35b-eureka-cubed-abliterated-uncensored",
   "parameters": {
     "switch_cooldown": 60
   }

@@ -1,8 +1,6 @@
 """
 LUCID RECALL PROJECT
-Agent: Aurora 1.1
-Date: 2/13/25
-Time: 1:19 AM EST
+
 
 Tensor Server: Memory & Embedding Operations with Unified Memory System
 """
@@ -15,7 +13,7 @@ import torch
 import time
 from sentence_transformers import SentenceTransformer
 from typing import Dict, Any, List
-from memory.lucidia_memory_system.core.integration.hpc_sig_flow_manager import HPCSIGFlowManager
+from memory.lucidia_memory_system.core.integration.hpc_qr_flow_manager import HPCQRFlowManager
 from server.memory_system import MemorySystem
 
 logging.basicConfig(level=logging.INFO)
@@ -32,7 +30,7 @@ class TensorServer:
         logger.info(f"Model loaded on {self.model.device}")
         
         # Initialize HPC manager
-        self.hpc_manager = HPCSIGFlowManager({
+        self.hpc_manager = HPCQRFlowManager({
             'embedding_dim': 384,
             'device': self.device
         })
@@ -56,21 +54,24 @@ class TensorServer:
             logger.warning("GPU not available, using CPU")
 
     async def add_memory(self, text: str, embedding: torch.Tensor) -> Dict[str, Any]:
-        """Add memory with embedding and return metadata."""
+        """
+        Add memory with embedding and return metadata, using HPC-QR approach
+        for quickrecal_score instead of old significance.
+        """
         # Process through HPC
-        processed_embedding, significance = await self.hpc_manager.process_embedding(embedding)
+        processed_embedding, quickrecal_score = await self.hpc_manager.process_embedding(embedding)
         
         # Store in unified memory system
         memory = await self.memory_system.add_memory(
             text=text,
             embedding=processed_embedding,
-            significance=significance
+            quickrecal_score=quickrecal_score
         )
         
-        logger.info(f"Stored memory {memory['id']} with significance {significance}")
+        logger.info(f"Stored memory {memory['id']} with QuickRecal score {quickrecal_score}")
         return {
             'id': memory['id'],
-            'significance': significance,
+            'quickrecal_score': quickrecal_score,
             'timestamp': memory['timestamp']
         }
 
@@ -153,7 +154,7 @@ class TensorServer:
                                 'id': r['memory']['id'],
                                 'text': r['memory']['text'],
                                 'similarity': r['similarity'],
-                                'significance': r['memory']['significance']
+                                'quickrecal_score': r['memory']['quickrecal_score']
                             } for r in results]
                         }
                         
@@ -187,7 +188,7 @@ class TensorServer:
         """Start the WebSocket server."""
         async with websockets.serve(self.handle_websocket, self.host, self.port):
             logger.info(f"Server running on ws://{self.host}:{self.port}")
-            await asyncio.Future()
+            await asyncio.Future()  # Keep server running
 
 class TensorClient:
     """Client for the TensorServer to handle embedding and memory operations via WebSocket."""
@@ -224,7 +225,7 @@ class TensorClient:
             logger.info("Disconnected from TensorServer")
     
     async def get_embedding(self, text: str) -> dict:
-        """Get embedding for a text."""
+        """Get embedding for a text, storing as memory on the server."""
         if not self.connected:
             await self.connect()
         

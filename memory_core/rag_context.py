@@ -27,7 +27,7 @@ class RAGContextMixin:
     async def boost_context_quality(self, query: str, context_text: str, feedback: Dict[str, Any] = None) -> str:
         return context_text
 
-    async def get_rag_context(self, query: str, limit: int = 5, max_tokens: int = 1024, min_significance: float = 0.0) -> str:
+    async def get_rag_context(self, query: str, limit: int = 5, max_tokens: int = 1024, min_quickrecal_score: float = 0.0, min_significance: float = None) -> str:
         """
         Get memory context for RAG (Retrieval-Augmented Generation).
         
@@ -38,7 +38,8 @@ class RAGContextMixin:
             query: The query to find relevant memories for
             limit: Maximum number of memories to include
             max_tokens: Maximum number of tokens in the context
-            min_significance: Minimum significance threshold for memories
+            min_quickrecal_score: Minimum quickrecal score threshold for memories
+            min_significance: Legacy parameter for backward compatibility (deprecated)
             
         Returns:
             str: Formatted memory context for RAG
@@ -48,14 +49,21 @@ class RAGContextMixin:
                 logger.warning(f"Invalid query provided to get_rag_context: {type(query)}")
                 return ""
                 
-            # Normalize min_significance to ensure it's a valid float
+            # For backward compatibility, use min_significance if min_quickrecal_score is not provided
+            if min_significance is not None:
+                logger.warning("min_significance parameter is deprecated, use min_quickrecal_score instead")
+                quickrecal_threshold = min_significance
+            else:
+                quickrecal_threshold = min_quickrecal_score
+                
+            # Normalize min_quickrecal_score to ensure it's a valid float
             try:
-                min_significance = float(min_significance)
+                quickrecal_threshold = float(quickrecal_threshold)
                 # Clamp to valid range
-                min_significance = max(0.0, min(1.0, min_significance))
+                quickrecal_threshold = max(0.0, min(1.0, quickrecal_threshold))
             except (ValueError, TypeError):
-                logger.warning(f"Invalid min_significance value: {min_significance}, defaulting to 0.0")
-                min_significance = 0.0
+                logger.warning(f"Invalid min_quickrecal_score value: {quickrecal_threshold}, defaulting to 0.0")
+                quickrecal_threshold = 0.0
                 
             # First check if this is a personal detail query
             personal_detail_patterns = {
@@ -89,33 +97,33 @@ class RAGContextMixin:
                                 logger.error(f"Error retrieving personal detail '{category}': {e}")
             
             # If not a personal detail query or no direct match found, search memories
-            logger.info(f"Searching for relevant memories for query: {query} with min_significance={min_significance}")
+            logger.info(f"Searching for relevant memories for query: {query} with min_quickrecal_score={quickrecal_threshold}")
             
             # Check for semantic memory matches
             memories = []
-            high_sig_threshold = 0.5  # Lowered from 0.7 to include more important memories
+            high_quickrecal_threshold = 0.5  # Lowered from 0.7 to include more important memories
             
-            # First, try to get memories with high significance
+            # First, try to get memories with high quickrecal score
             try:
-                high_sig_memories = await self.search_memory(query, limit=limit, min_significance=high_sig_threshold)
-                logger.debug(f"Found {len(high_sig_memories)} high significance memories")
+                high_sig_memories = await self.search_memory(query, limit=limit, min_quickrecal_score=high_quickrecal_threshold)
+                logger.debug(f"Found {len(high_sig_memories)} high quickrecal score memories")
             except Exception as e:
-                logger.error(f"Error searching for high significance memories: {e}")
+                logger.error(f"Error searching for high quickrecal score memories: {e}")
                 high_sig_memories = []
             
-            # If we don't have enough high significance memories, get some with lower significance
+            # If we don't have enough high quickrecal score memories, get some with lower scores
             if len(high_sig_memories) < limit:
                 remaining = limit - len(high_sig_memories)
                 try:
-                    # Use the provided min_significance for the second search
-                    low_sig_memories = await self.search_memory(query, limit=remaining, min_significance=min_significance)
-                    logger.debug(f"Found {len(low_sig_memories)} additional memories with min_significance={min_significance}")
+                    # Use the provided min_quickrecal_score for the second search
+                    low_sig_memories = await self.search_memory(query, limit=remaining, min_quickrecal_score=quickrecal_threshold)
+                    logger.debug(f"Found {len(low_sig_memories)} additional memories with min_quickrecal_score={quickrecal_threshold}")
                     
                     # Filter out any duplicates
                     low_sig_memories = [m for m in low_sig_memories if m.get("id") not in [hm.get("id") for hm in high_sig_memories]]
                     memories = high_sig_memories + low_sig_memories
                 except Exception as e:
-                    logger.error(f"Error searching for low significance memories: {e}")
+                    logger.error(f"Error searching for low quickrecal score memories: {e}")
             
             # If memory search fails, try a direct content search without semantic matching
             if not memories and not personal_detail_found:
@@ -132,7 +140,8 @@ class RAGContextMixin:
                         
                         if direct_matches:
                             logger.info(f"Found {len(direct_matches)} memories by direct text matching")
-                            memories = sorted(direct_matches, key=lambda x: x.get("significance", 0.0), reverse=True)[:limit]
+                            # Sort by quickrecal_score instead of significance
+                            memories = sorted(direct_matches, key=lambda x: x.get("quickrecal_score", x.get("significance", 0.0)), reverse=True)[:limit]
                 except Exception as e:
                     logger.error(f"Error in fallback direct search: {e}")
             
@@ -144,18 +153,18 @@ class RAGContextMixin:
             if memories:
                 context_parts.append("### Relevant Memories")
                 
-                # Sort memories by significance (highest first)
+                # Sort memories by quickrecal_score (highest first)
                 try:
-                    sorted_memories = sorted(memories, key=lambda x: x.get("significance", 0.0), reverse=True)
+                    sorted_memories = sorted(memories, key=lambda x: x.get("quickrecal_score", x.get("significance", 0.0)), reverse=True)
                 except Exception as e:
-                    logger.error(f"Error sorting memories by significance: {e}")
+                    logger.error(f"Error sorting memories by quickrecal_score: {e}")
                     sorted_memories = memories  # Use unsorted if sorting fails
                 
                 # Add memories to context
                 for i, memory in enumerate(sorted_memories):
                     try:
                         content = memory.get("content", "")
-                        significance = memory.get("significance", 0.0)
+                        quickrecal_score = memory.get("quickrecal_score", memory.get("significance", 0.0))
                         timestamp = memory.get("timestamp", 0)
                         
                         # Skip empty content
@@ -171,8 +180,8 @@ class RAGContextMixin:
                             except Exception as e:
                                 logger.warning(f"Error formatting timestamp: {e}")
                         
-                        # Add memory to context with significance indicator
-                        sig_indicator = "*" * int(significance * 5)  # 0-5 stars based on significance
+                        # Add memory to context with quickrecal_score indicator
+                        sig_indicator = "*" * int(quickrecal_score * 5)  # 0-5 stars based on quickrecal_score
                         memory_str = f"Memory {i+1}{date_str} {sig_indicator}\n{content}\n"
                         context_parts.append(memory_str)
                     except Exception as e:

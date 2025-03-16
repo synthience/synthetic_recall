@@ -35,6 +35,10 @@ class WebSocketConnectionPool:
             max_connections: Maximum number of connections to maintain
             connection_timeout: Timeout for connection attempts in seconds
         """
+        # Ensure the URI has the proper WebSocket scheme
+        if not uri.startswith('ws://') and not uri.startswith('wss://'):
+            uri = f'ws://{uri}'  # Default to ws:// if no scheme is provided
+            
         self.uri = uri
         self.max_connections = max_connections
         self.connection_timeout = connection_timeout

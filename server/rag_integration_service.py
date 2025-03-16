@@ -1,12 +1,12 @@
 """
-RAG Integration Service for Lucidia
+RAG Integration Service for Lucidia with QuickRecal Support
 
 This module implements Retrieval-Augmented Generation integration for Lucidia's
 architecture, enabling knowledge retrieval during reflection and supporting
 continuous self-evolution through dreaming and reflection.
 
 The integration works at the Dream API level to ensure full access to all
-Lucidia components, including the HypersphereManager, memory persistence,
+Lucidia components, including the HPC-QR Flow Manager, memory persistence,
 and parameter update mechanisms.
 """
 
@@ -15,10 +15,13 @@ import logging
 import os
 import aiohttp
 import asyncio
+import time
 from typing import Dict, List, Any, Optional, Union, Callable, Set
 from datetime import datetime
 from urllib.parse import urljoin
 import traceback
+import torch
+import numpy as np
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(name)s - %(levelname)s - %(message)s')
@@ -28,21 +31,39 @@ class RAGIntegrationService:
     """
     RAG Integration Service that connects Lucidia's components with external
     knowledge retrieval capabilities, supporting continuous self-evolution.
+    
+    Updated to work with the QuickRecal architecture for improved memory retrieval.
     """
     
     def __init__(self, 
                  memory_system = None,
                  knowledge_graph = None,
-                 parameter_manager = None):
+                 parameter_manager = None,
+                 hpc_manager = None):
         """Initialize the RAG Integration Service."""
         self.memory_system = memory_system
         self.knowledge_graph = knowledge_graph
         self.parameter_manager = parameter_manager
         
+        # Initialize HPC-QR Flow Manager for embedding processing if not provided
+        if hpc_manager is None:
+            from integration.hpc_qr_flow_manager import HPCQRFlowManager
+            self.hpc_manager = HPCQRFlowManager({
+                'embedding_dim': 768,  # Default dimension
+                'device': 'cuda' if torch.cuda.is_available() else 'cpu'
+            })
+        else:
+            self.hpc_manager = hpc_manager
+        
         # Get LM Studio configuration from parameter manager
         self.lm_studio_url = "http://host.docker.internal:1234/v1"  # Use host.docker.internal for Docker compatibility
         self.lm_studio_api_key = "lm-studio"  # Standard key for LM Studio
-        self.lm_studio_model = parameter_manager.config.get("lm_studio", {}).get("model", "qwen2.5-7b-instruct")
+        
+        # Get model configuration from parameter manager if available
+        if parameter_manager and hasattr(parameter_manager, 'config'):
+            self.lm_studio_model = parameter_manager.config.get("lm_studio", {}).get("model", "qwen2.5-7b-instruct")
+        else:
+            self.lm_studio_model = "qwen2.5-7b-instruct"  # Default model
         
         # HTTP client for API calls
         self.http_session = None
@@ -57,10 +78,18 @@ class RAGIntegrationService:
         # RAG memory cache for quick lookup of recently retrieved information
         self.memory_cache = {}
         
+        # QuickRecal thresholds for different retrieval operations
+        self.retrieval_thresholds = {
+            'high_quality': 0.8,    # For critical information
+            'standard': 0.6,        # For normal retrieval
+            'exploratory': 0.4,     # For exploratory searches
+            'comprehensive': 0.2    # For broad searches
+        }
+        
         # Initialize with default tools
         self._register_default_tools()
         
-        logger.info(f"Initialized RAG Integration Service with LM Studio at {self.lm_studio_url}")
+        logger.info(f"Initialized RAG Integration Service with QuickRecal support and LM Studio at {self.lm_studio_url}")
     
     async def initialize(self):
         """Initialize required components and connections."""
@@ -190,9 +219,9 @@ class RAGIntegrationService:
                         "type": "string",
                         "description": "Source of the insight (reflection, retrieved knowledge, etc.)",
                     },
-                    "significance": {
+                    "quickrecal_score": {
                         "type": "number",
-                        "description": "Significance score between 0 and 1",
+                        "description": "QuickRecal score between 0 and 1 to indicate importance",
                         "minimum": 0,
                         "maximum": 1,
                         "default": 0.75
@@ -714,7 +743,7 @@ class RAGIntegrationService:
         if self.knowledge_graph and "insights" in reflection_results:
             for insight in reflection_results["insights"]:
                 try:
-                    # Only add if significance/confidence is high enough
+                    # Only add if confidence is high enough
                     if insight.get("confidence", 0) >= 0.7:
                         concept_name = f"insight:{datetime.now().strftime('%Y%m%d%H%M%S')}"
                         await self.knowledge_graph.add_concept(
@@ -735,12 +764,12 @@ class RAGIntegrationService:
         if self.memory_system and "insights" in reflection_results:
             for insight in reflection_results["insights"]:
                 try:
-                    # Only store if significance/confidence is high enough
+                    # Only store if confidence is high enough
                     if insight.get("confidence", 0) >= 0.8:
                         memory_data = {
                             "content": insight["content"],
                             "type": "reflection_insight",
-                            "significance": insight["confidence"],
+                            "quickrecal_score": insight["confidence"],  # Use confidence as QuickRecal score
                             "metadata": {
                                 "insight_type": insight["type"],
                                 "source": "rag_reflection",
@@ -748,14 +777,14 @@ class RAGIntegrationService:
                             }
                         }
                         
-                        # Store in memory system
+                        # Store in memory system using the new interface that supports QuickRecal
                         await self.memory_system.store(memory_data)
                         logger.info(f"Stored high-confidence insight in memory: {insight['content'][:50]}...")
                 except Exception as e:
                     logger.error(f"Error storing insight in memory: {e}")
         
         # 3. Update hypersphere for concepts mentioned in reflection
-        if self.hypersphere_manager and "content" in reflection_results:
+        if hasattr(self, 'hypersphere_manager') and self.hypersphere_manager and "content" in reflection_results:
             try:
                 # This would ideally use NLP to extract key concepts
                 # For now, we'll use a simple approach
@@ -903,6 +932,7 @@ class RAGIntegrationService:
     async def search_memories(self, query: str, memory_type: str = "all", max_results: int = 5):
         """
         Search through Lucidia's memories to find relevant information.
+        Updated to use QuickRecal-based retrieval.
         
         Args:
             query: Search query for finding related memories
@@ -919,31 +949,38 @@ class RAGIntegrationService:
             }
         
         try:
+            # First, get an embedding for the query using HPCQRFlowManager
+            query_embedding = await self.hpc_manager.get_embedding(query)
+            
             # Set up memory search options
             search_options = {
+                "query_embedding": query_embedding,
                 "limit": max_results,
-                "min_similarity": 0.3
+                "min_quickrecal": self.retrieval_thresholds['standard']  # Use standard threshold
             }
             
             # Add type filter if specified
             if memory_type and memory_type != "all":
-                search_options["types"] = [memory_type]
+                search_options["memory_type"] = memory_type
             
-            # Search memories
-            memories = await self.memory_system.search(
-                query=query,
-                **search_options
-            )
+            # Process the embedding through HPCQRFlowManager to get QuickRecal score
+            _, _ = await self.hpc_manager.process_embedding(query_embedding)
+            
+            # Search memories using the enhanced memory storage interface
+            memories = await self.memory_system.search(**search_options)
             
             # Format results for better readability
             formatted_memories = []
-            for memory in memories:
+            for memory, score in memories:
                 formatted_memories.append({
-                    "content": memory.get("content", ""),
-                    "type": memory.get("type", "unknown"),
-                    "significance": memory.get("significance", 0),
-                    "timestamp": memory.get("timestamp", ""),
-                    "similarity": memory.get("similarity", 0)
+                    "content": memory.content,
+                    "type": memory.memory_type.value if hasattr(memory, 'memory_type') else "unknown",
+                    "quickrecal_score": memory.get_effective_quickrecal() 
+                                        if hasattr(memory, 'get_effective_quickrecal') 
+                                        else memory.quickrecal_score if hasattr(memory, 'quickrecal_score') 
+                                        else 0.5,
+                    "timestamp": memory.timestamp if hasattr(memory, 'timestamp') else "",
+                    "similarity": score
                 })
             
             return {
@@ -955,16 +992,18 @@ class RAGIntegrationService:
             
         except Exception as e:
             logger.error(f"Error searching memories: {e}")
+            traceback.print_exc()
             return {"status": "error", "message": str(e)}
     
-    async def record_insight(self, content: str, source: str, significance: float = 0.75):
+    async def record_insight(self, content: str, source: str, quickrecal_score: float = 0.75):
         """
         Record a new insight derived from reflection or knowledge retrieval.
+        Updated to use QuickRecal scoring.
         
         Args:
             content: The insight content or realization
             source: Source of the insight
-            significance: Significance score between 0 and 1
+            quickrecal_score: QuickRecal score between 0 and 1
             
         Returns:
             Status of the recording operation
@@ -982,6 +1021,13 @@ class RAGIntegrationService:
             }
         
         try:
+            # Process the insight content through HPC-QR to get embedding and QuickRecal score
+            embedding_tensor = await self.hpc_manager.get_embedding(content)
+            processed_embedding, computed_quickrecal = await self.hpc_manager.process_embedding(embedding_tensor)
+            
+            # Use either the provided QuickRecal score or the computed one, whichever is higher
+            final_quickrecal = max(quickrecal_score, float(computed_quickrecal))
+            
             # Record in both knowledge graph and memory if available
             if self.knowledge_graph:
                 await self.knowledge_graph.add_concept(
@@ -990,7 +1036,7 @@ class RAGIntegrationService:
                     attributes={
                         "type": "insight",
                         "source": source,
-                        "significance": significance,
+                        "quickrecal_score": final_quickrecal,  # Use QuickRecal instead of significance
                         "timestamp": datetime.now().isoformat()
                     }
                 )
@@ -1000,8 +1046,9 @@ class RAGIntegrationService:
             if self.memory_system:
                 memory_data = {
                     "content": content,
-                    "type": "insight",
-                    "significance": significance,
+                    "embedding": processed_embedding.cpu().numpy() if isinstance(processed_embedding, torch.Tensor) else processed_embedding,
+                    "memory_type": "insight",
+                    "quickrecal_score": final_quickrecal,  # Use QuickRecal score
                     "metadata": {
                         "source": source,
                         "insight_id": insight_id,
@@ -1009,7 +1056,8 @@ class RAGIntegrationService:
                     }
                 }
                 
-                await self.memory_system.store(memory_data)
+                # Use the enhanced memory storage interface
+                await self.memory_system.store(**memory_data)
                 logger.info(f"Recorded insight in memory system: {content[:50]}...")
             
             # Add to local registry to prevent duplicates
@@ -1018,7 +1066,8 @@ class RAGIntegrationService:
             return {
                 "status": "success",
                 "message": "Insight recorded successfully",
-                "insight_id": insight_id
+                "insight_id": insight_id,
+                "quickrecal_score": final_quickrecal
             }
             
         except Exception as e:
@@ -1029,180 +1078,72 @@ class RAGIntegrationService:
                 "insight_id": insight_id
             }
     
-    async def enhance_reflection(self, reflection_query: str, context: Dict[str, Any], focus_areas: Optional[List[str]] = None) -> Dict[str, Any]:
-        """Enhance self-reflection with knowledge retrieval capabilities.
+    async def _retrieve_relevant_memories(self, query: str, focus_areas: Optional[List[str]] = None) -> List[Dict]:
+        """
+        Retrieve memories relevant to the reflection query using QuickRecal.
         
         Args:
-            reflection_query: Base reflection query or instruction
-            context: Dictionary of context information about the self-model
-            focus_areas: Optional list of specific areas to focus the reflection on
+            query: The reflection query
+            focus_areas: Optional specific areas to focus on
             
         Returns:
-            Dictionary containing enhanced reflection results with insights from external knowledge
+            List of memory fragments
         """
         try:
-            if not self.initialized:
-                await self.initialize()
-                
-            results = {
-                "status": "success",
-                "insights": [],
-                "fragments": [],
-                "tool_results": []
-            }
-            
-            # Prepare a specialized reflection query based on focus areas
-            if focus_areas:
-                focus_text = ", ".join(focus_areas)
-                specialized_query = f"How can I improve my {focus_text} capabilities based on recent developments and knowledge?"
-            else:
-                specialized_query = "How can I enhance my self-model based on external knowledge and recent developments?"
-                
-            # 1. Search relevant memories first
-            memory_results = await self.search_memories(specialized_query, limit=5)
-            if memory_results["status"] == "success":
-                results["tool_results"].append({
-                    "tool": "memory_search",
-                    "result": f"Found {len(memory_results['memories'])} relevant memories"
-                })
-                
-                # Extract fragments from memories
-                for memory in memory_results["memories"]:
-                    results["fragments"].append({
-                        "type": "memory",
-                        "content": memory["content"],
-                        "source": "memory_system",
-                        "significance": memory.get("significance", 0.5)
-                    })
-            
-            # 2. Search knowledge graph for relevant concepts
-            kg_results = await self.query_knowledge_graph(specialized_query)
-            if kg_results["status"] == "success" and kg_results.get("concepts"):
-                concepts_found = len(kg_results["concepts"])
-                results["tool_results"].append({
-                    "tool": "knowledge_graph",
-                    "result": f"Found {concepts_found} relevant concepts"
-                })
-                
-                # Extract fragments from knowledge graph
-                for concept in kg_results["concepts"]:
-                    results["fragments"].append({
-                        "type": "concept",
-                        "content": concept["definition"] if "definition" in concept else concept["name"],
-                        "source": "knowledge_graph",
-                        "significance": 0.7
-                    })
-            
-            # 3. Search Wikipedia for external knowledge if focus areas specified
-            if focus_areas:
-                for area in focus_areas:
-                    wiki_results = await self.fetch_from_wikipedia(area)
-                    if wiki_results["status"] == "success" and wiki_results.get("summary"):
-                        results["tool_results"].append({
-                            "tool": "wikipedia",
-                            "result": f"Found information about {area}"
-                        })
-                        
-                        results["fragments"].append({
-                            "type": "external_knowledge",
-                            "content": wiki_results["summary"],
-                            "source": "wikipedia",
-                            "topic": area,
-                            "significance": 0.8
-                        })
-            
-            # 4. Generate enhanced insights by synthesizing the fragments
-            if results["fragments"]:
-                # Construct context from fragments
-                fragments_text = "\n\n".join([f"{f['type'].upper()}: {f['content']}" for f in results["fragments"]])
-                
-                # Create prompt for insight generation
-                prompt = f"""Based on the following information and your current self-model:
-
-{fragments_text}
-
-Generate 2-3 key insights that would help improve the self-model. Each insight should be specific, actionable and reference the source information.
-
-Output format: One insight per paragraph, starting with 'INSIGHT: '"""
-                
-                # Generate insights using LM Studio
-                insight_response = await self.generate_text(prompt)
-                
-                if insight_response["status"] == "success":
-                    # Parse insights from the response
-                    raw_insights = insight_response["text"].split("INSIGHT: ")
-                    parsed_insights = [i.strip() for i in raw_insights if i.strip()]
-                    
-                    # Format and add each insight
-                    for i, insight_text in enumerate(parsed_insights):
-                        # Record the insight in the system
-                        insight_data = {
-                            "content": insight_text,
-                            "source": "rag_enhanced_reflection",
-                            "significance": 0.85,
-                            "metadata": {
-                                "type": "reflection_insight",
-                                "reflection_query": reflection_query,
-                                "focus_areas": focus_areas if focus_areas else ["general"],
-                                "generated_at": datetime.now().isoformat()
-                            }
-                        }
-                        
-                        # Record insight in memory and knowledge graph
-                        await self.record_insight(insight_data)
-                        
-                        # Add to results
-                        results["insights"].append({
-                            "id": f"insight_{i+1}",
-                            "content": insight_text,
-                            "source": "rag_enhanced_reflection",
-                            "enhanced": True
-                        })
-            
-            return results
-                
-        except Exception as e:
-            logger.error(f"Error enhancing reflection: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return {
-                "status": "error",
-                "message": str(e)
-            }
-    
-    async def close(self):
-        """Close any open connections."""
-        if self.http_session and not self.http_session.closed:
-            await self.http_session.close()
-            self.http_session = None
-            self.initialized = False
-    
-    async def _retrieve_relevant_memories(self, query: str, focus_areas: Optional[List[str]] = None) -> List[Dict]:
-        """Retrieve memories relevant to the reflection query."""
-        try:
             logger.info(f"Retrieving relevant memories for query: {query}")
-            # Set focus areas for memory search if provided
-            categories = focus_areas if focus_areas else None
-            
-            # Use memory system to search for relevant memories
             memory_results = []
+            
             if self.memory_system:
-                # Get embedding for the query using the tensor server via memory system
-                related_memories = await self.memory_system.search_memories(
-                    query_text=query,
-                    limit=5,  # Reasonable number of memories
-                    categories=categories,
-                    threshold=0.65  # Only reasonably relevant memories
-                )
+                # Process query through HPCQRFlowManager to get embedding and QuickRecal score
+                query_embedding = await self.hpc_manager.get_embedding(query)
+                processed_embedding, quickrecal_score = await self.hpc_manager.process_embedding(query_embedding)
                 
-                # Transform memories into fragments
-                for memory in related_memories:
+                # Set retrieval threshold based on importance
+                if quickrecal_score > 0.8:
+                    threshold = self.retrieval_thresholds['high_quality']
+                elif quickrecal_score > 0.6:
+                    threshold = self.retrieval_thresholds['standard']
+                else:
+                    threshold = self.retrieval_thresholds['exploratory']
+                
+                # Construct search options
+                search_options = {
+                    "query_embedding": processed_embedding,
+                    "limit": 5,  # Reasonable limit
+                    "min_quickrecal": threshold
+                }
+                
+                # Add focus areas as filter if provided
+                if focus_areas:
+                    # Convert focus areas to memory types if applicable
+                    memory_types = []
+                    for area in focus_areas:
+                        # Try to match focus area to memory types
+                        if "personal" in area.lower():
+                            memory_types.append("personal")
+                        elif "factual" in area.lower() or "knowledge" in area.lower():
+                            memory_types.append("semantic")
+                        elif "procedural" in area.lower() or "skill" in area.lower():
+                            memory_types.append("procedural")
+                    
+                    if memory_types:
+                        search_options["memory_type"] = memory_types
+                
+                # Perform memory search
+                memories = await self.memory_system.search(**search_options)
+                
+                # Transform results to fragments
+                for memory, score in memories:
                     memory_results.append({
                         "type": "memory",
-                        "content": memory.get("content", ""),
+                        "content": memory.content if hasattr(memory, 'content') else str(memory),
                         "source": "memory_system",
-                        "timestamp": memory.get("timestamp", ""),
-                        "significance": memory.get("significance", 0.7)
+                        "timestamp": memory.timestamp if hasattr(memory, 'timestamp') else "",
+                        "quickrecal_score": memory.get_effective_quickrecal() 
+                                        if hasattr(memory, 'get_effective_quickrecal') 
+                                        else memory.quickrecal_score if hasattr(memory, 'quickrecal_score')
+                                        else 0.5,
+                        "similarity": score
                     })
                 
                 logger.info(f"Retrieved {len(memory_results)} relevant memories")
@@ -1210,12 +1151,23 @@ Output format: One insight per paragraph, starting with 'INSIGHT: '"""
                 logger.warning("No memory system available for memory retrieval")
                 
             return memory_results
+            
         except Exception as e:
             logger.error(f"Error retrieving memories: {e}")
+            traceback.print_exc()
             return []
     
     async def _query_knowledge_graph(self, query: str, focus_areas: Optional[List[str]] = None) -> List[Dict]:
-        """Query the knowledge graph for concepts relevant to the reflection."""
+        """
+        Query the knowledge graph for concepts relevant to the reflection.
+        
+        Args:
+            query: The reflection query
+            focus_areas: Optional specific areas to focus on
+            
+        Returns:
+            List of concept fragments
+        """
         try:
             logger.info(f"Querying knowledge graph for query: {query}")
             kg_results = []
@@ -1248,7 +1200,8 @@ Output format: One insight per paragraph, starting with 'INSIGHT: '"""
                         "type": "concept",
                         "content": concept.get("definition", concept.get("description", concept.get("name", ""))),
                         "source": "knowledge_graph",
-                        "significance": 0.7
+                        "quickrecal_score": concept.get("quickrecal_score", 
+                                              concept.get("significance", 0.7))  # Support both names
                     })
                 
                 logger.info(f"Retrieved {len(kg_results)} relevant concepts from knowledge graph")
@@ -1256,12 +1209,21 @@ Output format: One insight per paragraph, starting with 'INSIGHT: '"""
                 logger.warning("No knowledge graph available for concept retrieval")
                 
             return kg_results
+            
         except Exception as e:
             logger.error(f"Error querying knowledge graph: {e}")
             return []
     
     async def _generate_enhanced_insights(self, messages: List[Dict]) -> Dict[str, Any]:
-        """Generate enhanced insights using LLM with tool usage capabilities."""
+        """
+        Generate enhanced insights using LLM with tool usage capabilities.
+        
+        Args:
+            messages: Message history for the LLM conversation
+            
+        Returns:
+            Dictionary of enhanced insights and related information
+        """
         try:
             # Prepare tools for the API request
             tools_list = [tool["schema"] for tool in self.tools.values()]
@@ -1290,6 +1252,7 @@ Output format: One insight per paragraph, starting with 'INSIGHT: '"""
                 
                 # Process the result to extract insights and process tool calls
                 return await self._process_reflection_response(result, messages)
+                
         except Exception as e:
             logger.error(f"Error generating enhanced insights: {e}")
             return {
