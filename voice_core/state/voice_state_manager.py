@@ -70,9 +70,9 @@ class VoiceStateManager:
         self._last_transcript_time = 0.0
         
         # Interrupt handling - enhanced
-        self._interrupt_requested = False
-        self._interrupt_handled = asyncio.Event()
-        self._interrupt_handled.set()  # Start in "handled" state
+        self._interrupt_requested_event = asyncio.Event()
+        self._interrupt_handled_event = asyncio.Event()
+        self._interrupt_handled_event.set()  # Start in "handled" state
         
         # LiveKit integration
         self._room: Optional[rtc.Room] = None
@@ -363,8 +363,8 @@ class VoiceStateManager:
             # Special handling for specific state transitions
             if new_state == VoiceState.INTERRUPTED:
                 # When interrupting, set interrupt flag
-                self._interrupt_requested = True
-                self._interrupt_handled.clear()
+                self._interrupt_requested_event.set()
+                self._interrupt_handled_event.clear()
                 
                 # Cancel the current TTS task if exists
                 if self._current_tts_task and not self._current_tts_task.done():
@@ -382,8 +382,8 @@ class VoiceStateManager:
                     
             elif new_state == VoiceState.LISTENING:
                 # When transitioning to LISTENING, clear interrupt flags
-                self._interrupt_requested = False
-                self._interrupt_handled.set()
+                self._interrupt_requested_event.clear()
+                self._interrupt_handled_event.set()
                 
             # Update state
             self._state = new_state
@@ -445,41 +445,40 @@ class VoiceStateManager:
         if self._state == VoiceState.SPEAKING:
             self.logger.info("User speech detected while speaking, interrupting TTS")
             
-            # Set interrupt flags immediately
-            self._interrupt_requested = True
-            self._interrupt_handled.clear()
-            
-            # Cancel the current TTS task if exists
+            # Set the event for interrupt
+            self._interrupt_requested_event.set()
+            self._interrupt_handled_event.clear()
+
+            # Cancel TTS if present
             if self._current_tts_task and not self._current_tts_task.done():
-                self.logger.info("Cancelling TTS task due to interruption")
+                self.logger.info("Cancelling TTS task for interruption.")
                 self._current_tts_task.cancel()
                 try:
-                    # Use a shorter timeout for more responsive cancellation
                     await asyncio.wait_for(self._current_tts_task, timeout=0.2)
                 except (asyncio.TimeoutError, asyncio.CancelledError):
-                    self.logger.info("TTS task cancelled due to interruption")
-                self._current_tts_task = None
-                    
-            # Wait briefly for interrupt to be handled
+                    pass
+
+            # Optionally wait for interrupt to be handled
             try:
-                # Reduced timeout for faster transitions
-                interrupt_handled = await asyncio.wait_for(
-                    self._interrupt_handled.wait(), 
-                    timeout=0.3  # Very short timeout for responsiveness
-                )
-                
-                if not interrupt_handled:
-                    self.logger.warning("Interrupt not handled within timeout")
+                handled = await asyncio.wait_for(self._interrupt_handled_event.wait(), timeout=0.5)
+                if not handled:
+                    self.logger.warning("Interrupt was not handled in time.")
             except asyncio.TimeoutError:
-                self.logger.warning("Timeout waiting for interrupt to be handled")
-            
-            # If we have text, transition to PROCESSING
+                self.logger.warning("Timeout waiting for TTS to acknowledge interrupt.")
+
+            # Transition back to LISTENING or PROCESSING
             if text:
                 await self.transition_to(VoiceState.PROCESSING, {"text": text})
             else:
-                # Otherwise go back to LISTENING
-                await self.transition_to(VoiceState.LISTENING, {"reason": "interrupted"})
-
+                await self.transition_to(VoiceState.LISTENING, {"reason": "user_speech_detected"})
+    
+    def interrupt_requested(self) -> bool:
+        """
+        Check if interruption is currently requested.
+        This remains for quick checks, but under the hood we rely on the Event.
+        """
+        return self._interrupt_requested_event.is_set() or (self._state == VoiceState.ERROR)
+        
     async def handle_stt_transcript(self, text: str) -> bool:
         """
         Handle a final STT transcript from the STT service.
@@ -639,8 +638,8 @@ class VoiceStateManager:
             self._last_tts_text = getattr(tts_task, 'text')
         
         # Clear interrupt flag
-        self._interrupt_requested = False
-        self._interrupt_handled.set()
+        self._interrupt_requested_event.clear()
+        self._interrupt_handled_event.set()
         
         # Transition to SPEAKING state
         await self.transition_to(VoiceState.SPEAKING)
@@ -655,7 +654,7 @@ class VoiceStateManager:
         except asyncio.CancelledError:
             self.logger.info("TTS task was cancelled")
             if self._state == VoiceState.INTERRUPTED:
-                self._interrupt_handled.set()
+                self._interrupt_handled_event.set()
             elif self._state == VoiceState.SPEAKING:
                 await self.transition_to(VoiceState.LISTENING, {"reason": "tts_cancelled"})
                 
@@ -755,10 +754,6 @@ class VoiceStateManager:
         else:
             self.logger.warning(f"Called finish_processing while in {self._state.name} state")
 
-    def interrupt_requested(self) -> bool:
-        """Check if interruption is requested."""
-        return self._interrupt_requested or self._state == VoiceState.ERROR
-
     async def wait_for_interrupt(self, timeout: Optional[float] = None) -> bool:
         """
         Wait for an interrupt to occur.
@@ -771,9 +766,9 @@ class VoiceStateManager:
         """
         try:
             if timeout:
-                return await asyncio.wait_for(self._interrupt_handled.wait(), timeout)
+                return await asyncio.wait_for(self._interrupt_handled_event.wait(), timeout)
             else:
-                await self._interrupt_handled.wait()
+                await self._interrupt_handled_event.wait()
                 return True
         except asyncio.TimeoutError:
             return False
@@ -960,8 +955,8 @@ class VoiceStateManager:
         self._state = VoiceState.IDLE
         self._last_tts_text = None
         self._recent_processed_transcripts.clear()
-        self._interrupt_requested = False
-        self._interrupt_handled.set()
+        self._interrupt_requested_event.clear()
+        self._interrupt_handled_event.set()
         
         # Clear event handlers
         self._event_handlers.clear()
