@@ -61,12 +61,25 @@ class InterruptibleTTSService:
         # Playback metrics
         self.start_time = 0
         self.frame_count = 0
+        # 20ms (960 samples) per chunk for smoother playback
         self.samples_per_chunk = 960  # 20ms at 48kHz
         self.log_interval = 10  # Log every 10 chunks
         
+        # Audio buffering parameters for smoother playback
+        self.mp3_buffer_size = 8000  # Increased from 4000 to 8000 bytes
+        self.frame_yield_interval = 8  # Only yield every 8 chunks (increased from 3)
+        self.prebuffer_frames = 3  # Number of frames to prebuffer before starting playback
+        
         # Interruption handling
-        self.interruption_check_interval = 25  # Check every 25 chunks (500ms)
-        self.interruptions_handled = 0
+        self.interrupt_check_interval = 0.4  # Increased from 0.25s to 0.4s
+        
+        # Background processing
+        self._conversion_queue = asyncio.Queue(maxsize=100)  # Limit queue size to avoid memory issues
+        self._worker_running = True
+        self._worker_task = None  # Will be created during initialization
+        
+        # Pre-allocate common frames to avoid repeated allocations
+        self._silence_frame = None
         
         # Logger setup
         self.logger = logging.getLogger(__name__)
@@ -81,11 +94,22 @@ class InterruptibleTTSService:
             await self.stop()
         
     async def initialize(self) -> None:
-        """
-        Initialize TTS service and load necessary resources.
-        Should be called before using the service.
-        """
+        """Initialize TTS service and load necessary resources."""
         self.logger.info("Initializing TTS service...")
+        
+        # Start the background conversion worker
+        if self._worker_task is None or self._worker_task.done():
+            self._worker_running = True
+            self._worker_task = asyncio.create_task(self._conversion_worker())
+            self.logger.info("Started background conversion worker")
+        
+        # Pre-allocate silence frame for quick interrupt response
+        self._silence_frame = rtc.AudioFrame(
+            data=b'\x00' * self.samples_per_chunk * 2,  # 2 bytes per sample
+            samples_per_channel=self.samples_per_chunk,
+            sample_rate=self.sample_rate,
+            num_channels=self.num_channels
+        )
         
         # Verify voices are available
         try:
@@ -293,11 +317,12 @@ class InterruptibleTTSService:
     async def _stream_tts(self, text: str, assistant_identity: str = "assistant", should_publish_transcript: bool = False) -> str:
         """
         Stream TTS audio to LiveKit room with real-time interruption.
+        Using incremental processing and background conversion worker.
         
         Args:
             text: Text to speak
             assistant_identity: The identity to use for assistant transcripts (default: "assistant")
-            should_publish_transcript: Whether to publish transcript (default: False, as it's handled in speak)
+            should_publish_transcript: Whether to publish transcript
             
         Returns:
             The spoken text
@@ -312,104 +337,105 @@ class InterruptibleTTSService:
                 if await self.check_interruption():
                     return text
                 
-                # Get full audio in memory first for faster playback
-                mp3_buffer = io.BytesIO()
+                # Create Edge TTS communicate instance
                 communicate = edge_tts.Communicate(text, self.voice)
                 
-                # Collect all audio chunks with constant interrupt checks
-                chunks_collected = 0
+                # Track stats
+                chunks_processed = 0
+                last_check_time = time.time()
+                processing_started = False
+                # Buffer to collect small chunks for smoother playback
+                mp3_chunk_buffer = bytearray()
+                
+                # Pre-buffering setup
+                prebuffer_count = 0
+                prebuffering = True
+                pcm_prebuffer = []
+                
+                # Stream with incremental processing
                 async for chunk in communicate.stream():
-                    if await self.check_interruption() or not self._active:
-                        return text
-                        
-                    if chunk["type"] == "audio":
-                        mp3_buffer.write(chunk["data"])
-                        chunks_collected += 1
-                        await asyncio.sleep(0)  # Yield every audio chunk
-                
-                # Reset buffer position
-                mp3_buffer.seek(0)
-                
-                # Convert MP3 to PCM
-                pcm_data, sample_rate = await self._convert_mp3_to_pcm(mp3_buffer.getvalue())
-                if pcm_data is None:
-                    self.logger.error("Failed to convert MP3 to PCM")
-                    return text
-                
-                # Split audio into micro-chunks for real-time interruption
-                total_samples = len(pcm_data)
-                total_duration = total_samples / self.sample_rate
-                self.logger.info(f"Audio duration: {total_duration:.2f}s ({total_samples} samples)")
-                
-                samples_processed = 0
-                chunk_count = 0
-                
-                # Use larger chunks for better stability while maintaining responsiveness
-                chunk_size = min(480, self.samples_per_chunk)  # 10ms chunks
-                
-                for start_idx in range(0, total_samples, chunk_size):
-                    # Check for interruption periodically instead of every chunk
-                    if chunk_count % self.interruption_check_interval == 0:
+                    # First chunk means we started processing
+                    if not processing_started:
+                        processing_started = True
+                        self.logger.info("Started processing TTS stream")
+                    
+                    # Regular interruption check at intervals (less frequent now)
+                    current_time = time.time()
+                    if current_time - last_check_time > self.interrupt_check_interval:
                         if await self.check_interruption() or not self._active:
-                            self.logger.info(f"TTS interrupted after {chunk_count} chunks")
-                            # Send silence to flush buffer
-                            if self.state_manager._tts_source:
-                                try:
-                                    silence_frame = rtc.AudioFrame(
-                                        data=b'\x00' * chunk_size * 2,
-                                        samples_per_channel=chunk_size,
-                                        sample_rate=self.sample_rate,
-                                        num_channels=1
-                                    )
-                                    await self.state_manager._tts_source.capture_frame(silence_frame)
-                                except Exception as e:
-                                    self.logger.error(f"Error sending silence frame: {e}")
+                            self.logger.info("Interruption detected during streaming")
                             return text
+                        last_check_time = current_time
                     
-                    # Get chunk
-                    end_idx = min(start_idx + chunk_size, total_samples)
-                    chunk_data = pcm_data[start_idx:end_idx]
-                    
-                    # Pad if needed
-                    if len(chunk_data) < chunk_size:
-                        chunk_data = np.pad(chunk_data, (0, chunk_size - len(chunk_data)))
-                    
-                    # Create audio frame
-                    frame = rtc.AudioFrame(
-                        data=(chunk_data * 32767.0).astype(np.int16).tobytes(),
-                        samples_per_channel=len(chunk_data),
-                        sample_rate=self.sample_rate,
-                        num_channels=self.num_channels
-                    )
-                    
-                    # Send to LiveKit through state manager's TTS source
-                    if self.state_manager._tts_source:
-                        await self.state_manager._tts_source.capture_frame(frame)
-                    else:
-                        self.logger.warning("TTS source not available")
+                    # Process audio chunks with batching for smoother playback
+                    if chunk["type"] == "audio":
+                        # Accumulate chunks to reduce processing overhead
+                        mp3_chunk_buffer.extend(chunk["data"])
                         
-                    # Publish transcript to UI
-                    if should_publish_transcript and self.state_manager and self.room:
-                        try:
-                            # Publish assistant transcript with explicit identity
-                            await self.state_manager.publish_transcription(
-                                text, 
-                                "assistant",  # Use sender type
-                                is_final=True,
-                                participant_identity=assistant_identity  # Use provided assistant identity
-                            )
-                        except Exception as e:
-                            self.logger.error(f"Failed to publish TTS transcript: {e}")
+                        # Process in larger batches for smoother playback
+                        # Edge-TTS typically produces very small chunks, combining them improves efficiency
+                        if len(mp3_chunk_buffer) >= self.mp3_buffer_size or (chunks_processed > 0 and chunks_processed % 10 == 0):
+                            # Create a future to receive the processed result
+                            result_future = asyncio.Future()
+                            
+                            # Queue the conversion work
+                            await self._conversion_queue.put((bytes(mp3_chunk_buffer), result_future))
+                            mp3_chunk_buffer = bytearray()  # Reset buffer after sending
+                            
+                            # Await the result with timeout
+                            try:
+                                pcm_data = await asyncio.wait_for(result_future, timeout=0.6)
+                                
+                                # Process the PCM data if valid
+                                if pcm_data is not None:
+                                    if prebuffering:
+                                        # During prebuffering phase, collect frames
+                                        pcm_prebuffer.append(pcm_data)
+                                        prebuffer_count += 1
+                                        
+                                        # Once we have enough prebuffered frames, send them all
+                                        if prebuffer_count >= self.prebuffer_frames:
+                                            prebuffering = False
+                                            self.logger.debug(f"Prebuffering complete, sending {len(pcm_prebuffer)} frames")
+                                            for buffered_data in pcm_prebuffer:
+                                                await self._send_pcm_frames(buffered_data, yield_after=False)
+                                            # Clear prebuffer after sending
+                                            pcm_prebuffer = []
+                                    else:
+                                        # Normal processing after prebuffering
+                                        await self._send_pcm_frames(pcm_data)
+                                    
+                                chunks_processed += 1
+                                
+                                # Yield less frequently to reduce jitter
+                                if not prebuffering and chunks_processed % self.frame_yield_interval == 0:
+                                    await asyncio.sleep(0.001)  # Very brief yield
+                            except asyncio.TimeoutError:
+                                # Log but continue
+                                self.logger.debug("Worker taking longer than expected")
                     
-                    # Update counters
-                    samples_processed += len(chunk_data)
-                    chunk_count += 1
-                    self.frame_count += 1
+                # Process any remaining audio in the buffer
+                if len(mp3_chunk_buffer) > 0:
+                    result_future = asyncio.Future()
+                    await self._conversion_queue.put((bytes(mp3_chunk_buffer), result_future))
                     
-                    # Yield after EVERY chunk for real-time interruption
-                    await asyncio.sleep(0)
+                    try:
+                        pcm_data = await asyncio.wait_for(result_future, timeout=0.6)
+                        if pcm_data is not None:
+                            if prebuffering:
+                                # Send all prebuffered frames first
+                                for buffered_data in pcm_prebuffer:
+                                    await self._send_pcm_frames(buffered_data, yield_after=False)
+                                # Then send final data
+                                await self._send_pcm_frames(pcm_data)
+                            else:
+                                await self._send_pcm_frames(pcm_data)
+                    except asyncio.TimeoutError:
+                        self.logger.debug("Timeout processing final audio chunk")
                 
-                # Call the completion callback if provided
+                self.logger.info(f"TTS streaming complete, processed {chunks_processed} chunks")
+                
+                # Call completion callback if provided and not interrupted
                 if self.on_complete and not await self.check_interruption():
                     if asyncio.iscoroutinefunction(self.on_complete):
                         await self.on_complete(text)
@@ -429,6 +455,119 @@ class InterruptibleTTSService:
             finally:
                 self._active = False
                 self._cancellable = False
+
+    async def _send_pcm_frames(self, pcm_data: np.ndarray, yield_after: bool = True) -> None:
+        """Split and send PCM data in appropriately sized frames for smooth playback.
+        
+        Args:
+            pcm_data: PCM audio data as numpy array
+            yield_after: Whether to yield to event loop after sending all frames
+        """
+        if pcm_data is None or len(pcm_data) == 0:
+            return
+            
+        # Use larger chunk size for smoother playback (20ms chunks)
+        chunk_size = self.samples_per_chunk  # 960 samples (20ms at 48kHz)
+        
+        # Process in properly sized chunks
+        for start_idx in range(0, len(pcm_data), chunk_size):
+            # Get chunk with padding if needed
+            end_idx = min(start_idx + chunk_size, len(pcm_data))
+            chunk = pcm_data[start_idx:end_idx]
+            
+            # Pad if needed
+            if len(chunk) < chunk_size:
+                chunk = np.pad(chunk, (0, chunk_size - len(chunk)))
+            
+            # Create and send audio frame
+            frame = rtc.AudioFrame(
+                data=(chunk * 32767.0).astype(np.int16).tobytes(),
+                samples_per_channel=len(chunk),
+                sample_rate=self.sample_rate,
+                num_channels=self.num_channels
+            )
+            
+            # Send frame via state manager
+            if self.state_manager._tts_source:
+                await self.state_manager._tts_source.capture_frame(frame)
+        
+        # Optional yield based on parameter
+        # This allows controlled yielding for different scenarios
+        if yield_after:
+            await asyncio.sleep(0.001)  # Brief sleep instead of sleep(0)
+
+    async def _conversion_worker(self) -> None:
+        """Background worker to convert MP3 chunks to PCM efficiently."""
+        self.logger.info("Conversion worker started")
+        
+        while self._worker_running:
+            try:
+                # Get next item from queue with timeout
+                try:
+                    mp3_data, result_future = await asyncio.wait_for(
+                        self._conversion_queue.get(), 
+                        timeout=1.0  # Longer wait for new work (1 second)
+                    )
+                except asyncio.TimeoutError:
+                    # No work available, check if we should continue
+                    if not self._worker_running:
+                        break
+                    continue
+                
+                # Process the MP3 chunk
+                try:
+                    pcm_result = await self._convert_mp3_chunk_to_pcm(mp3_data)
+                    
+                    # Set the result if the future wasn't cancelled
+                    if not result_future.done():
+                        result_future.set_result(pcm_result)
+                        
+                except Exception as e:
+                    # Handle conversion errors
+                    self.logger.error(f"Error in conversion worker: {e}")
+                    if not result_future.done():
+                        result_future.set_exception(e)
+                        
+                # Mark task as done
+                self._conversion_queue.task_done()
+                
+            except asyncio.CancelledError:
+                # Worker cancelled
+                self.logger.info("Conversion worker cancelled")
+                break
+                
+            except Exception as e:
+                # Unexpected error in worker
+                self.logger.error(f"Unexpected error in conversion worker: {e}", exc_info=True)
+                # Continue running for robustness
+                await asyncio.sleep(0.1)  # Brief pause before continuing
+        
+        self.logger.info("Conversion worker stopped")
+
+    async def _convert_mp3_chunk_to_pcm(self, mp3_data: bytes) -> np.ndarray:
+        """Convert an MP3 chunk to PCM without using temporary files."""
+        try:
+            # Use BytesIO instead of temp files for in-memory processing
+            mp3_buffer = io.BytesIO(mp3_data)
+            
+            # Load audio data with pydub directly from buffer
+            audio = AudioSegment.from_file(mp3_buffer, format="mp3")
+            
+            # Convert to target format
+            audio = audio.set_frame_rate(self.sample_rate)
+            audio = audio.set_channels(self.num_channels)
+            
+            # Get raw PCM data as numpy array
+            pcm_data = np.array(audio.get_array_of_samples(), dtype=np.float32)
+            
+            # Normalize to [-1, 1] range
+            pcm_data = pcm_data / 32768.0
+            
+            return pcm_data
+                
+        except Exception as e:
+            self.logger.error(f"Error converting MP3 chunk to PCM: {e}")
+            return None
 
     async def stop(self) -> None:
         """Stop TTS playback immediately."""
@@ -470,10 +609,20 @@ class InterruptibleTTSService:
             })
 
     async def cleanup(self) -> None:
-        """
-        Clean up TTS resources.
-        """
+        """Clean up TTS resources and stop worker."""
         self.logger.info("Cleaning up TTS service")
+        
+        # Stop the worker task
+        self._worker_running = False
+        if self._worker_task and not self._worker_task.done():
+            try:
+                # Cancel and wait for worker to complete
+                self._worker_task.cancel()
+                await asyncio.wait_for(asyncio.shield(self._worker_task), timeout=0.5)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+            except Exception as e:
+                self.logger.error(f"Error stopping worker: {e}")
         
         # Stop any active playback
         await self.stop()
@@ -506,52 +655,3 @@ class InterruptibleTTSService:
             "num_channels": self.num_channels,
             "interruptions_handled": self.interruptions_handled
         }
-
-    async def _convert_mp3_to_pcm(self, mp3_data: bytes) -> tuple:
-        """
-        Convert MP3 data to PCM for LiveKit streaming.
-        
-        Args:
-            mp3_data: Raw MP3 bytes
-            
-        Returns:
-            Tuple of (pcm_data as numpy array, sample_rate)
-        """
-        try:
-            # Create temp file for MP3 data
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_file:
-                tmp_path = tmp_file.name
-                tmp_file.write(mp3_data)
-            
-            try:
-                # Load with pydub for reliable conversion
-                audio = AudioSegment.from_mp3(tmp_path)
-                
-                # Convert to our target format
-                audio = audio.set_frame_rate(self.sample_rate)
-                audio = audio.set_channels(self.num_channels)
-                
-                # Get raw PCM data
-                pcm_data = np.array(audio.get_array_of_samples(), dtype=np.float32)
-                
-                # Normalize to [-1, 1] range
-                pcm_data = pcm_data / 32768.0
-                
-                return pcm_data, self.sample_rate
-                
-            finally:
-                # Clean up temp file
-                import os
-                try:
-                    os.unlink(tmp_path)
-                except:
-                    pass
-                    
-        except Exception as e:
-            self.logger.error(f"Error converting MP3 to PCM: {e}", exc_info=True)
-            
-            # Register error with state manager
-            if self.state_manager:
-                await self.state_manager.register_error(e, "tts_conversion")
-                
-            return None, None
