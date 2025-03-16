@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 LUCID RECALL PROJECT
-Speech-to-Text Server: Continuous transcription using Canary-1B model
+Speech-to-Text Server: Continuous transcription with real-time and final results
 """
 
 import asyncio
@@ -12,12 +12,13 @@ import os
 import time
 import traceback
 import uuid
+import argparse
 from typing import Dict, List, Optional, Union
 
 import numpy as np
 import torch
 import websockets
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from websockets.exceptions import ConnectionClosedOK
@@ -42,7 +43,7 @@ logger = logging.getLogger("stt_server")
 # Configuration
 HPC_SERVER_URL = os.getenv("HPC_SERVER_URL", "hpc_server:5005")
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-STT_SERVER_PORT = int(os.getenv("STT_SERVER_PORT", "8000"))
+STT_SERVER_PORT = 5002
 
 # Initialize FastAPI app
 app = FastAPI(title="STT Transcription Server")
@@ -66,33 +67,41 @@ stt_server = None
 model = None
 model_loaded = False
 
-# Load ASR model
-print("Loading ASR model...")
-model = None
-
-def load_model():
-    global model
-    if model is None:
-        try:
-            from nemo.collections.asr.models import EncDecRNNTBPEModel
-            print("Loading model from pretrained source...")
-            model = EncDecRNNTBPEModel.from_pretrained(model_name="nvidia/canary-1b")
-            print("Model loaded successfully!")
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            raise
-
-# Load model in a separate thread to avoid blocking the server startup
-import threading
-model_thread = threading.Thread(target=load_model)
-model_thread.daemon = True
-model_thread.start()
+# Function to preprocess audio data
+def preprocess_audio(audio_bytes):
+    """Preprocess audio data from bytes to numpy array."""
+    try:
+        # Try to read with soundfile
+        with io.BytesIO(audio_bytes) as audio_io:
+            audio_data, sample_rate = sf.read(audio_io)
+            
+            # Convert to float32 type to avoid type mismatch issues
+            audio_data = audio_data.astype(np.float32)
+            
+            # Resample to 16kHz if needed
+            if sample_rate != 16000:
+                audio_data = signal.resample(audio_data, int(len(audio_data) * 16000 / sample_rate)).astype(np.float32)
+            
+            # Convert to mono if stereo
+            if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
+                audio_data = np.mean(audio_data, axis=1).astype(np.float32)
+            
+            # Normalize audio (between -1 and 1)
+            if np.abs(audio_data).max() > 1.0:
+                audio_data = audio_data / np.abs(audio_data).max()
+                
+            logger.info(f"Preprocessed audio: shape={audio_data.shape}, dtype={audio_data.dtype}")
+            return audio_data
+    except Exception as e:
+        logger.error(f"Error preprocessing audio: {e}")
+        logger.error(traceback.format_exc())
+        raise
 
 class STTServer:
     def __init__(self):
         self.model = None
         self.device = DEVICE
-        self.sample_rate = 16000  # Expected sample rate for Canary-1B
+        self.sample_rate = 16000  # Expected sample rate for models
         self.setup_gpu()
         self.load_model()
         
@@ -107,46 +116,48 @@ class STTServer:
             logger.warning("GPU not available, using CPU. This will be significantly slower.")
 
     def load_model(self):
-        """Load the ASR model."""
+        """Load the ASR model for transcription."""
         try:
             logger.info("Loading ASR model...")
             
-            # Check if model should be loaded from a local file or from pretrained
+            # Check if Canary model should be loaded
             model_path = os.getenv("ASR_MODEL_PATH", "/workspace/models/canary-1b")
             
-            if os.path.exists(model_path) and not os.path.isdir(model_path):
-                # Load from local file if it exists and is not a directory
-                logger.info(f"Loading model from local path: {model_path}")
-                self.model = EncDecRNNTBPEModel.restore_from(model_path)
-            else:
-                # Load from pretrained source
-                logger.info("Loading model from pretrained source...")
-                self.model = EncDecRNNTBPEModel.from_pretrained(model_name="nvidia/canary-1b")
-                
-            # Move model to the specified device
-            self.model = self.model.to(self.device)
-            logger.info("ASR model loaded successfully.")
+            try:
+                if os.path.exists(model_path) and not os.path.isdir(model_path):
+                    # Load from local file if it exists and is not a directory
+                    logger.info(f"Loading Canary model from local path: {model_path}")
+                    self.model = EncDecRNNTBPEModel.restore_from(model_path)
+                else:
+                    # Load from pretrained source
+                    logger.info("Loading Canary model from pretrained source...")
+                    self.model = EncDecRNNTBPEModel.from_pretrained(model_name="nvidia/canary-1b")
+                    
+                # Move model to the specified device
+                self.model = self.model.to(self.device)
+                logger.info("Canary ASR model loaded successfully.")
+            except Exception as e:
+                logger.error(f"Error loading Canary-1B model: {e}")
+                logger.error(traceback.format_exc())
+                self.model = None
         except Exception as e:
-            logger.error(f"Error loading Canary-1B model: {e}")
+            logger.error(f"Error in model loading: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            
-            # Set model to None to indicate failure
-            self.model = None
             raise
 
     async def transcribe_audio(self, audio_data, client_id=None):
-        """Transcribe audio data using the ASR model.
+        """Transcribe audio data using the Canary-1B model.
         
         Args:
             audio_data: Audio data as numpy array or base64-encoded binary data
             client_id: Client ID for tracking transcription history
         
         Returns:
-            dict: Transcription result
+            dict: Transcription result with text and metadata
         """
         if self.model is None:
-            logger.error("ASR model not loaded. Cannot transcribe audio.")
+            logger.error("No ASR model loaded. Cannot transcribe audio.")
             return {"error": "ASR model not loaded"}
         
         try:
@@ -167,69 +178,69 @@ class STTServer:
                 audio_signal = preprocess_audio(audio_bytes)
             elif isinstance(audio_data, np.ndarray):
                 # Handle numpy array directly
-                audio_signal = audio_data
+                audio_signal = audio_data.astype(np.float32)  # Ensure float32 type
             else:
                 logger.error(f"Unsupported audio data type: {type(audio_data)}")
                 return {"error": f"Unsupported audio data type: {type(audio_data)}"}
             
-            # Process audio with ASR model
-            with torch.no_grad():
-                # Ensure audio is in the right format for the model
-                if len(audio_signal.shape) == 1:
-                    # Reshape to [batch, time] for the model
-                    audio_signal = audio_signal.reshape(1, -1)
-                    audio_signal = torch.tensor(audio_signal, device=self.device)
-                elif isinstance(audio_signal, np.ndarray):
-                    audio_signal = torch.tensor(audio_signal, device=self.device)
+            start_time = time.time()
+            
+            # Process with Canary model
+            canary_text = ""
+            try:
+                # Process with Canary for highest quality
+                with torch.no_grad():
+                    # Ensure audio is in the right format for the model
+                    if len(audio_signal.shape) == 1:
+                        # Reshape to [batch, time] for the model
+                        audio_signal = audio_signal.reshape(1, -1)
+                        # Ensure float32 type for PyTorch tensor
+                        audio_signal = torch.tensor(audio_signal, dtype=torch.float32, device=self.device)
+                    elif isinstance(audio_signal, np.ndarray):
+                        # Ensure float32 type for PyTorch tensor
+                        audio_signal = torch.tensor(audio_signal, dtype=torch.float32, device=self.device)
+                        
+                    # Log the tensor type for debugging
+                    logger.info(f"Tensor shape: {audio_signal.shape}, type: {audio_signal.dtype}")
                     
-                # ASR processing
-                transcription = self.model.transcribe([audio_signal])[0]
-                
-            # Process the transcription through the HPC client for significance
-            result = {
-                "text": transcription,
-                "timestamp": time.time()
-            }
+                    # ASR processing with Canary
+                    canary_text = self.model.transcribe([audio_signal])[0]
+                    logger.info(f"Canary transcription: '{canary_text}'")
+            except Exception as e:
+                logger.error(f"Error with Canary transcription: {e}")
+                logger.error(traceback.format_exc())
+                raise
+            
+            # Calculate processing time
+            processing_time = time.time() - start_time
             
             # Store in history if client_id is provided
             if client_id and client_id in active_connections:
                 if client_id not in transcription_history:
                     transcription_history[client_id] = []
-                transcription_history[client_id].append(result)
+                    
+                # Store transcription
+                transcription_history[client_id].append({
+                    "text": canary_text,
+                    "timestamp": time.time()
+                })
             
-            # Get significance score using HPC client
-            try:
-                if hpc_client and transcription.strip():
-                    embedding = await hpc_client.process_embedding(transcription)
-                    if embedding:
-                        # Get significance score
-                        significance = await hpc_client.get_stats(embedding)
-                        if significance:
-                            result["significance"] = significance
-            except Exception as e:
-                logger.error(f"Error getting significance: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
+            # Return results
+            result = {
+                "text": canary_text,
+                "processing_time": processing_time,
+                "timestamp": time.time()
+            }
             
+            logger.info(f"Transcription completed in {processing_time:.2f}s - Text: '{canary_text}'")
             return result
         
         except Exception as e:
-            logger.error(f"Error transcribing audio: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return {"error": str(e)}
-
-    def get_stats(self) -> Dict:
-        """Get current system statistics."""
-        stats = {
-            "type": "stats",
-            "gpu_memory": torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0,
-            "gpu_cached": torch.cuda.memory_reserved() / 1e9 if torch.cuda.is_available() else 0,
-            "device": self.device,
-            "connected_clients": len(connected_clients),
-            "model": "nvidia/canary-1b"
-        }
-        return stats
+            logger.error(f"Error in transcription pipeline: {e}", exc_info=True)
+            return {
+                "error": f"Error in transcription: {str(e)}",
+                "text": ""
+            }
 
 class HPCClient:
     """Client for connecting to HPC server and processing embeddings and stats."""
@@ -270,7 +281,7 @@ class HPCClient:
                 self.message_task = asyncio.create_task(self._handle_messages())
             except Exception as e:
                 logger.error(f"Error connecting to HPC server: {e}")
-                self.connected = False
+                self.connected = False  # Mark as disconnected for reconnect
                 raise
     
     async def disconnect(self):
@@ -710,9 +721,9 @@ async def websocket_transcribe(websocket: WebSocket):
                     text = data.get("text", "")
                     if text.strip():
                         # Store in history
-                        if client_id not in chat_history:
-                            chat_history[client_id] = []
-                        chat_history[client_id].append({
+                        if client_id not in transcription_history:
+                            transcription_history[client_id] = []
+                        transcription_history[client_id].append({
                             "role": "user",
                             "text": text,
                             "timestamp": time.time()
@@ -945,7 +956,7 @@ async def transcribe_audio(audio_data, client_id=None):
                 audio_signal = preprocess_audio(audio_bytes)
             elif isinstance(audio_data, np.ndarray):
                 # Handle numpy array directly
-                audio_signal = audio_data
+                audio_signal = audio_data.astype(np.float32)  # Ensure float32 type
             else:
                 # Try to process as bytes
                 audio_signal = preprocess_audio(audio_data)
@@ -1112,51 +1123,6 @@ async def transcribe_audio(audio_data, client_id=None):
         logger.error(traceback.format_exc())
         return {"text": "", "error": f"Error in transcription: {str(e)}", "confidence": 0.0}
 
-def preprocess_audio(audio_bytes):
-    """Preprocess audio bytes for ASR model.
-    
-    Args:
-        audio_bytes: Raw audio bytes
-        
-    Returns:
-        Processed audio data ready for ASR model
-    """
-    try:
-        # Convert bytes to in-memory file-like object
-        audio_io = io.BytesIO(audio_bytes)
-        
-        # Read audio using soundfile - this handles various audio formats
-        audio_data, sample_rate = sf.read(audio_io)
-        
-        # Convert to mono if stereo
-        if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
-            audio_data = audio_data.mean(axis=1)
-        
-        # Resample to 16kHz if needed (NeMo models typically expect 16kHz)
-        target_sample_rate = 16000
-        if sample_rate != target_sample_rate:
-            audio_length = len(audio_data)
-            resampled_length = int(audio_length * target_sample_rate / sample_rate)
-            audio_data = signal.resample(audio_data, resampled_length)
-            sample_rate = target_sample_rate
-        
-        # Convert to correct data type
-        audio_data = audio_data.astype(np.float32)
-        
-        # Normalize audio (between -1 and 1)
-        if np.abs(audio_data).max() > 1.0:
-            audio_data = audio_data / np.abs(audio_data).max()
-        
-        logger.info(f"Preprocessed audio: shape={audio_data.shape}, sample_rate={sample_rate}, dtype={audio_data.dtype}")
-        
-        return audio_data
-        
-    except Exception as e:
-        logger.error(f"Error preprocessing audio: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        raise
-
 async def safe_send_json(websocket, data):
     """Safely send JSON data through a WebSocket.
     
@@ -1192,7 +1158,7 @@ if __name__ == "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="STT Server for Audio Transcription")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind the server to")
-    parser.add_argument("--port", type=int, default=STT_SERVER_PORT, help="Port to bind the server to")
+    parser.add_argument("--port", type=int, default=5002, help="Port to bind the server to")
     args = parser.parse_args()
     
     # Get event loop
