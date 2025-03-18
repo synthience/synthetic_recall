@@ -71,6 +71,14 @@ class EnhancedMemoryClient(BaseMemoryClient,
         # Initialize logger
         self.logger = logging.getLogger(__name__)
         
+        # Set default emotion analyzer configuration
+        self.emotion_analyzer_host = kwargs.get('emotion_analyzer_host', 
+                                             os.getenv('EMOTION_ANALYZER_HOST', 'localhost'))
+        self.emotion_analyzer_port = kwargs.get('emotion_analyzer_port', 
+                                             os.getenv('EMOTION_ANALYZER_PORT', '5007'))
+        self.emotion_analyzer_endpoint = f"ws://{self.emotion_analyzer_host}:{self.emotion_analyzer_port}/ws"
+        self.logger.info(f"Configured emotion analyzer at: {self.emotion_analyzer_endpoint}")
+        
         # Initialize the base class
         super().__init__(
             tensor_server_url=tensor_server_url,
@@ -144,83 +152,30 @@ class EnhancedMemoryClient(BaseMemoryClient,
         
         logger.debug(f"Processed {role} message: {text[:50]}...")
     
-    async def get_memory_tools_for_llm(self) -> List[Dict[str, Any]]:
+    async def get_memory_tools_for_llm(self) -> Dict[str, Any]:
         """
         Get all memory tools formatted for the LLM.
         
         Returns:
             Dict with all available memory tools
         """
-        # Get standard memory tools
-        memory_tools = await self.get_memory_tools()
-        
-        # Add personal details tool
-        personal_tool = {
-            "type": "function",
-            "function": {
-                "name": "get_personal_details",
-                "description": "Retrieve personal details about the user",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "category": {
-                            "type": "string",
-                            "description": "Optional category of personal detail to retrieve (e.g., 'name', 'location', 'birthday', 'job', 'family')"
-                        }
-                    }
-                }
-            }
+        tools = {
+            "create_memory": self.store_memory,
+            "search_memory": self.retrieve_memories,
+            "search_information": self.retrieve_information,
+            "get_emotional_context": self.get_emotional_context_tool,
+            "get_personal_details": self.get_personal_details_tool,
+            "track_topic": self.track_conversation_topic,
+            "store_important_memory": self.store_important_memory,
+            "retrieve_emotional_memories": self.retrieve_emotional_memories_tool,
         }
         
-        # Add emotion tool
-        emotion_tool = {
-            "type": "function",
-            "function": {
-                "name": "get_emotional_context",
-                "description": "Get the current emotional context of the conversation",
-                "parameters": {
-                    "type": "object",
-                    "properties": {}
-                }
-            }
-        }
-        
-        # Add topic tracking tool
-        topic_tool = {
-            "type": "function",
-            "function": {
-                "name": "track_conversation_topic",
-                "description": "Track the current conversation topic to prevent repetition",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "topic": {
-                            "type": "string",
-                            "description": "The topic being discussed"
-                        },
-                        "importance": {
-                            "type": "number",
-                            "description": "Importance of this topic (0-1)",
-                            "default": 0.7
-                        }
-                    },
-                    "required": ["topic"]
-                }
-            }
-        }
-        
-        memory_tools.append(personal_tool)
-        memory_tools.append(emotion_tool)
-        memory_tools.append(topic_tool)
-        
-        # Add Lucidia memory tools
-        try:
-            lucidia_tools = await self.get_lucidia_memory_tools()
-            memory_tools.extend(lucidia_tools)
-        except Exception as e:
-            logger.error(f"Error getting Lucidia memory tools: {e}")
-        
-        return memory_tools
+        # Add Lucidia Memory System tools if available
+        if hasattr(self, 'get_lucidia_memory_tools'):
+            lucidia_tools = self.get_lucidia_memory_tools()
+            tools.update(lucidia_tools)
+            
+        return tools
     
     async def handle_tool_call(self, tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -331,7 +286,8 @@ class EnhancedMemoryClient(BaseMemoryClient,
             "retrieve_memories": self.retrieve_memories,
             "store_memory": self.store_memory,
             "browse_memories": self.browse_memories,
-            "search_memories": self.search_memories
+            "search_memories": self.search_memories,
+            "retrieve_emotional_memories": self.retrieve_emotional_memories_tool
         }
         
         # Get the appropriate handler
@@ -1058,22 +1014,24 @@ class EnhancedMemoryClient(BaseMemoryClient,
                     min_significance=min_quickrecal_score  # For backward compatibility in this method
                 )
                 
-                if not memories or not memories.get("memories"):
+                if not memories:
                     return ""
                 
                 parts = []
-                results = memories["memories"]
+                # Check if memories is a list or a dict with a "memories" key
+                results = memories.get("memories") if isinstance(memories, dict) else memories
             else:
                 memories = await self.get_important_memories(
                     limit=limit,
                     min_significance=min_quickrecal_score or 0.5  # For backward compatibility
                 )
                 
-                if not memories or not memories.get("memories"):
+                if not memories:
                     return ""
                 
                 parts = []
-                results = memories["memories"]
+                # Check if memories is a list or a dict with a "memories" key
+                results = memories.get("memories") if isinstance(memories, dict) else memories
             
             for memory in results:
                 content = memory.get("content", "").strip()
@@ -1591,6 +1549,14 @@ class EnhancedMemoryClient(BaseMemoryClient,
             if quickrecal_score is None and importance is not None:
                 quickrecal_score = importance
             
+            # Get emotional context for the memory content
+            emotional_context = None
+            try:
+                emotional_context = await self.detect_emotional_context(content)
+                logger.info(f"Detected emotional context for memory: {emotional_context['emotional_state'] if emotional_context else 'None'}")
+            except Exception as e:
+                logger.warning(f"Error detecting emotional context: {e}")
+            
             try:
                 embedding, memory_quickrecal_score = await self.process_embedding(content)
                 if quickrecal_score is not None:
@@ -1608,13 +1574,33 @@ class EnhancedMemoryClient(BaseMemoryClient,
                 memory_quickrecal_score = 0.5 if quickrecal_score is None else quickrecal_score
             
             memory_id = str(uuid.uuid4())
+            
+            # Initialize metadata if not provided
+            if metadata is None:
+                metadata = {}
+            
+            # Add emotional context to metadata if available
+            if emotional_context:
+                metadata['emotional_context'] = {
+                    'emotional_state': emotional_context.get('emotional_state', 'neutral'),
+                    'sentiment': emotional_context.get('sentiment', 0.0),
+                    'emotions': emotional_context.get('emotions', {})
+                }
+                
+                # Adjust the quickrecal_score based on emotional intensity
+                if 'sentiment' in emotional_context:
+                    sentiment_intensity = abs(emotional_context['sentiment'])
+                    # Boost quickrecal_score for emotionally intense memories
+                    memory_quickrecal_score = max(memory_quickrecal_score, memory_quickrecal_score * (1 + sentiment_intensity * 0.3))
+                    memory_quickrecal_score = min(1.0, memory_quickrecal_score)  # Cap at 1.0
+            
             mem = {
                 "id": memory_id,
                 "content": content,
                 "embedding": embedding,
                 "timestamp": time.time(),
                 "quickrecal_score": memory_quickrecal_score,
-                "metadata": metadata or {}
+                "metadata": metadata
             }
             
             async with self._memory_lock:
@@ -1901,52 +1887,29 @@ class EnhancedMemoryClient(BaseMemoryClient,
             List of dictionaries containing memory entries
         """
         try:
-            logger.info(f"Retrieving memories for query: '{query[:50]}...'")
-            
-            if not query or not isinstance(query, str):
-                logger.warning("Empty or invalid query provided to retrieve_memories")
+            if not query or not query.strip():
+                logger.warning("Empty query provided to retrieve_memories")
                 return []
-            if limit <= 0:
-                logger.warning(f"Invalid limit parameter: {limit}, using default of 5")
-                limit = 5
-            
-            if hasattr(self, 'memory_integration') and self.memory_integration:
-                try:
-                    memories = await self.memory_integration.retrieve_memories(
-                        query=query,
-                        limit=limit,
-                        min_quickrecal_score=min_quickrecal_score
-                    )
-                    logger.info(f"Retrieved {len(memories)} memories from hierarchical memory system")
-                    return memories
-                except Exception as e:
-                    logger.error(f"Error retrieving from hierarchical memory: {e}", exc_info=True)
-            
-            try:
-                query_embedding = await self._generate_embedding(query)
-                if not query_embedding:
-                    logger.warning("Failed to generate embedding for query")
-                    return []
                 
+            # Get memory embeddings
+            try:
+                embedding, _ = await self.process_embedding(query)
+                if not embedding.any():  # Check if embedding is all zeros
+                    logger.warning("Empty embedding returned for query")
+                    return []
+            except Exception as e:
+                logger.error(f"Error getting embedding for query: {e}")
+                return []
+                
+            # Retrieve memories by embedding similarity
+            try:
                 memories = await self._retrieve_memories_by_embedding(
-                    query_embedding=query_embedding,
-                    limit=limit * 2,
+                    query_embedding=embedding,
+                    limit=limit,
                     min_quickrecal_score=min_quickrecal_score
                 )
-                
-                result = []
-                for memory in memories:
-                    result.append({
-                        "id": memory.id,
-                        "content": memory.content,
-                        "timestamp": memory.timestamp.isoformat() if hasattr(memory, 'timestamp') else None,
-                        "quickrecal_score": memory.quickrecal_score if hasattr(memory, 'quickrecal_score') else 0.0,
-                        "memory_type": memory.memory_type.value if hasattr(memory, 'memory_type') else "transcript",
-                        "metadata": memory.metadata
-                    })
-                
-                logger.info(f"Retrieved {len(result)} memories from standard memory system")
-                return result
+                logger.info(f"Retrieved {len(memories)} memories for query: {query[:50]}...")
+                return memories
             except Exception as e:
                 logger.error(f"Error in standard memory retrieval: {e}", exc_info=True)
                 return []
@@ -1998,12 +1961,13 @@ class EnhancedMemoryClient(BaseMemoryClient,
         Returns:
             List of dictionaries containing information entries
         """
+        
         try:
             logger.info(f"Retrieving information for query: '{query[:50]}...'")
             
-            if not query or not isinstance(query, str):
-                logger.warning("Empty or invalid query provided to retrieve_information")
-                return []
+        except Exception as e:
+            logger.error(f"Error in retrieve_information: {e}", exc_info=True)
+            return []
             
             if hasattr(self, 'memory_integration') and self.memory_integration:
                 try:
@@ -2071,9 +2035,6 @@ class EnhancedMemoryClient(BaseMemoryClient,
             except Exception as e:
                 logger.error(f"Error in standard information retrieval: {e}", exc_info=True)
                 return []
-        except Exception as e:
-            logger.error(f"Error retrieving information: {e}", exc_info=True)
-            return []
     
     def _parse_information_context(self, context_data: str) -> List[Dict[str, Any]]:
         try:
@@ -2793,3 +2754,139 @@ class EnhancedMemoryClient(BaseMemoryClient,
                 "error": str(e),
                 "timeline": []
             }
+
+    async def retrieve_emotional_memories_tool(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Tool implementation to retrieve memories by emotional context.
+        
+        Args:
+            args: Dictionary containing:
+                - emotion: Optional specific emotion to filter by
+                - sentiment_threshold: Optional minimum sentiment value
+                - sentiment_direction: Optional direction of sentiment ('positive' or 'negative')
+                - limit: Optional maximum number of memories to return
+                - min_quickrecal_score: Optional minimum quickrecal_score threshold
+                
+        Returns:
+            Dict with retrieved memories and status information
+        """
+        try:
+            # Extract and validate parameters
+            emotion = args.get('emotion')
+            sentiment_threshold = args.get('sentiment_threshold')
+            sentiment_direction = args.get('sentiment_direction')
+            limit = int(args.get('limit', 5))
+            min_quickrecal_score = float(args.get('min_quickrecal_score', 0.0))
+            
+            # Call the retrieve_memories_by_emotion method
+            memories = await self.retrieve_memories_by_emotion(
+                emotion=emotion,
+                sentiment_threshold=sentiment_threshold,
+                sentiment_direction=sentiment_direction,
+                limit=limit,
+                min_quickrecal_score=min_quickrecal_score
+            )
+            
+            # Format the results
+            results = []
+            for mem in memories:
+                emotional_context = mem.get('metadata', {}).get('emotional_context', {})
+                results.append({
+                    "content": mem.get('content'),
+                    "quickrecal_score": mem.get('quickrecal_score'),
+                    "timestamp": mem.get('timestamp'),
+                    "emotional_state": emotional_context.get('emotional_state', 'neutral'),
+                    "sentiment": emotional_context.get('sentiment', 0.0),
+                    "emotions": emotional_context.get('emotions', {})
+                })
+            
+            return {
+                "status": "success",
+                "count": len(results),
+                "emotion_filter": emotion,
+                "sentiment_threshold": sentiment_threshold,
+                "sentiment_direction": sentiment_direction,
+                "memories": results
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in retrieve_emotional_memories_tool: {e}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "count": 0,
+                "memories": []
+            }
+
+    async def retrieve_memories_by_emotion(self, 
+                                 emotion: str = None, 
+                                 sentiment_threshold: float = None,
+                                 sentiment_direction: str = None,
+                                 limit: int = 5, 
+                                 min_quickrecal_score: float = 0.0) -> List[Dict[str, Any]]:
+        """
+        Retrieve memories based on emotional context.
+        
+        Args:
+            emotion: Specific emotion to filter by (e.g., 'joy', 'anger')
+            sentiment_threshold: Minimum absolute sentiment value to filter by
+            sentiment_direction: Direction of sentiment ('positive', 'negative', or None for both)
+            limit: Maximum number of memories to return
+            min_quickrecal_score: Minimum quickrecal_score threshold
+            
+        Returns:
+            List of dictionaries containing memory entries with matching emotional context
+        """
+        try:
+            results = []
+            async with self._memory_lock:
+                memories = copy.deepcopy(self.memories)
+                
+            # Filter memories that have emotional context metadata
+            filtered_memories = [
+                mem for mem in memories 
+                if (mem.get('metadata', {}).get('emotional_context') is not None and
+                    mem.get('quickrecal_score', 0) >= min_quickrecal_score)
+            ]
+            
+            # Further filter by specific emotion if provided
+            if emotion:
+                filtered_memories = [
+                    mem for mem in filtered_memories
+                    if (mem.get('metadata', {}).get('emotional_context', {}).get('emotional_state') == emotion or
+                        emotion in mem.get('metadata', {}).get('emotional_context', {}).get('emotions', {}))
+                ]
+            
+            # Filter by sentiment threshold and direction if provided
+            if sentiment_threshold is not None:
+                threshold = abs(float(sentiment_threshold))
+                
+                if sentiment_direction == 'positive':
+                    filtered_memories = [
+                        mem for mem in filtered_memories
+                        if mem.get('metadata', {}).get('emotional_context', {}).get('sentiment', 0) >= threshold
+                    ]
+                elif sentiment_direction == 'negative':
+                    filtered_memories = [
+                        mem for mem in filtered_memories
+                        if mem.get('metadata', {}).get('emotional_context', {}).get('sentiment', 0) <= -threshold
+                    ]
+                else:
+                    # If no direction specified, filter by absolute sentiment value
+                    filtered_memories = [
+                        mem for mem in filtered_memories
+                        if abs(mem.get('metadata', {}).get('emotional_context', {}).get('sentiment', 0)) >= threshold
+                    ]
+            
+            # Sort by quickrecal_score and timestamp for consistent results
+            filtered_memories.sort(key=lambda x: (x.get('quickrecal_score', 0), x.get('timestamp', 0)), reverse=True)
+            
+            # Return the top memories based on limit
+            results = filtered_memories[:limit]
+            
+            logger.info(f"Retrieved {len(results)} memories with emotion filter: {emotion} and sentiment threshold: {sentiment_threshold}")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error retrieving memories by emotion: {e}")
+            return []
