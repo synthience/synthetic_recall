@@ -2,9 +2,17 @@
 
 import logging
 import json
+import os
+import asyncio
+import websockets
 from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Configure emotion analyzer endpoints
+EMOTION_ANALYZER_HOST = os.getenv('EMOTION_ANALYZER_HOST', 'localhost')
+EMOTION_ANALYZER_PORT = os.getenv('EMOTION_ANALYZER_PORT', '5007')
+EMOTION_ANALYZER_ENDPOINT = f"ws://{EMOTION_ANALYZER_HOST}:{EMOTION_ANALYZER_PORT}/ws"
 
 class EmotionMixin:
     """
@@ -22,10 +30,47 @@ class EmotionMixin:
         # Initialize emotions collection if it doesn't exist
         if not hasattr(self, "emotions"):
             self.emotions = {}
+        
+        # Initialize emotion analyzer connection
+        self.emotion_analyzer_endpoint = EMOTION_ANALYZER_ENDPOINT
+        logger.info(f"Configured emotion analyzer at: {self.emotion_analyzer_endpoint}")
+
+    async def _connect_to_emotion_analyzer(self):
+        """
+        Establish connection to the emotion analyzer service.
+        
+        Returns:
+            WebSocket connection to emotion analyzer
+        """
+        try:
+            # Make sure we have a valid endpoint
+            if not hasattr(self, 'emotion_analyzer_endpoint'):
+                # Get endpoint from EnhancedMemoryClient if available
+                if hasattr(self, 'emotion_analyzer_endpoint'):
+                    endpoint = self.emotion_analyzer_endpoint
+                else:
+                    # Fallback to environment variable
+                    host = os.getenv('EMOTION_ANALYZER_HOST', 'localhost')
+                    port = os.getenv('EMOTION_ANALYZER_PORT', '5007')
+                    endpoint = f"ws://{host}:{port}/ws"
+            else:
+                endpoint = self.emotion_analyzer_endpoint
+                
+            # Add timeout to avoid blocking for too long
+            return await asyncio.wait_for(
+                websockets.connect(endpoint),
+                timeout=2.0  # 2 second timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout connecting to emotion analyzer at {endpoint}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to connect to emotion analyzer: {e}")
+            return None
 
     async def detect_emotion(self, text: str) -> str:
         """
-        Detect emotion from text. Uses the HPC service for emotion analysis.
+        Detect emotion from text. Uses the emotion analyzer service.
         
         Args:
             text: The text to analyze for emotion
@@ -34,6 +79,74 @@ class EmotionMixin:
             Detected emotion as string
         """
         try:
+            # Try emotion analyzer service first
+            try:
+                connection = await self._connect_to_emotion_analyzer()
+                if connection:
+                    # Configure endpoint
+                    host = os.getenv('EMOTION_ANALYZER_HOST', 'localhost')
+                    port = os.getenv('EMOTION_ANALYZER_PORT', '5007')
+                    endpoint = f"ws://{host}:{port}/ws"
+                    
+                    logger.info(f"Connecting to emotion analyzer at {endpoint}")
+                    
+                    # Connect to the WebSocket with a timeout
+                    async with asyncio.timeout(5):
+                        async with websockets.connect(endpoint) as connection:
+                            # Create request payload
+                            payload = {
+                                "type": "analyze",
+                                "text": text
+                            }
+                            
+                            # Send request
+                            logger.debug(f"Sending emotion analysis request: {json.dumps(payload)}")
+                            await connection.send(json.dumps(payload))
+                            
+                            # Get response with timeout
+                            async with asyncio.timeout(10):  # Longer timeout for processing
+                                response = await connection.recv()
+                                logger.debug(f"Received response: {response}")
+                            
+                            # Close connection
+                            await connection.close()
+                    
+                    # Parse response
+                    response_data = json.loads(response)
+                    
+                    # Check for error response
+                    if response_data.get("type") == "error":
+                        logger.error(f"Emotion analyzer returned error: {response_data.get('message')}")
+                        return "neutral"  # Default to neutral on error
+                    
+                    # Get emotion from dominant emotions
+                    if "dominant_detailed" in response_data and "emotion" in response_data["dominant_detailed"]:
+                        emotion = response_data["dominant_detailed"]["emotion"]
+                    elif "dominant_primary" in response_data and "emotion" in response_data["dominant_primary"]:
+                        emotion = response_data["dominant_primary"]["emotion"]
+                    else:
+                        emotion = "neutral"  # Default if no dominant emotion
+                    
+                    logger.info(f"Detected emotion: {emotion} for text: {text[:50]}...")
+                    
+                    # Update emotion tracking
+                    self.emotion_tracking["current_emotion"] = emotion
+                    self.emotion_tracking["emotion_history"].append({
+                        "text": text,
+                        "emotion": emotion,
+                        "timestamp": self._get_timestamp()
+                    })
+                    
+                    # Keep history at a reasonable size
+                    if len(self.emotion_tracking["emotion_history"]) > 50:
+                        self.emotion_tracking["emotion_history"] = self.emotion_tracking["emotion_history"][-50:]
+                        
+                    return emotion
+                    
+            except Exception as e:
+                logger.warning(f"Emotion analyzer service failed, falling back to HPC: {e}")
+            
+            # Fall back to HPC if emotion analyzer fails
             connection = await self._get_hpc_connection()
             if not connection:
                 logger.error("Cannot detect emotion: No HPC connection")
@@ -88,44 +201,130 @@ class EmotionMixin:
             Dict with emotional context information
         """
         try:
-            # First detect the primary emotion
-            emotion = await self.detect_emotion(text)
-            
-            # Default emotional data
+            # Default emotional data structure
             timestamp = self._get_timestamp()
             emotional_data = {
                 "text": text,
-                "emotion": emotion,
+                "emotion": "neutral",
                 "timestamp": timestamp,
                 "sentiment": 0.0,  # Neutral by default
                 "emotions": {
-                    emotion: 0.7  # Default confidence
+                    "neutral": 0.7  # Default confidence
                 }
             }
             
-            # Try to get more detailed emotion analysis from HPC if available
+            # Try to get detailed emotion analysis from emotion analyzer
             try:
-                connection = await self._get_hpc_connection()
+                connection = await self._connect_to_emotion_analyzer()
                 if connection:
-                    # Create detailed emotion analysis request
-                    payload = {
-                        "type": "emotional_analysis",
-                        "text": text
+                    # Configure endpoint
+                    host = os.getenv('EMOTION_ANALYZER_HOST', 'localhost')
+                    port = os.getenv('EMOTION_ANALYZER_PORT', '5007')
+                    endpoint = f"ws://{host}:{port}/ws"
+                    
+                    logger.info(f"Connecting to emotion analyzer at {endpoint} for emotional context")
+                    
+                    # Connect to the WebSocket with a timeout
+                    async with asyncio.timeout(5):
+                        async with websockets.connect(endpoint) as connection:
+                            # Create request payload
+                            payload = {
+                                "type": "analyze",
+                                "text": text
+                            }
+                            
+                            # Send request
+                            logger.debug(f"Sending emotional context analysis request: {json.dumps(payload)}")
+                            await connection.send(json.dumps(payload))
+                            
+                            # Get response with timeout
+                            async with asyncio.timeout(10):  # Longer timeout for processing
+                                response = await connection.recv()
+                                logger.debug(f"Received emotional context response: {response}")
+                            
+                            # Close connection
+                            await connection.close()
+                    
+                    # Parse response
+                    response_data = json.loads(response)
+                    
+                    # Check for error response
+                    if response_data.get("type") == "error":
+                        logger.error(f"Emotion analyzer returned error: {response_data.get('message')}")
+                        return self._create_default_emotional_context(text)  # Default on error
+                    
+                    # Get emotion from dominant emotions
+                    if "dominant_detailed" in response_data and "emotion" in response_data["dominant_detailed"]:
+                        emotional_state = response_data["dominant_detailed"]["emotion"]
+                    elif "dominant_primary" in response_data and "emotion" in response_data["dominant_primary"]:
+                        emotional_state = response_data["dominant_primary"]["emotion"]
+                    else:
+                        emotional_state = "neutral"  # Default if no dominant emotion
+                    
+                    # Extract detailed emotions data
+                    result = {
+                        "timestamp": self._get_timestamp(),
+                        "text": text,
+                        "emotions": response_data.get("detailed_emotions", {"neutral": 1.0}),
+                        "sentiment": 0.0,  # Default sentiment as it's not provided
+                        "emotional_state": emotional_state
                     }
                     
-                    # Send request and get response
-                    await connection.send(json.dumps(payload))
-                    response = await connection.recv()
-                    data = json.loads(response)
+                    # Calculate sentiment if primary emotions are available
+                    if "primary_emotions" in response_data:
+                        primary = response_data["primary_emotions"]
+                        # Simple sentiment calculation: joy is positive, sadness/anger/fear are negative
+                        positive = primary.get("joy", 0) + primary.get("surprise", 0) * 0.5
+                        negative = primary.get("sadness", 0) + primary.get("anger", 0) + primary.get("fear", 0)
+                        # Calculate sentiment between -1 and 1
+                        if positive + negative > 0:  # Avoid division by zero
+                            result["sentiment"] = (positive - negative) / (positive + negative)
                     
-                    # Update with more detailed information if available
-                    if 'emotions' in data:
-                        emotional_data["emotions"] = data['emotions']
+                    # Update current emotional state
+                    self.emotion_tracking["current_emotion"] = emotional_state
+                    self.emotion_tracking["emotion_history"].append({
+                        "text": text,
+                        "emotion": emotional_state,
+                        "timestamp": result["timestamp"]
+                    })
                     
-                    if 'sentiment' in data:
-                        emotional_data["sentiment"] = data['sentiment']
+                    # Keep history at a reasonable size
+                    if len(self.emotion_tracking["emotion_history"]) > 50:
+                        self.emotion_tracking["emotion_history"] = self.emotion_tracking["emotion_history"][-50:]
+                    
+                    return result
+                    
             except Exception as e:
-                logger.warning(f"Error getting detailed emotional analysis: {e}")
+                logger.warning(f"Error using emotion analyzer, falling back to HPC: {e}")
+                
+                # If emotion analyzer failed, fall back to HPC
+                # First detect the primary emotion
+                emotion = await self.detect_emotion(text)
+                emotional_data["emotion"] = emotion
+                
+                # Try to get more detailed analysis from HPC
+                try:
+                    connection = await self._get_hpc_connection()
+                    if connection:
+                        # Create detailed emotion analysis request
+                        payload = {
+                            "type": "emotional_analysis",
+                            "text": text
+                        }
+                        
+                        # Send request and get response
+                        await connection.send(json.dumps(payload))
+                        response = await connection.recv()
+                        data = json.loads(response)
+                        
+                        # Update with more detailed information if available
+                        if 'emotions' in data:
+                            emotional_data["emotions"] = data['emotions']
+                        
+                        if 'sentiment' in data:
+                            emotional_data["sentiment"] = data['sentiment']
+                except Exception as e:
+                    logger.warning(f"Error getting detailed emotional analysis from HPC: {e}")
             
             # Store this emotion in our collection
             self.emotions[str(timestamp)] = emotional_data
@@ -140,14 +339,14 @@ class EmotionMixin:
             
             # Create a complete emotional context response
             context = {
-                "current_emotion": emotion,
+                "current_emotion": emotional_data["emotion"],
                 "sentiment": emotional_data.get("sentiment", 0.0),
                 "emotions": emotional_data.get("emotions", {}),
                 "timestamp": timestamp,
                 "text_analyzed": text
             }
             
-            logger.info(f"Detected emotional context: {emotion} with sentiment {context['sentiment']:.2f}")
+            logger.info(f"Detected emotional context: {context['current_emotion']} with sentiment {context['sentiment']:.2f}")
             return context
             
         except Exception as e:
@@ -161,7 +360,7 @@ class EmotionMixin:
                 "text_analyzed": text,
                 "error": str(e)
             }
-        
+    
     async def get_emotional_context(self, limit: int = 5) -> Dict[str, Any]:
         """
         Get the emotional context of recent conversations.
@@ -305,3 +504,14 @@ class EmotionMixin:
     def _get_timestamp(self) -> float:
         """Get current timestamp"""
         return self._get_current_timestamp() if hasattr(self, "_get_current_timestamp") else time.time()
+    
+    def _create_default_emotional_context(self, text: str) -> Dict[str, Any]:
+        """Create a default emotional context when analysis fails."""
+        timestamp = self._get_timestamp()
+        return {
+            "timestamp": timestamp,
+            "text": text,
+            "emotions": {"neutral": 1.0},
+            "sentiment": 0.0,
+            "emotional_state": "neutral"
+        }

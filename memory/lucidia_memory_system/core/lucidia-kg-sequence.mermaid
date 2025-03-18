@@ -1,0 +1,139 @@
+sequenceDiagram
+    participant Client
+    participant EventBus as Event Bus
+    participant KG as LucidiaKnowledgeGraph
+    participant ModuleRegistry as Module Registry
+    participant SM as SelfModel
+    participant WM as WorldModel
+    participant EA as EmotionAnalyzer
+    participant ExtKnowledge as External Knowledge
+
+    %% Initialization Phase (Modular Architecture)
+    Client->>+KG: __init__(self_model, world_model, config, emotion_analyzer_url)
+    KG->>KG: initialize logger, structures, MultiDiGraph
+    KG->>ModuleRegistry: register core components
+    KG->>EventBus: subscribe("model_updates", "external_knowledge")
+    KG-->>-Client: Knowledge Graph Initialized ✅
+
+    %% Parallel Event-Driven Model Initialization
+    Client->>EventBus: emit("initialize_models")
+    par Parallel Model Initialization
+        EventBus->>+WM: trigger("initialize")
+        WM->>WM: prepare_core_data()
+        WM->>EventBus: emit("world_model_ready", data)
+        WM-->>-EventBus: Validated Knowledge Transfer 🔄
+
+        EventBus->>+SM: trigger("initialize")
+        SM->>SM: prepare_self_aspects()
+        SM->>EventBus: emit("self_model_ready", data)
+        SM-->>-EventBus: Identity Framework Transfer 🔄
+    end
+
+    %% Model Data Integration
+    EventBus->>+KG: notify("world_model_ready", data)
+    KG->>KG: process_world_model_data(data)
+    KG-->>-EventBus: acknowledge ✅
+
+    EventBus->>+KG: notify("self_model_ready", data)
+    KG->>KG: process_self_model_data(data)
+    KG-->>-EventBus: acknowledge ✅
+
+    EventBus-->>Client: all_models_initialized() 🚦
+
+    %% External Knowledge Ingestion Pipeline
+    ExtKnowledge->>EventBus: emit("new_knowledge", data)
+    EventBus->>+KG: notify("new_knowledge", data)
+    KG->>KG: validate and analyze_relevance(data)
+    KG->>ModuleRegistry: get_processors_for(data.type)
+    KG->>KG: store_and_index(processed_data)
+    KG->>EventBus: emit("knowledge_integrated", metadata)
+    KG-->>-EventBus: acknowledge ✅
+
+    %% Hierarchical Graph Operations
+    Client->>+KG: execute_graph_operation(operation_type, params)
+    KG->>ModuleRegistry: resolve_operation_handler(operation_type)
+    ModuleRegistry-->>KG: return handler_module
+
+    alt hierarchical operation
+        KG->>KG: decompose_into_subgraph_operations()
+        par Parallel Subgraph Processing 🔀
+            KG->>KG: process_subgraph_1()
+            KG->>KG: process_subgraph_2()
+            KG->>KG: process_subgraph_n()
+        end
+        KG->>KG: aggregate_results()
+    else standard operation
+        KG->>KG: execute_standard_operation()
+    end
+    KG-->>-Client: operation_results 📊
+
+    %% Dream Integration with Meta-Learning
+    Client->>+KG: integrate_dream_insight(insight_text, source_memory)
+    KG->>KG: create_dream_insight_node()
+
+    par Parallel Dream Processing 🌙
+        KG->>WM: extract_concepts(insight_text)
+        KG->>EA: analyze_emotional_context(insight_text)
+        KG->>KG: evaluate_consistency()
+    end
+
+    KG->>KG: apply_integration_strategy()
+    KG->>KG: track_dream_influenced_nodes()
+
+    %% Meta-learning feedback loop
+    KG->>KG: evaluate integration_quality()
+    KG->>KG: adjust integration_parameters()
+    note over KG: Self-optimization (Meta-Learning) 🔄
+    KG-->>-Client: integration_results 🌟
+
+    %% Cross-Model Synchronization
+    Client->>EventBus: emit("update_concept", concept_data)
+    par Cross-Model Updates 🌀
+        EventBus->>+KG: notify("update_concept", concept_data)
+        KG->>KG: update_graph(concept_data)
+        KG-->>-EventBus: acknowledge ✅
+
+        EventBus->>+WM: notify("update_concept", concept_data)
+        WM->>WM: update_world_model(concept_data)
+        WM-->>-EventBus: acknowledge ✅
+
+        EventBus->>+SM: notify("update_concept", concept_data)
+        SM->>SM: evaluate_relevance(concept_data)
+        alt Relevant to Self
+            SM->>SM: update_self_aspects()
+        end
+        SM-->>-EventBus: acknowledge ✅
+    end
+    EventBus-->>Client: concept_updated_across_models() 🚀
+
+    %% Contradiction Resolution Mechanism
+    EventBus->>+KG: notify("contradiction_detected", {source, target, type})
+    KG->>KG: analyze_contradiction()
+
+    alt Internally Resolvable
+        KG->>KG: apply_internal_resolution()
+        KG->>EventBus: emit("contradiction_resolved", resolution)
+    else External Input Required
+        KG->>EventBus: emit("resolution_required", context)
+        EventBus->>Client: prompt_user_resolution(context)
+        Client->>EventBus: provide_resolution(decision)
+        EventBus->>KG: notify("resolution_provided", decision)
+        KG->>KG: apply_external_resolution(decision)
+    end
+    KG->>EventBus: emit("knowledge_consistent")
+    KG-->>-EventBus: acknowledge ✅
+
+    %% Adaptive Maintenance (Self-Optimization)
+    Client->>+KG: trigger_adaptive_maintenance()
+    KG->>KG: analyze_graph_metrics()
+    KG->>KG: identify_optimizations()
+
+    par Adaptive Optimizations 🛠️
+        KG->>KG: prune_low_value_connections()
+        KG->>KG: reindex_high_frequency_nodes()
+        KG->>KG: adjust_decay_parameters()
+    end
+
+    KG->>KG: evaluate_optimization_impact()
+    KG->>KG: store_optimization_learnings()
+    KG-->>-Client: maintenance_results_improvements() 🎯

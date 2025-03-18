@@ -94,19 +94,20 @@ class MemoryManager:
         """
         await self.memory_client.process_message(text, role)
     
-    async def search_memory(self, query: str, limit: int = 5, min_significance: float = 0.0) -> List[Dict[str, Any]]:
+    async def search_memory(self, query: str, limit: int = 5, min_significance: float = 0.0, min_quickrecal_score: float = None) -> List[Dict[str, Any]]:
         """
         Search for memories based on semantic similarity.
         
         Args:
             query: The search query
             limit: Maximum number of results
-            min_significance: Minimum significance threshold
+            min_significance: Minimum significance threshold (deprecated, use min_quickrecal_score)
+            min_quickrecal_score: Minimum quickrecal score threshold
             
         Returns:
             List of matching memories
         """
-        return await self.memory_client.search_memory(query, limit, min_significance)
+        return await self.memory_client.search_memory(query, limit, min_significance, min_quickrecal_score)
     
     async def store_memory(self, content: str, significance: float = None) -> bool:
         """

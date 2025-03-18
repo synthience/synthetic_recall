@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  emotion-analyzer:
+    image: lucid-recall-dist-emotion-analyzer:latest
+    container_name: emotion-analyzer
+    ports:
+      - "5007:5007"
+      - "8007:8007"
+    environment:
+      - PORT=5007
+      - WEB_PORT=8007
+    networks:
+      - lucidia-network
+    restart: unless-stopped
+
+networks:
+  lucidia-network:
+    driver: bridge

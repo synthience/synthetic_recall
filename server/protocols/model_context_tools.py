@@ -629,7 +629,9 @@ class ModelContextToolProvider(ToolProvider):
                         query=content.get("query", ""),
                         memory_type=memory_type,
                         limit=content.get("limit", 10),
-                        min_significance=content.get("min_significance", 0.5)
+                        min_significance=content.get("min_significance", 0.0),
+                        min_quickrecal_score=content.get("min_quickrecal_score", None),
+                        recency_bias=content.get("recency_bias", 0.3)
                     )
                     
                     return {
@@ -648,6 +650,7 @@ class ModelContextToolProvider(ToolProvider):
                     memory_type=memory_type,
                     limit=content.get("limit", 10),
                     min_significance=content.get("min_significance", 0.0),
+                    min_quickrecal_score=content.get("min_quickrecal_score", None),
                     recency_bias=content.get("recency_bias", 0.3)
                 )
                 
@@ -673,7 +676,9 @@ class ModelContextToolProvider(ToolProvider):
                 result = await self.memory_system.consolidate_memories(
                     memory_type=memory_type,
                     criteria=content.get("criteria", {}),
-                    action=content.get("action", "summarize")
+                    action=content.get("action", "summarize"),
+                    min_quickrecal_score=content.get("min_quickrecal_score", None),
+                    min_significance=content.get("min_significance", 0.0)
                 )
                 
                 return {
@@ -2126,7 +2131,7 @@ async def _check_parameter_health(self, detail_level: str) -> Dict[str, Any]:
                 
                 if len(locked) > 5:
                     status = "warning"
-                    issues.append(f"Many parameters are locked: {len(locked)}")
+                    issues.append("Many parameters are locked: {len(locked)}")
             
             # Check parameter changes
             if hasattr(self.parameter_manager, "get_parameter_changes"):

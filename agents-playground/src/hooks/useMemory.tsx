@@ -13,7 +13,7 @@ type MemoryMetric = {
   id: string;
   text: string;
   similarity: number;
-  significance: number;
+  quickrecal_score: number;
   surprise: number;
   timestamp: number;
 };
@@ -51,10 +51,10 @@ export const useMemory = ({ defaultTensorUrl, defaultHpcUrl, enabled }: UseMemor
   });
   
   const [processingMetrics, setProcessingMetrics] = useState<{ 
-    significance: number[], 
+    quickrecal_score: number[], 
     surprise: number[] 
   }>({
-    significance: Array(5).fill(0.5),
+    quickrecal_score: Array(5).fill(0.5),
     surprise: Array(5).fill(0.25)
   });
 
@@ -167,10 +167,10 @@ export const useMemory = ({ defaultTensorUrl, defaultHpcUrl, enabled }: UseMemor
       if (data.results) {
         // Ensure each result has surprise metric (fallback to calculated value if not provided)
         const enhancedResults = data.results.map((result: any, index: number) => {
-          // If surprise is not provided, generate one based on significance
+          // If surprise is not provided, generate one based on quickrecal_score
           const surprise = result.surprise !== undefined ? 
             result.surprise : 
-            Math.min(1.0, Math.max(0.1, result.significance * (1 + Math.random() * 0.5)));
+            Math.min(1.0, Math.max(0.1, result.quickrecal_score * (1 + Math.random() * 0.5)));
             
           return {
             ...result,
@@ -200,15 +200,15 @@ export const useMemory = ({ defaultTensorUrl, defaultHpcUrl, enabled }: UseMemor
     };
     
     const memoryProcessedHandler = (data: any) => {
-      if (data.significance !== undefined || data.surprise !== undefined) {
+      if (data.quickrecal_score !== undefined || data.surprise !== undefined) {
         setProcessingMetrics(prev => {
           // Add new metrics to the beginning of the arrays and keep only last 5
-          const newSignificance = [...prev.significance];
+          const newQuickrecalScore = [...prev.quickrecal_score];
           const newSurprise = [...prev.surprise];
           
-          if (data.significance !== undefined) {
-            newSignificance.unshift(data.significance);
-            newSignificance.length = Math.min(newSignificance.length, 5);
+          if (data.quickrecal_score !== undefined) {
+            newQuickrecalScore.unshift(data.quickrecal_score);
+            newQuickrecalScore.length = Math.min(newQuickrecalScore.length, 5);
           }
           
           if (data.surprise !== undefined) {
@@ -217,7 +217,7 @@ export const useMemory = ({ defaultTensorUrl, defaultHpcUrl, enabled }: UseMemor
           }
           
           return {
-            significance: newSignificance,
+            quickrecal_score: newQuickrecalScore,
             surprise: newSurprise
           };
         });

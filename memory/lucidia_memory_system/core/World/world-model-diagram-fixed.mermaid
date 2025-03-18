@@ -1,0 +1,117 @@
+flowchart TB
+    %% Main class
+    LWM["LucidiaWorldModel"]
+
+    %% Original components
+    subgraph Entities["1. Entities & Elements"]
+        ER["Entity Registry"]
+        KD["Knowledge Domains"]
+        RF["Reality Framework"]
+        MM["Mental Models"]
+        CD["Concept Definitions"]
+    end
+    
+    subgraph Relationships["2. Relationships & Dependencies"]
+        CN["Concept Network"]
+        EF["Epistemological Framework"]
+        VM["Verification Methods"]
+        BS["Belief System"]
+        CR["Creator Reference"]
+    end
+    
+    subgraph Interaction["3. Interaction Dynamics"]
+        OBS["Observations"]
+        CM["Causal Models"]
+        CF["Contextual Frameworks"]
+        PF["Perception Filters"]
+    end
+    
+    subgraph Refinement["4. Iterative Refinement"]
+        KG["Knowledge Gaps"]
+        DI["Dream Integration"]
+    end
+
+    %% Adaptive Learning System - Highlighted
+    subgraph Adaptive["5. Real-Time Adaptive Learning 🌟"]
+        direction LR
+        DRU["Dynamic Reality Update (DRU)"]
+        AEF["Adaptive Epistemological Framework (AEF)"]
+        RRM["Reality Reprocessing Mechanism (RRM)"]
+
+        subgraph DRUM["DRU Components"]
+            AT["Automatic Triggers"]
+            KIC["Knowledge Integrity Checks"]
+        end
+        
+        subgraph AEFC["AEF Components"]
+            PR["Probabilistic Reasoning"]
+            CRS["Confidence Recalibration System"]
+        end
+        
+        subgraph RRMC["RRM Components"]
+            AR["Assumption Reassessment"]
+            AIR["Auto Integration/Rejection"]
+        end
+    end
+
+    %% Adaptive Methods
+    subgraph Methods["Core & Adaptive Methods"]
+        direction LR
+        RE["register_entity()"]
+        GE["get_entity()"]
+        AO["add_observation()"]
+        UFI["update_from_interaction()"]
+        IDI["integrate_dream_insight()"]
+        
+        %% New adaptive methods (distinct style)
+        RT[/"real_time_update()"/]
+        VE[/"validate_evidence()"/]
+        RCF[/"recalibrate_confidence()"/]
+        RA[/"reassess_assumptions()"/]
+    end
+
+    %% Connections - Original
+    LWM --- Entities
+    LWM --- Relationships
+    LWM --- Interaction
+    LWM --- Refinement
+    LWM --- Adaptive
+    LWM --- Methods
+
+    %% Adaptive Component Connections - Clear feedback loops
+    AT -->|"Trigger"| DRU
+    KIC -->|"Flag Obsolete Knowledge"| DRU
+    PR -->|"Belief Weighting"| AEF
+    CRS -->|"Confidence Updates"| AEF
+    AR -->|"Review Assumptions"| RRM
+    AIR -->|"Integrate/Reject Info"| RRM
+
+    %% Adaptive System Real-Time Flow (emphasized)
+    Interaction -->|"Real-Time Data 📡"| AT
+    DRU -->|"Immediate Updates 🔄"| Entities
+    AEF -->|"Dynamic Adjustments 🔄"| Relationships
+    RRM -->|"Continuous Refinement 🔄"| Interaction
+
+    %% Method interactions clearly shown
+    RT --> DRU
+    VE --> AT
+    RCF --> CRS
+    RA --> AR
+
+    %% Adaptive learning feedback loops (highlighted)
+    Entities <--> Relationships
+    Adaptive -->|"Adaptive Feedback Loop ♻️"| Refinement
+    Refinement -->|"Identifies Need for Checks"| KIC
+    DI -->|"Influences Reassessment"| AR
+    KG -->|"Feeds into"| KIC
+
+    %% Cross-component flows emphasized clearly
+    Interaction --> Entities
+    Interaction --> Relationships
+    Refinement --> Entities
+    Refinement --> Relationships
+
+    %% Style adjustments for clarity
+    classDef adaptive fill:#f7e59a,stroke:#f4d03f,stroke-width:2px
+    class Adaptive,DRU,AEF,RRM,DRUM,AEFC,RRMC,AT,KIC,PR,CRS,AR,AIR adaptive
+    class RT,VE,RCF,RA adaptive

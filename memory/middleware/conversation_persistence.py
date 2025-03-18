@@ -213,6 +213,8 @@ class ConversationPersistenceMiddleware:
                 user_metadata = {
                     **base_metadata,
                     'interaction_type': 'user_message',
+                    'type': 'transcript',  # Added for consistency with memory_client
+                    'sender': 'user'  # Added for consistency with memory_client
                 }
             
                 if self.config['role_metadata']:
@@ -229,6 +231,8 @@ class ConversationPersistenceMiddleware:
                 assistant_metadata = {
                     **base_metadata,
                     'interaction_type': 'assistant_response',
+                    'type': 'transcript',  # Added for consistency with memory_client
+                    'sender': 'assistant'  # Added for consistency with memory_client
                 }
                 
                 if self.config['role_metadata']:

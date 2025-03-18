@@ -359,7 +359,8 @@ class EnhancedMemoryClient(
             return False
             
         try:
-            if role is not None and sender == "user":
+            # FIXED: Previously only updated sender if sender="user", now properly handles all cases
+            if role is not None:
                 sender = role
             
             # Store in memory with no significance parameter

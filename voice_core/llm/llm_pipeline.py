@@ -98,12 +98,13 @@ class LocalLLMPipeline:
                     await self.memory_client.store_memory(
                         content=response,
                         metadata={
-                            "type": "assistant_response",
+                            "type": "transcript",  
+                            "sender": "assistant",  
                             "query": prompt,
                             "timestamp": time.time(),
                             "model": self.config.model
                         },
-                        importance=0.7  # Default importance for assistant responses
+                        importance=0.7  
                     )
                 except Exception as e:
                     self.logger.error(f"Error storing response in memory: {e}")

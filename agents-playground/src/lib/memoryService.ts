@@ -4,7 +4,7 @@ type MemoryMetric = {
     id: string;
     text: string;
     similarity: number;
-    significance: number;
+    quickrecal_score: number;
     surprise: number;
     timestamp: number;
   };
@@ -108,9 +108,9 @@ type MemoryMetric = {
         }
         
         const results = [
-          { id: '1', text: 'Sample memory result 1 matching ' + query, significance: 0.85, surprise: 0.75 },
-          { id: '2', text: 'Sample memory result 2 matching ' + query, significance: 0.65, surprise: 0.45 },
-          { id: '3', text: 'Sample memory result 3 matching ' + query, significance: 0.55, surprise: 0.35 }
+          { id: '1', text: 'Sample memory result 1 matching ' + query, quickrecal_score: 0.85, surprise: 0.75 },
+          { id: '2', text: 'Sample memory result 2 matching ' + query, quickrecal_score: 0.65, surprise: 0.45 },
+          { id: '3', text: 'Sample memory result 3 matching ' + query, quickrecal_score: 0.55, surprise: 0.35 }
         ];
         
         this.emit('search_results', { results });
@@ -233,10 +233,10 @@ type MemoryMetric = {
               this.memoryCount++;
               this.emit('memory_count', { count: this.memoryCount });
   
-              // If we received significance data, store it
-              if (data.significance !== undefined) {
+              // If we received quickrecal_score data, store it
+              if (data.quickrecal_score !== undefined) {
                 this.emit('memory_processed', { 
-                  significance: data.significance,
+                  quickrecal_score: data.quickrecal_score,
                   surprise: data.surprise || Math.random() * 0.5 // Fallback if not provided
                 });
               }

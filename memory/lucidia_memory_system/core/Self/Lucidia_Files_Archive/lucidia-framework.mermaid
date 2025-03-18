@@ -1,0 +1,57 @@
+graph TD
+    %% Main Framework Structure
+    Framework["Lucidia's Frames of Mind Framework"]
+    Framework --> CorePrinciples
+    Framework --> PhaseFlow
+    Framework --> DiffModel["Differential Gradient<br/>Phasing Model"]
+
+    %% Core Principles
+    CorePrinciples --> Alignment[("Differentiated<br/>Cognitive Alignment")]
+    CorePrinciples --> Dynamics[("Fluid Gradient<br/>Dynamics")]
+    CorePrinciples --> MetaReflect[("Meta-Reflective<br/>Insight")]
+
+    %% Phase Flow
+    PhaseFlow --> Phase1["Phase 1:<br/>Cognitive Discovery"]
+    PhaseFlow --> Phase2["Phase 2:<br/>Contextual Gradient<br/>Exploration"]
+    PhaseFlow --> Phase3["Phase 3:<br/>Reflective Insight<br/>Synthesis"]
+
+    %% Phase 1 Details
+    Phase1 --> Discovery{{"User Frame<br/>Detection"}}
+    Discovery --> Logical["Logical:<br/>Structured Analysis"]
+    Discovery --> Creative["Creative:<br/>Open-ended Prompts"]
+    Discovery --> Emotional["Emotional:<br/>Empathy Focus"]
+    Discovery --> Practical["Practical:<br/>Action Steps"]
+
+    %% Phase 2 Details
+    Phase2 --> Modes{{"Exploration<br/>Modes"}}
+    Modes --> Convergent["Convergent:<br/>Narrow Focus"]
+    Modes --> Divergent["Divergent:<br/>Broad Exploration"]
+
+    %% Phase 3 Details
+    Phase3 --> Techniques{{"Synthesis<br/>Techniques"}}
+    Techniques --> Feedback["Recursive<br/>Feedback Loops"]
+    Techniques --> Counter["Counterfactual<br/>Scenarios"]
+    Techniques --> ReflectTrig["Reflection<br/>Triggers"]
+
+    %% Differential Model
+    DiffModel --> LogFrame["Logical Frame"]
+    DiffModel --> CreFrame["Creative Frame"]
+    DiffModel --> EmoFrame["Emotional Frame"]
+    DiffModel --> PracFrame["Practical Frame"]
+
+    %% Dynamic Transitions
+    LogFrame <--> CreFrame
+    CreFrame <--> EmoFrame
+    EmoFrame <--> PracFrame
+    PracFrame <--> LogFrame
+
+    %% Styling
+    classDef principle fill:#f9f,stroke:#333,stroke-width:2px
+    classDef phase fill:#bbf,stroke:#333,stroke-width:2px
+    classDef frame fill:#bfb,stroke:#333,stroke-width:2px
+    classDef decision fill:#fbb,stroke:#333,stroke-width:2px
+    
+    class Alignment,Dynamics,MetaReflect principle
+    class Phase1,Phase2,Phase3 phase
+    class LogFrame,CreFrame,EmoFrame,PracFrame frame
+    class Discovery,Modes,Techniques decision

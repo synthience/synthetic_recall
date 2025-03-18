@@ -226,7 +226,7 @@ export const MemoryDashboardTile: React.FC<MemoryDashboardTileProps> = ({
                     Match: {(memory.similarity * 100).toFixed(1)}%
                   </div>
                   <div className="text-amber-400 text-xs font-mono bg-amber-900/20 px-2 py-1 rounded-sm">
-                    Significance: {memory.significance.toFixed(2)}
+                    Quickrecal Score: {memory.quickrecal_score.toFixed(2)}
                   </div>
                   <div className="text-violet-400 text-xs font-mono bg-violet-900/20 px-2 py-1 rounded-sm">
                     Surprise: {memory.surprise.toFixed(2)}
@@ -293,14 +293,14 @@ export const MemoryDashboardTile: React.FC<MemoryDashboardTileProps> = ({
                 {/* Bars */}
                 {searchResults.slice(0, 5).map((memory, index) => (
                   <div key={`metric-${memory.id}`} className="flex gap-1 h-full items-end z-10">
-                    {/* Significance bar */}
+                    {/* Quickrecal Score bar */}
                     <div 
                       className="w-4 bg-gradient-to-t from-amber-500 to-amber-300 relative group"
-                      style={{ height: `${memory.significance * 100}%` }}
+                      style={{ height: `${memory.quickrecal_score * 100}%` }}
                     >
                       <div className="absolute -top-6 left-1/2 transform -translate-x-1/2 hidden group-hover:block">
                         <div className="text-xs text-amber-400 whitespace-nowrap bg-gray-900/80 px-1 py-0.5 rounded">
-                          {memory.significance.toFixed(2)}
+                          {memory.quickrecal_score.toFixed(2)}
                         </div>
                       </div>
                     </div>
@@ -324,7 +324,7 @@ export const MemoryDashboardTile: React.FC<MemoryDashboardTileProps> = ({
               <div className="flex justify-center gap-4 mt-2">
                 <div className="flex items-center gap-1">
                   <div className="w-3 h-3 bg-amber-500"></div>
-                  <span className="text-xs text-gray-400">Significance</span>
+                  <span className="text-xs text-gray-400">Quickrecal Score</span>
                 </div>
                 <div className="flex items-center gap-1">
                   <div className="w-3 h-3 bg-violet-500"></div>
@@ -363,7 +363,7 @@ export const MemoryDashboardTile: React.FC<MemoryDashboardTileProps> = ({
       {/* Neural Activity Visualization */}
       <MemoryMetrics 
         accentColor={accentColor} 
-        significance={processingMetrics?.significance}
+        quickrecal_score={processingMetrics?.quickrecal_score}
         surprise={processingMetrics?.surprise}
       />
 

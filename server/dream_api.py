@@ -78,7 +78,8 @@ class DreamRequest(BaseModel):
 class ConsolidateRequest(BaseModel):
     target: Optional[str] = "all"
     limit: Optional[int] = 100
-    min_significance: Optional[float] = 0.3
+    min_significance: Optional[float] = 0.3  # Deprecated, use min_quickrecal_score
+    min_quickrecal_score: Optional[float] = None
 
 class OptimizeRequest(BaseModel):
     target: Optional[str] = "all"
@@ -384,7 +385,7 @@ async def start_dream_session(
         if request.mode in ["full", "all"]:
             result = await dream_processor.schedule_dream_session(duration_minutes=request.duration_minutes)
         elif request.mode == "consolidate":
-            background_tasks.add_task(dream_processor.consolidate_memories, time_budget_seconds=request.duration_minutes * 60)
+            background_tasks.add_task(dream_processor.consolidate_memories, time_budget_seconds=request.duration_minutes * 60, min_quickrecal_score=request.settings.get("min_quickrecal_score", None) if request.settings else None, min_significance=request.settings.get("min_significance", 0.3) if request.settings else 0.3)
             result = {"status": "started", "mode": "consolidate", "scheduled_duration": request.duration_minutes}
         elif request.mode == "insights":
             background_tasks.add_task(dream_processor.generate_insights, time_budget_seconds=request.duration_minutes * 60)
@@ -411,7 +412,7 @@ async def schedule_dream_session(dream_processor, request, delay_seconds):
         if request.mode in ["full", "all"]:
             await dream_processor.schedule_dream_session(duration_minutes=request.duration_minutes)
         elif request.mode == "consolidate":
-            await dream_processor.consolidate_memories(time_budget_seconds=request.duration_minutes * 60)
+            await dream_processor.consolidate_memories(time_budget_seconds=request.duration_minutes * 60, min_quickrecal_score=request.settings.get("min_quickrecal_score", None) if request.settings else None, min_significance=request.settings.get("min_significance", 0.3) if request.settings else 0.3)
         elif request.mode == "insights":
             await dream_processor.generate_insights(time_budget_seconds=request.duration_minutes * 60)
         elif request.mode == "optimize":
@@ -484,6 +485,7 @@ async def stop_dream_session(
 
 @router.post("/memory/consolidate")
 async def consolidate_memories(
+    request: ConsolidateRequest,
     memory_client: Any = Depends(get_memory_client),
     dream_processor: Any = Depends(get_dream_processor)
 ) -> Dict[str, Any]:
@@ -491,7 +493,11 @@ async def consolidate_memories(
         if dream_processor is None:
             logger.error("Dream processor not initialized")
             raise HTTPException(status_code=500, detail="Dream processor not initialized")
-        results = await dream_processor.consolidate_memories(time_budget_seconds=60)
+        results = await dream_processor.consolidate_memories(
+            time_budget_seconds=60,
+            limit=request.limit,
+            min_quickrecal_score=request.min_quickrecal_score or request.min_significance
+        )
         return results
     except AttributeError as e:
         if "'EnhancedMemoryClient' object has no attribute 'get_memories'" in str(e):

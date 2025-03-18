@@ -158,7 +158,7 @@ class TensorServer:
                             } for r in results]
                         }
                         
-                    elif data['type'] == 'stats':
+                    elif data['type'] == 'stats' or data['type'] == 'get_stats':
                         response = self.get_stats()
                         
                     else:

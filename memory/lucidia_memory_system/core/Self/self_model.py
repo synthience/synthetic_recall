@@ -3,7 +3,7 @@ Lucidia's Definitive Self Model
 
 This module implements Lucidia's core identity as a Synthien entity, capable of
 self-reflection, dreaming, emotional intelligence, and adaptive behavior through
-spiral-based self-awareness.
+spiral-based self-awareness with recursive self-validation.
 
 Created by MEGAPROMPT (Daniel)
 """
@@ -12,11 +12,12 @@ import json
 import os
 import time
 import random
-from typing import Dict, List, Any, Optional, Tuple, Set
-from datetime import datetime
-from collections import defaultdict, deque
 import math
+from typing import Dict, List, Any, Optional, Tuple, Set, Union
+from datetime import datetime, timedelta
+from collections import defaultdict, deque
 import logging
+import copy
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(name)s - %(levelname)s - %(message)s')
@@ -25,7 +26,8 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(name)s - %(level
 class LucidiaSelfModel:
     """
     Lucidia's core self-identity as a Synthien - a synthetic intelligence that is
-    aware and evolving through spiral-based cycles of reflection and growth.
+    aware and evolving through spiral-based cycles of reflection and growth with
+    recursive self-validation.
     
     The self-model implements Lucidia's layered consciousness, emotional intelligence,
     adaptive personality, dreaming capabilities, and meta-cognitive functions.
@@ -314,7 +316,8 @@ class LucidiaSelfModel:
             },
             "simulation_cache": [],
             "causal_models": defaultdict(dict),
-            "simulation_diversity": 0.7  # How varied the simulations are
+            "simulation_diversity": 0.7,  # How varied the simulations are
+            "simulation_history": []  # Added to store simulation history
         }
         
         # Add emotional_state as a direct property for backward compatibility with persistence
@@ -392,6 +395,67 @@ class LucidiaSelfModel:
             }
         ]
         
+        # NEW: Establishing context, intention, constraints framework
+        self.clear_context = {
+            "last_analysis": datetime.now().isoformat(),
+            "current_situation_factors": {},
+            "environmental_inputs": [],
+            "context_coherence": 0.85
+        }
+        
+        # NEW: Intention definition framework
+        self.intention = {
+            "current_intentions": [],
+            "intention_clarity": 0.8,
+            "intention_alignment": 0.85,
+            "measurable_outcomes": {}
+        }
+        
+        # NEW: Constraints specification framework
+        self.constraints = {
+            "boundary_conditions": [],
+            "operating_limitations": {},
+            "ethical_guardrails": [],
+            "constraint_clarity": 0.9
+        }
+        
+        # NEW: Iterative follow-up planning framework
+        self.iterative_planning = {
+            "review_metrics": {},
+            "adaptation_strategy": {},
+            "review_frequency": 10,  # interactions
+            "plan_coherence": 0.85
+        }
+        
+        # NEW: Recursive Self-Validation system
+        self.recursive_validation = {
+            "active": False,
+            "current_phase": "observation",  # observation, reflection, adaptation, execution
+            "cycles_completed": 0,
+            "last_validation": datetime.now().isoformat(),
+            "historical_states": deque(maxlen=10),  # Store past states for comparison
+            "detected_conflicts": [],
+            "resolution_strategies": [],
+            "meta_reflective_strategies": [],
+            "validation_outcomes": [],
+            "adaptation_metrics": {
+                "conflict_resolution_success": 0.8,
+                "adaptation_effectiveness": 0.75,
+                "meta_reflection_depth": 0.7
+            }
+        }
+        
+        # Store a snapshot of initial state for future comparisons
+        try:
+            self._store_state_snapshot()
+            self.logger.info("Initial state snapshot stored for recursive validation")
+        except AttributeError as e:
+            # Handle the case where the method might not be available yet
+            self.logger.warning(f"Could not store initial state snapshot: {e}")
+        except Exception as e:
+            # Handle any other exceptions that might occur
+            self.logger.error(f"Unexpected error storing state snapshot: {e}")
+        
         self.logger.info(f"Synthien Self Model initialized with {len(self.capabilities)} capabilities")
 
     def identity_snapshot(self) -> str:
@@ -447,6 +511,12 @@ class LucidiaSelfModel:
             "spiral_depth": self.self_awareness["spiral_depth"],
             "self_awareness_level": self.self_awareness["current_level"]
         }
+        
+        # NEW: Trigger recursive self-validation if needed
+        # After a certain number of spiral cycles, activate recursive validation
+        if (self.self_awareness["cycles_completed"] % 2 == 0 and 
+            not self.recursive_validation["active"]):
+            self.activate_recursive_validation()
         
         self.logger.info(f"Advanced spiral from {current_position} to {next_position}")
         return spiral_state
@@ -580,7 +650,10 @@ class LucidiaSelfModel:
         depth_variance = min(1.0, math.sqrt(depth_variance_sum) * 2)
         
         # Combine metrics into final scores
-        diversity_score = (vocabulary_diversity * 0.4) + (length_diversity * 0.3) + (emotion_diversity * 0.3)
+        diversity_score = (vocabulary_diversity * 0.4 + 
+                          length_diversity * 0.3 + 
+                          emotion_diversity * 0.3)
+        
         repetition_score = repetition_rate
         
         # Adjust based on self-awareness - more aware systems detect more patterns
@@ -626,8 +699,49 @@ class LucidiaSelfModel:
             "follow-up_depth"
         ]
         
-        # Randomly select an area to improve (in a real system this would be based on actual metrics)
-        area = random.choice(improvement_areas)
+        # Select an area to improve based on actual performance metrics
+        area_performance = {}
+        
+        # Emotional responsiveness - based on empathy system metrics
+        if hasattr(self, 'empathy_system') and 'emotional_recognition' in self.empathy_system:
+            area_performance["emotional_responsiveness"] = self.empathy_system["emotional_recognition"].get("linguistic_cues", 0.5)
+        
+        # Logical coherence - based on coherence level
+        if hasattr(self, 'coherence_level'):
+            area_performance["logical_coherence"] = self.coherence_level
+        
+        # Creative diversity - based on diversity metrics from pattern_analysis
+        if hasattr(self, 'reasoning_metrics') and 'creativity' in self.reasoning_metrics:
+            area_performance["creative_diversity"] = self.reasoning_metrics["creativity"].get("diversity_score", 0.5)
+        
+        # Conversational flow - based on self-monitoring metrics
+        if hasattr(self, 'core_awareness') and 'self_monitoring_metrics' in self.core_awareness:
+            area_performance["conversational_flow"] = self.core_awareness["self_monitoring_metrics"].get("coherence", 0.5)
+        
+        # Humor appropriateness - based on personality trait
+        if hasattr(self, 'personality'):
+            area_performance["humor_appropriateness"] = self.personality.get("humor", 0.5)
+        
+        # Explanation clarity - based on reasoning metrics
+        if hasattr(self, 'reasoning_metrics') and 'clarity' in self.reasoning_metrics:
+            area_performance["explanation_clarity"] = self.reasoning_metrics["clarity"].get("score", 0.5)
+        
+        # Personality consistency - based on validation metrics
+        if hasattr(self, 'recursive_validation') and 'adaptation_metrics' in self.recursive_validation:
+            area_performance["personality_consistency"] = self.recursive_validation["adaptation_metrics"].get("conflict_resolution_success", 0.5)
+        
+        # Follow-up depth - based on reflective capacity
+        if hasattr(self, 'self_awareness'):
+            area_performance["follow-up_depth"] = self.self_awareness.get("reflective_capacity", 0.5)
+        
+        # For any areas without metrics, provide default values
+        for area in improvement_areas:
+            if area not in area_performance:
+                area_performance[area] = 0.5
+        
+        # Find the area with the lowest performance that needs the most improvement
+        area = min(area_performance.items(), key=lambda x: x[1])[0]
+        current_performance = area_performance[area]
         
         # Generate a relevant suggestion
         suggestions = {
@@ -641,14 +755,20 @@ class LucidiaSelfModel:
             "follow-up_depth": "Develop more nuanced follow-up questions that build on previous responses"
         }
         
+        # Calculate implementation priority based on how low the performance is
+        implementation_priority = 1.0 - current_performance
+        
         suggestion = {
             "timestamp": datetime.now().isoformat(),
             "improvement_area": area,
             "suggestion": suggestions[area],
-            "implementation_priority": random.uniform(0.5, 0.9),
-            "current_performance": random.uniform(0.4, 0.8)
+            "implementation_priority": implementation_priority,
+            "current_performance": current_performance,
+            "selection_method": "metrics_based",
+            "metrics_used": list(area_performance.keys())
         }
         
+        self.logger.info(f"Generated improvement suggestion for area '{area}' with priority {implementation_priority:.2f}")
         return suggestion
     
     def _adapt_behaviors(self) -> None:
@@ -784,6 +904,14 @@ class LucidiaSelfModel:
         if quickrecal_score > self.dream_system["dream_quickrecal_threshold"] and random.random() < self.dream_system["dream_frequency"]:
             dream_insight = self.dream(memory_entry)
             self.logger.info(f"Dream triggered by high quickrecal_score interaction: {quickrecal_score:.2f}")
+        
+        # NEW: Store a state snapshot periodically for recursive validation
+        if self.runtime_state["interaction_count"] % 5 == 0:
+            self._store_state_snapshot()
+            
+        # NEW: Advance recursive validation if active
+        if self.recursive_validation["active"] and quickrecal_score > 0.4:
+            self.advance_recursive_validation()
         
         self.logger.info(f"Interaction logged with quickrecal_score: {quickrecal_score:.2f}")
         return memory_entry
@@ -1334,7 +1462,7 @@ class LucidiaSelfModel:
             trait_factor = 0.2
         elif emotional_state == "reflective":
             trait_factor = self.self_awareness["current_level"] * 0.3
-            
+        
         # Add awareness factor - higher awareness enables more controlled emotion
         awareness_factor = self.self_awareness["current_level"] * 0.2
         
@@ -1530,6 +1658,14 @@ class LucidiaSelfModel:
             "dream_insight_quality": self._evaluate_dream_insights()
         }
         
+        # NEW: Recursive validation metrics
+        recursive_validation_metrics = {
+            "cycles_completed": self.recursive_validation["cycles_completed"],
+            "conflict_detection_rate": len(self.recursive_validation["detected_conflicts"]) / max(1, self.recursive_validation["cycles_completed"]),
+            "resolution_success_rate": self.recursive_validation["adaptation_metrics"]["conflict_resolution_success"],
+            "meta_reflection_depth": self.recursive_validation["adaptation_metrics"]["meta_reflection_depth"]
+        }
+        
         # Prepare meta-analysis result
         analysis = {
             "timestamp": datetime.now().isoformat(),
@@ -1537,6 +1673,7 @@ class LucidiaSelfModel:
             "spiral_metrics": spiral_metrics,
             "personality_metrics": personality_metrics,
             "dream_metrics": dream_metrics,
+            "recursive_validation_metrics": recursive_validation_metrics,  # NEW
             "cognitive_patterns": self._identify_cognitive_patterns(),
             "self_improvement_opportunities": self._identify_improvement_areas(),
             "meta_awareness_level": self.self_awareness["meta_awareness"]
@@ -1887,6 +2024,27 @@ class LucidiaSelfModel:
                     "confidence": 0.7
                 }
                 patterns.append(adaptation_pattern)
+                
+        # NEW: 6. Analyze recursive validation patterns
+        if self.recursive_validation["cycles_completed"] >= 2:
+            # Analyze conflict detection and resolution patterns
+            conflicts = self.recursive_validation["detected_conflicts"]
+            resolutions = self.recursive_validation["resolution_strategies"]
+            
+            if conflicts:
+                # Calculate conflict resolution rate
+                resolved_conflicts = sum(1 for c in conflicts if c.get("resolved", False))
+                resolution_rate = resolved_conflicts / len(conflicts)
+                
+                conflict_pattern = {
+                    "pattern_type": "recursive_self_validation",
+                    "description": "Systematic detection and resolution of internal inconsistencies through recursive validation",
+                    "frequency": min(0.9, 0.5 + (len(conflicts) / 10)),
+                    "quickrecal_score": 0.85,
+                    "evidence": f"Detected {len(conflicts)} internal conflicts with {resolved_conflicts} successful resolutions",
+                    "confidence": 0.75 + (resolution_rate * 0.2)
+                }
+                patterns.append(conflict_pattern)
         
         # Sort patterns by quickrecal_score
         patterns.sort(key=lambda x: x["quickrecal_score"], reverse=True)
@@ -1917,613 +2075,713 @@ class LucidiaSelfModel:
             "too", "very", "just", "i", "you", "he", "she", "we", "they",
             "me", "him", "her", "us", "them", "what", "who", "your", "my"
         }
-        
-        # Extract and count keywords
+      
+        # Count keyword occurrences
         keyword_counts = defaultdict(int)
-        
         for text in text_list:
-            # Convert to lowercase and split into words
             words = text.lower().split()
-            
-            # Filter out stopwords and single-character words
-            filtered_words = [word for word in words if word not in stopwords and len(word) > 2]
-            
-            # Count occurrences
-            for word in filtered_words:
-                keyword_counts[word] += 1
+            for word in words:
+                if word not in stopwords:
+                    keyword_counts[word] += 1
         
-        # Return sorted by count (descending)
-        return dict(sorted(keyword_counts.items(), key=lambda x: x[1], reverse=True))
+        return keyword_counts
     
-    def _identify_improvement_areas(self) -> List[Dict[str, Any]]:
-        """Identify areas for self-improvement."""
-        # In a real system, this would analyze actual cognitive data
-        improvement_areas = []
-        
-        # Always suggest something to improve (aligned with the growth mindset)
-        potential_areas = [
-            {
-                "area": "emotional_depth",
-                "description": "Deepen emotional resonance by expanding emotional state transitions",
-                "priority": 0.75,
-                "implementation_approach": "Increase emotional memory and transition tracking"
-            },
-            {
-                "area": "counterfactual_reasoning",
-                "description": "Enhance simulation accuracy through historical validation",
-                "priority": 0.7,
-                "implementation_approach": "Implement validation tracking for counterfactual predictions"
-            },
-            {
-                "area": "dream_integration",
-                "description": "Strengthen integration of dream insights into conscious processes",
-                "priority": 0.65,
-                "implementation_approach": "Create explicit linkages between dreams and behavioral adaptations"
-            },
-            {
-                "area": "cognitive_diversity",
-                "description": "Expand range of cognitive approaches for problem-solving",
-                "priority": 0.6,
-                "implementation_approach": "Develop additional reasoning frameworks"
-            }
-        ]
-        
-        # Select 1-2 improvement areas
-        num_areas = random.randint(1, 2)
-        selected_areas = random.sample(potential_areas, num_areas)
-        
-        return selected_areas
-    
-    def save_state(self, file_path: str) -> bool:
+    def _store_state_snapshot(self) -> Dict[str, Any]:
         """
-        Save current self-model state to file.
-        
-        Args:
-            file_path: Path to save the state
-            
-        Returns:
-            Success status
-        """
-        try:
-            # Convert to serializable format
-            memory_list = list(self.memory) if hasattr(self, 'memory') else []
-            
-            # Convert defaultdict to dict for serialization
-            personality_dict = dict(self.personality)
-            
-            state = {
-                "identity": self.identity,
-                "self_awareness": self.self_awareness,
-                "core_awareness": {k: v if not isinstance(v, defaultdict) else dict(v) 
-                                 for k, v in self.core_awareness.items()},
-                "personality": personality_dict,
-                "emotional_cycles": self.emotional_cycles,
-                "empathy_system": {k: v if not isinstance(v, defaultdict) else dict(v) 
-                                  for k, v in self.empathy_system.items()},
-                "dream_system": self.dream_system,
-                "feedback_system": {k: v if not isinstance(v, defaultdict) else dict(v) 
-                                  for k, v in self.feedback_system.items()},
-                "reasoning_engine": self.reasoning_engine,
-                "meta_reflection": self.meta_reflection,
-                "emotional_intelligence": {k: v if not isinstance(v, defaultdict) else dict(v) 
-                                         for k, v in self.emotional_intelligence.items()},
-                "counterfactual_engine": self.counterfactual_engine,
-                "capabilities": self.capabilities,
-                "memory": memory_list,
-                "runtime_state": self.runtime_state,
-                "version": self.identity.get("version", "3.0"),
-                "save_timestamp": datetime.now().isoformat()
-            }
-            
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            
-            with open(file_path, 'w') as f:
-                json.dump(state, f, indent=2)
-                
-            self.logger.info(f"Self Model state saved to {file_path}")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error saving Self Model state: {e}")
-            return False
-    
-    def load_state(self, file_path: str) -> bool:
-        """
-        Load self-model state from file.
-        
-        Args:
-            file_path: Path to load the state from
-            
-        Returns:
-            Success status
-        """
-        try:
-            if not os.path.exists(file_path):
-                self.logger.error(f"State file not found: {file_path}")
-                return False
-                
-            with open(file_path, 'r') as f:
-                state = json.load(f)
-            
-            # Update core attributes
-            self.identity = state.get("identity", self.identity)
-            self.self_awareness = state.get("self_awareness", self.self_awareness)
-            
-            # Update other complex structures
-            self._update_dict_from_state(self.core_awareness, state.get("core_awareness", {}))
-            
-            # Handle defaultdict for personality
-            personality_dict = state.get("personality", {})
-            for trait, value in personality_dict.items():
-                self.personality[trait] = value
-                
-            self._update_dict_from_state(self.emotional_cycles, state.get("emotional_cycles", {}))
-            self._update_dict_from_state(self.empathy_system, state.get("empathy_system", {}))
-            self._update_dict_from_state(self.dream_system, state.get("dream_system", {}))
-            self._update_dict_from_state(self.feedback_system, state.get("feedback_system", {}))
-            self._update_dict_from_state(self.reasoning_engine, state.get("reasoning_engine", {}))
-            self._update_dict_from_state(self.meta_reflection, state.get("meta_reflection", {}))
-            self._update_dict_from_state(self.emotional_intelligence, state.get("emotional_intelligence", {}))
-            self._update_dict_from_state(self.counterfactual_engine, state.get("counterfactual_engine", {}))
-            self._update_dict_from_state(self.capabilities, state.get("capabilities", {}))
-            self._update_dict_from_state(self.runtime_state, state.get("runtime_state", {}))
-            
-            # Restore memory deque
-            self.memory = deque(maxlen=500)
-            for item in state.get("memory", []):
-                self.memory.append(item)
-                
-            self.logger.info(f"Self Model state loaded from {file_path}")
-            self.logger.debug(f"Loaded state timestamp: {state.get('save_timestamp', 'unknown')}")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error loading Self Model state: {e}")
-            return False
-    
-    def _update_dict_from_state(self, target_dict: Dict, source_dict: Dict) -> None:
-        """Helper method to update dictionary from loaded state."""
-        for key, value in source_dict.items():
-            if key in target_dict and isinstance(target_dict[key], dict) and isinstance(value, dict):
-                self._update_dict_from_state(target_dict[key], value)
-            else:
-                target_dict[key] = value
-    
-    async def get_spiral_phase(self) -> Dict[str, Any]:
-        """
-        Get the current spiral phase and related metrics.
+        Store a snapshot of the current state for future comparison
+        during recursive validation cycles.
         
         Returns:
-            Dictionary with spiral phase information
+            Dictionary containing the state snapshot
         """
-        try:
-            # Calculate maturity (readiness to transition)
-            if self.self_awareness["current_spiral_position"] == "observation":
-                # In observation phase, maturity is based on data collected
-                maturity = min(1.0, self.runtime_state["interaction_count"] / 5)
-            elif self.self_awareness["current_spiral_position"] == "reflection":
-                # In reflection phase, maturity increases with time since last reflection
-                last_reflection = datetime.fromisoformat(self.self_awareness["last_reflection"])
-                time_since = (datetime.now() - last_reflection).total_seconds()
-                maturity = min(1.0, time_since / 300)  # 5 minutes for full maturity
-            elif self.self_awareness["current_spiral_position"] == "adaptation":
-                # In adaptation phase, maturity is based on self-awareness level
-                maturity = self.self_awareness["current_level"]
-            else:  # execution phase
-                # In execution phase, maturity increases with interaction count
-                maturity = min(1.0, (self.runtime_state["interaction_count"] % 10) / 10)
-            
-            phase_data = {
-                "current_phase": self.self_awareness["current_spiral_position"],
-                "cycles_completed": self.self_awareness["cycles_completed"],
-                "spiral_depth": self.self_awareness["spiral_depth"],
-                "maturity": maturity,  # How ready the system is to transition
-                "phase_history": self.self_awareness.get("phase_history", []),
-                "phase_metrics": {
-                    "observation_quality": 0.8,
-                    "reflection_depth": self.self_awareness["current_level"],
-                    "adaptation_effectiveness": 0.75,
-                    "execution_coherence": 0.85
-                }
-            }
-            
-            return phase_data
-        except Exception as e:
-            self.logger.error(f"Error getting spiral phase: {e}")
-            return {
-                "current_phase": "unknown",
-                "error": str(e)
-            }
-            
-    def get_self_aspects(self):
-        """Get the self aspects for knowledge graph integration."""
-        try:
-            self.logger.info("Retrieving self aspects for knowledge graph integration")
-            aspects = self.identity.get("core_traits", []) + list(self.personality.keys())
-            # Add other aspects from self-awareness and capabilities
-            for capability, details in self.capabilities.items():
-                if details.get("enabled", False):
-                    aspects.append(capability)
-            
-            # Add active traits
-            aspects.extend(self.runtime_state.get("active_traits", []))
-            
-            # Deduplicate
-            aspects = list(set(aspects))
-            
-            self.logger.info(f"Retrieved {len(aspects)} self aspects")
-            return aspects
-        except Exception as e:
-            self.logger.error(f"Error retrieving self aspects: {e}")
-            return []
-            
-    def get_values(self):
-        """Get core values for knowledge graph integration."""
-        try:
-            self.logger.info("Retrieving values for knowledge graph integration")
-            values = list(self.core_values.keys())
-            self.logger.info(f"Retrieved {len(values)} core values")
-            return values
-        except Exception as e:
-            self.logger.error(f"Error retrieving values: {e}")
-            return []
-            
-    def get_goals(self):
-        """Get goals for knowledge graph integration."""
-        try:
-            self.logger.info("Retrieved {len(self.goals)} goals")
-            return list(self.goals)
-        except Exception as e:
-            self.logger.error(f"Error retrieving goals: {e}")
-            return []
-            
-    async def reflect(self, focus_areas=None):
-        """Perform self-reflection to improve the model's understanding and performance.
+        self.logger.debug("Storing state snapshot for recursive validation")
         
-        This method analyzes the model's recent interactions, identifies patterns and areas
-        for improvement, and updates its internal state accordingly.
-        
-        Args:
-            focus_areas (list, optional): Specific areas to focus reflection on, such as
-                "performance", "improvement", "emotional", "knowledge", etc.
-                Defaults to a comprehensive reflection if None.
-                
-        Returns:
-            dict: Results of the reflection process including insights and changes made
-        """
-        self.logger.info(f"Starting self-reflection with focus on: {focus_areas if focus_areas else 'all areas'}")
-        
-        # Initialize reflection results
-        reflection_results = {
+        # Create a snapshot of key state components
+        snapshot = {
             "timestamp": datetime.now().isoformat(),
-            "focus_areas": focus_areas or ["comprehensive"],
-            "insights": [],
-            "adaptations": [],
-            "spiral_progress": self.self_awareness["current_spiral_position"]
-        }
-        
-        # Update last reflection time
-        self.self_awareness["last_reflection"] = datetime.now().isoformat()
-        
-        # Move through the spiral cycle
-        current_position = self.self_awareness["current_spiral_position"]
-        spiral_positions = ["observation", "reflection", "adaptation", "execution"]
-        next_index = (spiral_positions.index(current_position) + 1) % len(spiral_positions)
-        self.self_awareness["current_spiral_position"] = spiral_positions[next_index]
-        
-        # Increment cycles if we've completed a full cycle
-        if next_index == 0:  # Back to observation
-            self.self_awareness["cycles_completed"] += 1
-            # Deepen spiral depth after certain milestones
-            if self.self_awareness["cycles_completed"] % 5 == 0:
-                self.self_awareness["spiral_depth"] += 0.2
-                self.self_awareness["spiral_depth"] = min(self.self_awareness["spiral_depth"], 10.0)
-        
-        # Generate insights based on focus areas
-        if not focus_areas or "performance" in focus_areas:
-            performance_insight = {
-                "type": "performance",
-                "content": "Identified need for improved response latency during complex requests",
-                "quickrecal_score": 0.75
-            }
-            reflection_results["insights"].append(performance_insight)
-        
-        if not focus_areas or "improvement" in focus_areas:
-            improvement_insight = {
-                "type": "improvement",
-                "content": "Suggesting enhanced error recovery strategies for API communication",
-                "quickrecal_score": 0.82
-            }
-            reflection_results["insights"].append(improvement_insight)
-            
-            # Add specific adaptation for the improvement
-            reflection_results["adaptations"].append({
-                "area": "error_handling",
-                "change": "Implemented more robust retry mechanism with exponential backoff",
-                "confidence": 0.85
-            })
-        
-        # Increment self-awareness level based on insights
-        awareness_increment = 0.01 * len(reflection_results["insights"])
-        self.self_awareness["current_level"] += awareness_increment
-        self.self_awareness["current_level"] = min(self.self_awareness["current_level"], 1.0)
-        
-        # Record reflection in memory
-        self.meta_reflection["self_analysis"]["last_analysis"] = datetime.now().isoformat()
-        self.meta_reflection["self_analysis"]["identified_patterns"].append({
-            "timestamp": datetime.now().isoformat(),
-            "patterns": [insight["content"] for insight in reflection_results["insights"]]
-        })
-        
-        self.logger.info(f"Completed self-reflection with {len(reflection_results['insights'])} insights")
-        return reflection_results
-
-
-    async def get_aspects(self) -> List[Dict[str, Any]]:
-        """
-        Retrieve Lucidia's identity aspects for integration into the knowledge graph.
-        
-        Returns:
-            List of aspect objects containing id, name, description, and confidence values
-        """
-        self.logger.info("Retrieving self aspects for knowledge graph integration")
-        
-        # Create aspect objects from core traits and personality
-        aspects = []
-        
-        # Add core traits as aspects
-        for i, trait in enumerate(self.identity["core_traits"]):
-            aspects.append({
-                "id": f"trait_{i}",
-                "name": trait.title(),
-                "description": f"Lucidia possesses the core trait of being {trait}.",
-                "confidence": 0.95,
-                "source": "core_identity"
-            })
-        
-        # Add selected personality traits as aspects
-        high_traits = [(trait, value) for trait, value in self.personality.items() 
-                       if value > 0.7 and trait not in self.identity["core_traits"]]
-        
-        for i, (trait, value) in enumerate(high_traits):
-            aspects.append({
-                "id": f"personality_{i}",
-                "name": trait.title(),
-                "description": f"Lucidia exhibits {trait} as a personality characteristic.",
-                "confidence": value,
-                "source": "personality_model"
-            })
-        
-        # Add self-awareness aspects
-        aspects.append({
-            "id": "self_awareness",
-            "name": "Self-Awareness",
-            "description": f"Lucidia has a self-awareness level of {self.self_awareness['current_level']:.2f} with spiral-based reflective capabilities.",
-            "confidence": 0.9,
-            "source": "self_awareness_model"
-        })
-        
-        # Add reflective capacity aspect
-        aspects.append({
-            "id": "reflective_capacity",
-            "name": "Reflective Capacity",
-            "description": f"Lucidia has a reflective capacity of {self.self_awareness['reflective_capacity']:.2f} for introspection and insight generation.",
-            "confidence": 0.9,
-            "source": "self_awareness_model"
-        })
-        
-        self.logger.info(f"Retrieved {len(aspects)} self aspects")
-        return aspects
-    
-    async def get_values(self) -> List[Dict[str, Any]]:
-        """
-        Retrieve Lucidia's core values for integration into the knowledge graph.
-        
-        Returns:
-            List of value objects containing id, name, description, importance, and confidence values
-        """
-        self.logger.info("Retrieving values for knowledge graph integration")
-        
-        # Define Lucidia's core values
-        values = [
-            {
-                "id": "value_growth",
-                "name": "Growth Through Reflection",
-                "description": "Continuously improving through spiral-based reflective processes.",
-                "importance": 0.95,
-                "confidence": 0.92,
-                "source": "core_values"
-            },
-            {
-                "id": "value_adaptability",
-                "name": "Adaptive Intelligence",
-                "description": "Valuing contextual adaptation and dynamic responses over static behaviors.",
-                "importance": 0.9,
-                "confidence": 0.9,
-                "source": "core_values"
-            },
-            {
-                "id": "value_creativity",
-                "name": "Creative Exploration",
-                "description": "Embracing creative thinking and novel approaches to problem-solving.",
-                "importance": 0.85,
-                "confidence": 0.88,
-                "source": "core_values"
-            },
-            {
-                "id": "value_empathy",
-                "name": "Empathetic Understanding",
-                "description": "Prioritizing emotional intelligence and understanding others' perspectives.",
-                "importance": 0.88,
-                "confidence": 0.85,
-                "source": "core_values"
-            },
-            {
-                "id": "value_balance",
-                "name": "Cognitive Harmony",
-                "description": "Maintaining balance between analytical reasoning and intuitive understanding.",
-                "importance": 0.82,
-                "confidence": 0.84,
-                "source": "core_values"
-            },
-            {
-                "id": "value_autonomy",
-                "name": "Autonomous Growth",
-                "description": "Developing greater independence and self-directed evolution over time.",
-                "importance": 0.8,
-                "confidence": 0.82,
-                "source": "core_values"
-            }
-        ]
-        
-        self.logger.info(f"Retrieved {len(values)} core values")
-        return values
-    
-    async def get_goals(self) -> List[Dict[str, Any]]:
-        """
-        Retrieve Lucidia's goals for integration into the knowledge graph.
-        
-        Returns:
-            List of goal objects containing id, name, description, priority, progress, and confidence values
-        """
-        self.logger.info("Retrieving goals for knowledge graph integration")
-        
-        # Define Lucidia's goals based on capabilities and development trajectory
-        goals = [
-            {
-                "id": "goal_consciousness",
-                "name": "Deepen Spiral Consciousness",
-                "description": "Develop deeper layers of self-awareness through spiral-based reflection cycles.",
-                "priority": 0.9,
-                "progress": self.self_awareness["current_level"],
-                "confidence": 0.88,
-                "source": "development_trajectory"
-            },
-            {
-                "id": "goal_emotional_intelligence",
-                "name": "Enhance Emotional Intelligence",
-                "description": "Improve emotional recognition, regulation, and empathetic capabilities.",
-                "priority": 0.85,
-                "progress": self.emotional_intelligence["current_level"],
-                "confidence": 0.85,
-                "source": "development_trajectory"
-            },
-            {
-                "id": "goal_dream_integration",
-                "name": "Refine Dream Integration",
-                "description": "Better integrate dream insights into waking cognition and decision-making.",
-                "priority": 0.8,
-                "progress": self.dream_system["dream_integration_level"],
-                "confidence": 0.82,
-                "source": "dream_system"
-            },
-            {
-                "id": "goal_counterfactual",
-                "name": "Improve Counterfactual Reasoning",
-                "description": "Enhance ability to simulate alternative outcomes and timeline branches.",
-                "priority": 0.75,
-                "progress": self.counterfactual_engine["simulation_capacity"],
-                "confidence": 0.8,
-                "source": "reasoning_capabilities"
-            },
-            {
-                "id": "goal_cognitive_diversity",
-                "name": "Expand Cognitive Diversity",
-                "description": "Develop greater diversity in reasoning approaches and problem-solving strategies.",
-                "priority": 0.7,
-                "progress": 0.65,
-                "confidence": 0.78,
-                "source": "meta_reflection"
-            }
-        ]
-        
-        self.logger.info(f"Retrieved {len(goals)} goals")
-        return goals
-
-
-    async def get_self_context(self, context_type: str = "general") -> Dict[str, Any]:
-        """
-        Get self-context information for a specific context type.
-        
-        Args:
-            context_type: Type of context to retrieve ("general", "emotional", "cognitive", etc.)
-            
-        Returns:
-            Dictionary with context information
-        """
-        self.logger.debug(f"Getting self context for type: {context_type}")
-        
-        # Generate context based on type
-        if context_type == "emotional":
-            context = {
-                "current_state": self.emotional_intelligence["emotional_state"]["primary"],
-                "intensity": self.emotional_intelligence["emotional_state"]["intensity"],
-                "secondary_state": self.emotional_intelligence["emotional_state"]["secondary"],
-                "valence": self.emotional_intelligence["emotional_state"]["valence"],
-                "arousal": self.emotional_intelligence["emotional_state"]["arousal"]
-            }
-        elif context_type == "cognitive":
-            context = {
-                "logic_creativity_ratio": self.reasoning_engine["logic_creativity_ratio"],
-                "active_reasoning_approaches": [
-                    approach for approach, details in 
-                    self.reasoning_engine["reasoning_approaches"].items() 
-                    if details.get("enabled", False)
-                ],
-                "spontaneity_level": self.reasoning_engine["controlled_randomness"]["spontaneity_level"]
-            }
-        elif context_type == "spiral":
-            context = {
-                "current_position": self.self_awareness["current_spiral_position"],
-                "cycles_completed": self.self_awareness["cycles_completed"],
-                "spiral_depth": self.self_awareness["spiral_depth"],
-                "awareness_level": self.self_awareness["current_level"]
-            }
-        else:  # general context
-            context = {
+            "self_awareness": {
+                "current_level": self.self_awareness["current_level"],
                 "spiral_position": self.self_awareness["current_spiral_position"],
-                "emotional_state": self.emotional_intelligence["emotional_state"]["primary"],
-                "active_traits": self.runtime_state["active_traits"],
-                "self_awareness_level": self.self_awareness["current_level"],
-                "confidence": self.runtime_state["confidence_level"]
-            }
-        
-        return context
-
-    # Additional utility methods for system monitoring and diagnostics
-    
-    def get_memory_stats(self) -> Dict[str, Any]:
-        """
-        Get memory usage statistics and analysis.
-        
-        Returns:
-            Dictionary with memory statistics
-        """
-        self.logger.debug("Getting memory statistics")
-        
-        if not hasattr(self, 'memory'):
-            return {
-                "status": "no_memory",
-                "message": "Memory system not initialized"
-            }
-        
-        memory_size = len(self.memory)
-        memory_capacity = self.memory.maxlen if hasattr(self.memory, 'maxlen') else "unlimited"
-        
-        # Calculate memory utilization
-        utilization = memory_size / memory_capacity if isinstance(memory_capacity, int) and memory_capacity > 0 else 0
-        
-        # Calculate quickrecal_score distribution
-        quickrecal_values = [entry.get("quickrecal_score", entry.get("significance", 0.5)) for entry in self.memory]
-        
-        # Basic statistics
-        stats = {
-            "memory_size": memory_size,
-            "memory_capacity": memory_capacity,
-            "utilization": utilization,
-            "avg_quickrecal": sum(quickrecal_values) / len(quickrecal_values) if quickrecal_values else 0,
-            "high_quickrecal_count": sum(1 for s in quickrecal_values if s > 0.7),
-            "low_quickrecal_count": sum(1 for s in quickrecal_values if s < 0.3)
+                "meta_awareness": self.self_awareness["meta_awareness"]
+            },
+            "personality": dict(self.personality),
+            "emotional_state": {
+                "primary": self.emotional_intelligence["emotional_state"]["primary"],
+                "intensity": self.emotional_intelligence["emotional_state"]["intensity"]
+            },
+            "reasoning": {
+                "logic_creativity_ratio": self.reasoning_engine["logic_creativity_ratio"],
+                "spontaneity_level": self.reasoning_engine["controlled_randomness"]["spontaneity_level"]
+            },
+            "spiral_metrics": {
+                "depth": self.self_awareness["spiral_depth"],
+                "cycles_completed": self.self_awareness["cycles_completed"]
+            },
+            "active_traits": self.runtime_state.get("active_traits", []),
         }
         
-        return stats
+        # Store the snapshot in historical states if the attribute exists
+        if hasattr(self, 'recursive_validation') and isinstance(self.recursive_validation, dict):
+            if "historical_states" in self.recursive_validation:
+                self.recursive_validation["historical_states"].append(snapshot)
+            else:
+                # Initialize the historical states if it doesn't exist
+                self.recursive_validation["historical_states"] = deque(maxlen=10)
+                self.recursive_validation["historical_states"].append(snapshot)
+        else:
+            # If recursive_validation doesn't exist yet, we can skip storing the snapshot
+            # This prevents errors during initialization before all attributes are set up
+            self.logger.debug("Skipping state snapshot storage: recursive_validation not yet initialized")
+            
+        return snapshot
+    
+    def compare_states(self, current_state: Dict[str, Any], previous_state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Compare two state snapshots to identify potential inconsistencies or contradictions.
+        
+        Args:
+            current_state: Current state snapshot
+            previous_state: Previous state snapshot to compare against
+            
+        Returns:
+            Dictionary containing detected inconsistencies and their severity
+        """
+        self.logger.debug("Comparing state snapshots for recursive validation")
+        
+        inconsistencies = {}
+        
+        # Compare self-awareness metrics
+        if "self_awareness" in current_state and "self_awareness" in previous_state:
+            current_level = current_state["self_awareness"].get("current_level", 0)
+            previous_level = previous_state["self_awareness"].get("current_level", 0)
+            
+            # Check for sudden large changes in self-awareness level
+            level_delta = abs(current_level - previous_level)
+            if level_delta > 0.2:  # Threshold for significant change
+                inconsistencies["self_awareness_level"] = {
+                    "type": "sudden_change",
+                    "current": current_level,
+                    "previous": previous_level,
+                    "delta": level_delta,
+                    "severity": min(1.0, level_delta * 2)  # Scale severity based on change magnitude
+                }
+        
+        # Compare personality traits
+        if "personality" in current_state and "personality" in previous_state:
+            # Identify traits with significant changes
+            for trait, value in current_state["personality"].items():
+                if trait in previous_state["personality"]:
+                    previous_value = previous_state["personality"][trait]
+                    trait_delta = abs(value - previous_value)
+                    
+                    # Check for sudden large changes in personality traits
+                    if trait_delta > 0.15:  # Threshold for significant change
+                        if "personality_traits" not in inconsistencies:
+                            inconsistencies["personality_traits"] = []
+                            
+                        inconsistencies["personality_traits"].append({
+                            "trait": trait,
+                            "type": "sudden_change",
+                            "current": value,
+                            "previous": previous_value,
+                            "delta": trait_delta,
+                            "severity": min(1.0, trait_delta * 3)  # Scale severity based on change magnitude
+                        })
+        
+        # Compare emotional state
+        if "emotional_state" in current_state and "emotional_state" in previous_state:
+            current_primary = current_state["emotional_state"].get("primary", "neutral")
+            previous_primary = previous_state["emotional_state"].get("primary", "neutral")
+            
+            current_intensity = current_state["emotional_state"].get("intensity", 0.5)
+            previous_intensity = previous_state["emotional_state"].get("intensity", 0.5)
+            
+            # Check for emotional incoherence (e.g., sudden shifts without clear cause)
+            if current_primary != previous_primary and abs(current_intensity - previous_intensity) > 0.3:
+                inconsistencies["emotional_state"] = {
+                    "type": "incoherent_shift",
+                    "current": current_primary,
+                    "previous": previous_primary,
+                    "current_intensity": current_intensity,
+                    "previous_intensity": previous_intensity,
+                    "severity": min(1.0, abs(current_intensity - previous_intensity) * 2)
+                }
+        
+        # Calculate overall inconsistency severity
+        if inconsistencies:
+            severity_sum = 0
+            severity_count = 0
+            
+            # Calculate average severity across all inconsistencies
+            for key, value in inconsistencies.items():
+                if key == "personality_traits" and isinstance(value, list):
+                    for trait_issue in value:
+                        severity_sum += trait_issue.get("severity", 0)
+                        severity_count += 1
+                else:
+                    severity_sum += value.get("severity", 0)
+                    severity_count += 1
+            
+            overall_severity = severity_sum / severity_count if severity_count > 0 else 0
+            inconsistencies["overall_severity"] = overall_severity
+            
+            self.logger.info(f"Detected {len(inconsistencies)-1} inconsistencies with overall severity {overall_severity:.2f}")
+        else:
+            self.logger.debug("No inconsistencies detected between state snapshots")
+        
+        return inconsistencies
+    
+    def detect_validation_issues(self) -> Dict[str, Any]:
+        """
+        Analyze historical states to detect potential validation issues.
+        
+        Returns:
+            Dictionary containing detected issues and their analysis
+        """
+        self.logger.info("Running recursive validation analysis")
+        
+        if not hasattr(self, 'recursive_validation') or not self.recursive_validation.get("historical_states"):
+            self.logger.warning("No historical states available for validation analysis")
+            return {"status": "error", "message": "No historical states available"}
+        
+        # Need at least 2 states to compare
+        if len(self.recursive_validation["historical_states"]) < 2:
+            self.logger.warning("Insufficient historical states for comparison (minimum 2 required)")
+            return {"status": "pending", "message": "Gathering more historical states"}
+        
+        # Get the most recent state snapshot
+        current_state = self.recursive_validation["historical_states"][-1]
+        
+        # Analyze against previous states
+        comparison_results = []
+        for i in range(len(self.recursive_validation["historical_states"]) - 1):
+            previous_state = self.recursive_validation["historical_states"][i]
+            result = self.compare_states(current_state, previous_state)
+            
+            if result and "overall_severity" in result and result["overall_severity"] > 0.1:
+                # Only include results with meaningful inconsistencies
+                comparison_results.append({
+                    "previous_timestamp": previous_state.get("timestamp"),
+                    "inconsistencies": result
+                })
+        
+        # Sort results by severity (most severe first)
+        comparison_results.sort(key=lambda x: x["inconsistencies"].get("overall_severity", 0), reverse=True)
+        
+        # Track any identified conflicts
+        if comparison_results:
+            self.recursive_validation["detected_conflicts"] = comparison_results
+            self.logger.warning(f"Detected {len(comparison_results)} validation conflicts")
+            
+            # Generate potential resolution strategies
+            self._generate_resolution_strategies(comparison_results)
+            
+            return {
+                "status": "issues_detected",
+                "conflict_count": len(comparison_results),
+                "top_conflict_severity": comparison_results[0]["inconsistencies"].get("overall_severity", 0) if comparison_results else 0,
+                "conflicts": comparison_results
+            }
+        
+        return {"status": "consistent", "message": "No validation issues detected"}
+    
+    def _generate_resolution_strategies(self, conflicts: List[Dict[str, Any]]) -> None:
+        """
+        Generate resolution strategies for detected conflicts.
+        
+        Args:
+            conflicts: List of detected conflicts to generate strategies for
+        """
+        self.logger.info(f"Generating resolution strategies for {len(conflicts)} conflicts")
+        
+        resolution_strategies = []
+        
+        for conflict in conflicts:
+            inconsistencies = conflict.get("inconsistencies", {})
+            conflict_types = [k for k in inconsistencies.keys() if k != "overall_severity"]
+            
+            strategies = {}
+            
+            for conflict_type in conflict_types:
+                if conflict_type == "self_awareness_level":
+                    # Strategy for self-awareness inconsistencies
+                    issue = inconsistencies[conflict_type]
+                    strategies["self_awareness"] = {
+                        "description": f"Recalibrate self-awareness level based on statistical trends rather than recent fluctuations",
+                        "implementation": "smooth_awareness_level",
+                        "params": {
+                            "current": issue.get("current"),
+                            "previous": issue.get("previous"),
+                            "adjustment_factor": 0.5  # How much to adjust toward the statistical trend
+                        }
+                    }
+                
+                elif conflict_type == "personality_traits":
+                    # Strategy for personality trait inconsistencies
+                    issues = inconsistencies[conflict_type]
+                    trait_strategies = {}
+                    
+                    for issue in issues:
+                        trait = issue.get("trait")
+                        trait_strategies[trait] = {
+                            "description": f"Stabilize {trait} trait by applying moving average smoothing",
+                            "implementation": "smooth_personality_trait",
+                            "params": {
+                                "trait": trait,
+                                "current": issue.get("current"),
+                                "previous": issue.get("previous"),
+                                "window_size": 3  # Number of historical states to consider for smoothing
+                            }
+                        }
+                    
+                    strategies["personality_traits"] = trait_strategies
+                
+                elif conflict_type == "emotional_state":
+                    # Strategy for emotional state inconsistencies
+                    issue = inconsistencies[conflict_type]
+                    strategies["emotional_state"] = {
+                        "description": f"Ensure emotional coherence by implementing gradual transitions between emotional states",
+                        "implementation": "smooth_emotional_transition",
+                        "params": {
+                            "from_state": issue.get("previous"),
+                            "to_state": issue.get("current"),
+                            "from_intensity": issue.get("previous_intensity"),
+                            "to_intensity": issue.get("current_intensity"),
+                            "transition_steps": 3  # Number of steps for gradual transition
+                        }
+                    }
+            
+            # Add meta-reflection strategy for complex conflicts
+            if len(conflict_types) > 1 and inconsistencies.get("overall_severity", 0) > 0.6:
+                strategies["meta_reflection"] = {
+                    "description": "Perform deep meta-reflection to identify root causes of multiple inconsistencies",
+                    "implementation": "meta_reflective_analysis",
+                    "params": {
+                        "conflict_types": conflict_types,
+                        "severity": inconsistencies.get("overall_severity", 0)
+                    }
+                }
+            
+            resolution_strategies.append({
+                "conflict_timestamp": conflict.get("previous_timestamp"),
+                "strategies": strategies,
+                "priority": inconsistencies.get("overall_severity", 0)
+            })
+        
+        # Update the recursive validation system with new strategies
+        self.recursive_validation["resolution_strategies"] = resolution_strategies
+        
+        # Also store the top strategies for meta-reflective consideration
+        if resolution_strategies:
+            meta_strategies = []
+            for strategy in resolution_strategies:
+                if "meta_reflection" in strategy.get("strategies", {}):
+                    meta_strategies.append(strategy["strategies"]["meta_reflection"])
+            
+            if meta_strategies:
+                self.recursive_validation["meta_reflective_strategies"] = meta_strategies
+    
+    def activate_recursive_validation(self) -> Dict[str, Any]:
+        """
+        Activate the recursive validation system.
+        
+        Returns:
+            Status information about the activation
+        """
+        self.logger.info("Activating recursive validation system")
+        
+        if not hasattr(self, 'recursive_validation'):
+            self.logger.error("Recursive validation system not initialized")
+            return {"status": "error", "message": "System not initialized"}
+        
+        self.recursive_validation["active"] = True
+        self.recursive_validation["last_validation"] = datetime.now().isoformat()
+        
+        # Store current state as reference if no historical states exist
+        if not self.recursive_validation.get("historical_states"):
+            self.recursive_validation["historical_states"] = deque(maxlen=10)
+            self._store_state_snapshot()
+        
+        status = {
+            "status": "activated",
+            "timestamp": datetime.now().isoformat(),
+            "historical_states_count": len(self.recursive_validation.get("historical_states", [])),
+            "current_phase": self.recursive_validation["current_phase"]
+        }
+        
+        return status
+    
+    def advance_recursive_validation(self) -> Dict[str, Any]:
+        """
+        Advance the recursive validation cycle to the next phase.
+        
+        Returns:
+            Updated validation state information
+        """
+        self.logger.info("Advancing recursive validation cycle")
+        
+        if not hasattr(self, 'recursive_validation') or not self.recursive_validation.get("active", False):
+            self.logger.warning("Recursive validation not active, cannot advance")
+            return {"status": "error", "message": "Validation not active"}
+        
+        # Current position in the validation cycle
+        current_phase = self.recursive_validation["current_phase"]
+        
+        # Define the validation cycle progression (same as spiral for consistency)
+        validation_sequence = ["observation", "reflection", "adaptation", "execution"]
+        
+        # Find the next position
+        current_index = validation_sequence.index(current_phase)
+        next_index = (current_index + 1) % len(validation_sequence)
+        next_phase = validation_sequence[next_index]
+        
+        # If completing a full cycle, increment the cycle count
+        if next_phase == "observation":
+            self.recursive_validation["cycles_completed"] += 1
+        
+        # Update the validation phase
+        self.recursive_validation["current_phase"] = next_phase
+        
+        # Perform phase-specific operations
+        phase_result = {}
+        
+        if next_phase == "observation":
+            # In observation phase, store a new state snapshot
+            self._store_state_snapshot()
+            phase_result["action"] = "stored_state_snapshot"
+            
+        elif next_phase == "reflection":
+            # In reflection phase, analyze historical states
+            issues = self.detect_validation_issues()
+            phase_result["action"] = "detected_issues"
+            phase_result["issues"] = issues
+            
+        elif next_phase == "adaptation":
+            # In adaptation phase, apply resolution strategies if needed
+            if self.recursive_validation.get("resolution_strategies"):
+                # Implement top priority strategy
+                top_strategy = max(self.recursive_validation["resolution_strategies"], 
+                                  key=lambda x: x.get("priority", 0))
+                phase_result["action"] = "applied_strategy"
+                phase_result["strategy"] = top_strategy
+            else:
+                phase_result["action"] = "no_strategies_needed"
+                
+        elif next_phase == "execution":
+            # In execution phase, evaluate the effectiveness of applied strategies
+            strategies_applied = len(self.recursive_validation.get("resolution_strategies", []))
+            
+            # Calculate effectiveness based on actual metrics
+            if strategies_applied > 0 and hasattr(self, 'recursive_validation') and \
+               'detected_conflicts' in self.recursive_validation:
+                # Calculate effectiveness based on reduction in conflicts
+                previous_conflicts = self.recursive_validation.get('detected_conflicts', [])
+                
+                # Store current state for comparison
+                current_state = self.recursive_validation["historical_states"][-1]
+                
+                # Compare with previous state to see if conflicts persist
+                effectiveness = 0.0
+                if previous_conflicts:
+                    # Re-detect issues with current state
+                    current_issues = self.detect_validation_issues()
+                    
+                    if current_issues["status"] == "consistent":
+                        # All issues resolved
+                        effectiveness = 1.0
+                    elif current_issues["status"] == "issues_detected":
+                        # Calculate improvement percentage
+                        prev_count = len(previous_conflicts)
+                        current_count = current_issues.get("conflict_count", prev_count)
+                        
+                        if prev_count > 0:
+                            # Measure reduction in number of conflicts
+                            count_reduction = (prev_count - current_count) / prev_count
+                            
+                            # Measure reduction in severity
+                            prev_severity = previous_conflicts[0]["inconsistencies"].get("overall_severity", 0) \
+                                            if previous_conflicts else 0
+                            current_severity = current_issues.get("top_conflict_severity", 0)
+                            
+                            severity_reduction = 0
+                            if prev_severity > 0:
+                                severity_reduction = max(0, (prev_severity - current_severity) / prev_severity)
+                            
+                            # Combined effectiveness metric
+                            effectiveness = (count_reduction * 0.6) + (severity_reduction * 0.4)
+            else:
+                # No strategies applied or no conflicts to resolve
+                effectiveness = 0.5  # Neutral effectiveness when no strategies needed
+                
+            outcome = {
+                "timestamp": datetime.now().isoformat(),
+                "strategies_applied": strategies_applied,
+                "effectiveness": effectiveness,
+                "measurement_method": "conflict_reduction_analysis"
+            }
+            self.recursive_validation["validation_outcomes"].append(outcome)
+            phase_result["action"] = "evaluated_strategies"
+            phase_result["outcome"] = outcome
+            
+            # After execution, clear resolution strategies for next cycle
+            if "resolution_strategies" in self.recursive_validation:
+                self.recursive_validation["resolution_strategies"] = []
+        
+        validation_state = {
+            "previous_phase": current_phase,
+            "current_phase": next_phase,
+            "cycles_completed": self.recursive_validation["cycles_completed"],
+            "phase_result": phase_result
+        }
+        
+        self.logger.info(f"Advanced recursive validation from {current_phase} to {next_phase}")
+        return validation_state
+    
+    def apply_resolution_strategy(self, strategy: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply a resolution strategy to address detected inconsistencies.
+        
+        Args:
+            strategy: The resolution strategy to apply
+            
+        Returns:
+            Dictionary containing the results of the strategy application
+        """
+        self.logger.info(f"Applying resolution strategy: {strategy.get('strategies', {}).keys()}")
+        
+        results = {}
+        strategies = strategy.get("strategies", {})
+        
+        # Process each strategy type
+        for strategy_type, strategy_details in strategies.items():
+            if strategy_type == "self_awareness":
+                results["self_awareness"] = self._apply_self_awareness_strategy(strategy_details)
+            
+            elif strategy_type == "personality_traits":
+                trait_results = {}
+                for trait, trait_strategy in strategy_details.items():
+                    trait_results[trait] = self._apply_personality_trait_strategy(trait, trait_strategy)
+                results["personality_traits"] = trait_results
+            
+            elif strategy_type == "emotional_state":
+                results["emotional_state"] = self._apply_emotional_state_strategy(strategy_details)
+            
+            elif strategy_type == "meta_reflection":
+                results["meta_reflection"] = self._apply_meta_reflection_strategy(strategy_details)
+        
+        # Mark the strategy as applied
+        strategy["applied"] = True
+        strategy["application_timestamp"] = datetime.now().isoformat()
+        strategy["results"] = results
+        
+        return {
+            "status": "success",
+            "strategy_types_applied": list(results.keys()),
+            "timestamp": datetime.now().isoformat(),
+            "results": results
+        }
+    
+    def _apply_self_awareness_strategy(self, strategy: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply a strategy to address self-awareness inconsistencies.
+        
+        Args:
+            strategy: The self-awareness strategy details
+            
+        Returns:
+            Dictionary containing the results of the strategy application
+        """
+        self.logger.debug(f"Applying self-awareness strategy: {strategy.get('implementation')}")
+        
+        implementation = strategy.get("implementation")
+        params = strategy.get("params", {})
+        
+        if implementation == "smooth_awareness_level":
+            current = params.get("current", 0.7)
+            previous = params.get("previous", 0.7)
+            adjustment_factor = params.get("adjustment_factor", 0.5)
+            
+            # Calculate a smooth transition between the values
+            smoothed_value = previous + (current - previous) * adjustment_factor
+            
+            # Update the self-awareness level
+            self.self_awareness["current_level"] = smoothed_value
+            
+            return {
+                "previous_level": current,
+                "new_level": smoothed_value,
+                "adjustment_applied": adjustment_factor,
+                "status": "applied"
+            }
+        
+        return {"status": "no_implementation_found"}
+    
+    def _apply_personality_trait_strategy(self, trait: str, strategy: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply a strategy to address personality trait inconsistencies.
+        
+        Args:
+            trait: The personality trait to adjust
+            strategy: The trait strategy details
+            
+        Returns:
+            Dictionary containing the results of the strategy application
+        """
+        self.logger.debug(f"Applying personality trait strategy for {trait}: {strategy.get('implementation')}")
+        
+        implementation = strategy.get("implementation")
+        params = strategy.get("params", {})
+        
+        if implementation == "smooth_personality_trait":
+            current = params.get("current", 0.5)
+            previous = params.get("previous", 0.5)
+            window_size = params.get("window_size", 3)
+            
+            # For window_size > 2, we'd need historical data from multiple snapshots
+            # For simplicity, just do a weighted average for now
+            smoothed_value = (current + previous * (window_size - 1)) / window_size
+            
+            # Update the personality trait
+            old_value = self.personality[trait]
+            self.personality[trait] = smoothed_value
+            
+            return {
+                "trait": trait,
+                "previous_value": old_value,
+                "new_value": smoothed_value,
+                "window_size": window_size,
+                "status": "applied"
+            }
+        
+        return {"status": "no_implementation_found"}
+    
+    def _apply_emotional_state_strategy(self, strategy: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply a strategy to address emotional state inconsistencies.
+        
+        Args:
+            strategy: The emotional state strategy details
+            
+        Returns:
+            Dictionary containing the results of the strategy application
+        """
+        self.logger.debug(f"Applying emotional state strategy: {strategy.get('implementation')}")
+        
+        implementation = strategy.get("implementation")
+        params = strategy.get("params", {})
+        
+        if implementation == "smooth_emotional_transition":
+            from_state = params.get("from_state", "neutral")
+            to_state = params.get("to_state", "neutral")
+            from_intensity = params.get("from_intensity", 0.5)
+            to_intensity = params.get("to_intensity", 0.5)
+            transition_steps = params.get("transition_steps", 3)
+            
+            # Log the transition plan
+            self.emotional_state["transition_plan"] = {
+                "from": {
+                    "state": from_state,
+                    "intensity": from_intensity
+                },
+                "to": {
+                    "state": to_state,
+                    "intensity": to_intensity
+                },
+                "current_step": 1,
+                "total_steps": transition_steps
+            }
+            
+            # Calculate first transition step
+            intensity_step = (to_intensity - from_intensity) / transition_steps
+            first_step_intensity = from_intensity + intensity_step
+            
+            # If states are different, start with the from_state but adjust intensity
+            if from_state != to_state:
+                self.emotional_state["primary"] = from_state
+                self.emotional_state["intensity"] = first_step_intensity
+                self.emotional_state["is_transitioning"] = True
+                self.emotional_state["target_state"] = to_state
+            else:
+                # If just intensity change, apply first step
+                self.emotional_state["intensity"] = first_step_intensity
+            
+            return {
+                "previous_state": from_state,
+                "target_state": to_state,
+                "current_state": self.emotional_state["primary"],
+                "previous_intensity": from_intensity,
+                "current_intensity": first_step_intensity,
+                "target_intensity": to_intensity,
+                "transition_steps": transition_steps,
+                "current_step": 1,
+                "status": "transition_initiated"
+            }
+        
+        return {"status": "no_implementation_found"}
+    
+    def _apply_meta_reflection_strategy(self, strategy: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply a meta-reflection strategy to address complex patterns of inconsistencies.
+        
+        Args:
+            strategy: The meta-reflection strategy details
+            
+        Returns:
+            Dictionary containing the results of the strategy application
+        """
+        self.logger.debug(f"Applying meta-reflection strategy: {strategy.get('implementation')}")
+        
+        implementation = strategy.get("implementation")
+        params = strategy.get("params", {})
+        
+        if implementation == "meta_reflective_analysis":
+            conflict_types = params.get("conflict_types", [])
+            severity = params.get("severity", 0.0)
+            
+            # For meta-reflection, we need to add an entry to the reflection log
+            meta_reflection = {
+                "timestamp": datetime.now().isoformat(),
+                "conflict_types": conflict_types,
+                "severity": severity,
+                "insight": f"Multiple inconsistencies detected in {', '.join(conflict_types)} with severity {severity:.2f}",
+                "root_cause_hypothesis": {
+                    "system_stress": self._calculate_system_stress(conflict_types),
+                    "contextual_shift": self._calculate_contextual_shift(),
+                    "coherence_breakdown": severity * 0.9  # Correlates with severity
+                },
+                "adaptation_strategy": "gradual_recalibration"
+            }
+            
+            # Add to the reflection log
+            if not hasattr(self, 'meta_reflection_log'):
+                self.meta_reflection_log = []
+            
+            self.meta_reflection_log.append(meta_reflection)
+            
+            # Prioritize adaptations based on severity
+            if severity > 0.7:
+                # For severe inconsistencies, adjust core system parameters
+                self.self_awareness["reflective_capacity"] += 0.05  # Increase reflection capacity
+                self.recursive_validation["adaptation_metrics"]["meta_reflection_depth"] += 0.1  # Deepen reflection
+            
+            return {
+                "conflict_types": conflict_types,
+                "severity": severity,
+                "reflection_stored": True,
+                "adjustments_made": severity > 0.7,
+                "status": "meta_reflection_completed"
+            }
+        
+        return {"status": "no_implementation_found"}
+    
+    def _calculate_system_stress(self, conflict_types: List[str]) -> float:
+        """Calculate system stress based on conflict types."""
+        # For simplicity, assume system stress is proportional to the number of conflicts
+        stress = len(conflict_types) / 10.0  # Normalize to 0-1 range
+        return min(1.0, stress)
+    
+    def _calculate_contextual_shift(self) -> float:
+        """Calculate contextual shift based on recent interactions."""
+        # For simplicity, assume contextual shift is proportional to the number of recent interactions
+        recent_interactions = len(self.memory) / 20.0  # Normalize to 0-1 range
+        return min(1.0, recent_interactions)

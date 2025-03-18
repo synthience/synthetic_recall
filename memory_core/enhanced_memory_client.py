@@ -498,7 +498,7 @@ class EnhancedMemoryClient(BaseMemoryClient,
             
         try:
             # Handle role parameter for backward compatibility
-            if role is not None and sender == "user":
+            if role is not None:
                 sender = role
                 
             # Calculate quickrecal_score if not provided
@@ -1023,7 +1023,7 @@ class EnhancedMemoryClient(BaseMemoryClient,
             else:
                 memories = await self.get_important_memories(
                     limit=limit,
-                    min_significance=min_quickrecal_score or 0.5  # For backward compatibility
+                    min_quickrecal_score=min_quickrecal_score
                 )
                 
                 if not memories:

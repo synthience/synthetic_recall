@@ -325,7 +325,19 @@ class LucidiaVoiceAgent:
 
             # Store transcript in memory system
             if is_final:
-                await self.memory_client.store_transcript(text, sender="user")
+                # Calculate quickrecal_score for user messages
+                # Use higher base score for questions or emotional content
+                base_quickrecal_score = 0.6
+                question_factor = 0.15 if "?" in text else 0.0
+                emotion_factor = 0.1 if "!" in text else 0.0
+                quickrecal_score = min(base_quickrecal_score + question_factor + emotion_factor, 0.95)
+                
+                # Pass explicit quickrecal_score when storing transcript
+                await self.memory_client.store_transcript(
+                    text, 
+                    sender="user", 
+                    quickrecal_score=quickrecal_score
+                )
                 
                 # Detect and store personal details from user message
                 await self.memory_client.detect_and_store_personal_details(text, role="user")
@@ -358,7 +370,19 @@ class LucidiaVoiceAgent:
                     
                     # Store assistant response in memory
                     if response:
-                        await self.memory_client.store_transcript(response, role="assistant")
+                        # Calculate quickrecal_score for assistant responses
+                        # Use higher scores for longer or emotionally-charged responses
+                        base_quickrecal_score = 0.5
+                        length_factor = min(len(response) / 200, 0.2)  # Cap at 0.2
+                        emotion_factor = 0.1 if any(marker in response for marker in ["!", "?", "excited", "happy", "sad"]) else 0.0
+                        quickrecal_score = min(base_quickrecal_score + length_factor + emotion_factor, 0.9)
+                        
+                        # Pass explicit quickrecal_score when storing transcript
+                        await self.memory_client.store_transcript(
+                            response, 
+                            role="assistant", 
+                            quickrecal_score=quickrecal_score
+                        )
                         
                     # Track metrics
                     self.metrics["conversations"] += 1

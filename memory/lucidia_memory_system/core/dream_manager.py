@@ -648,14 +648,16 @@ class DreamManager:
             }
     
     async def consolidate_memories(self, target: str = "all", limit: int = 100, 
-                                min_significance: float = 0.3) -> Dict[str, Any]:
+                                min_significance: float = 0.3,
+                                min_quickrecal_score: float = None) -> Dict[str, Any]:
         """
         Consolidate memories in the memory system using the Dream API.
         
         Args:
             target: Memory target to consolidate ('all', 'recent', 'dreams')
             limit: Maximum number of memories to consolidate
-            min_significance: Minimum significance threshold
+            min_significance: Minimum significance threshold (deprecated, use min_quickrecal_score)
+            min_quickrecal_score: Minimum quick recall score threshold
             
         Returns:
             Consolidation results
@@ -670,7 +672,8 @@ class DreamManager:
             return await self.dream_api_client.consolidate_memories(
                 target=target,
                 limit=limit,
-                min_significance=min_significance
+                min_significance=min_significance,
+                min_quickrecal_score=min_quickrecal_score
             )
         except Exception as e:
             logger.error(f"Error consolidating memories: {e}")

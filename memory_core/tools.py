@@ -126,7 +126,7 @@ class ToolsMixin:
             logger.error(f"Error processing embedding: {e}")
             return None, 0.0
     
-    async def search_memory(self, query: str, limit: int = 5, min_significance: float = 0.0) -> List[Dict]:
+    async def search_memory(self, query: str, limit: int = 5, min_significance: float = 0.0, min_quickrecal_score: float = None) -> List[Dict]:
         """
         Search for memories based on semantic similarity with asynchronous processing.
         Implements a multi-tier search strategy with fallbacks and parallel processing.
@@ -134,7 +134,8 @@ class ToolsMixin:
         Args:
             query: The search query
             limit: Maximum number of results
-            min_significance: Minimum significance threshold
+            min_significance: Minimum significance threshold (deprecated, use min_quickrecal_score)
+            min_quickrecal_score: Minimum quickrecal score threshold
             
         Returns:
             List of matching memories
@@ -143,6 +144,9 @@ class ToolsMixin:
             logger.warning(f"Invalid query for search_memory: {type(query)}")
             return []
 
+        # Use min_quickrecal_score if provided, otherwise fall back to min_significance
+        threshold = min_quickrecal_score if min_quickrecal_score is not None else min_significance
+        
         try:
             # Track performance metrics
             start_time = time.time()
@@ -162,7 +166,8 @@ class ToolsMixin:
                         connection=connection,
                         query=query,
                         limit=limit,
-                        min_significance=min_significance
+                        min_significance=threshold,
+                        min_quickrecal_score=min_quickrecal_score
                     )
                     
                     if semantic_results:
@@ -183,7 +188,8 @@ class ToolsMixin:
                     self._perform_local_text_search,
                     query=query,
                     limit=limit,
-                    min_significance=min_significance
+                    min_significance=threshold,
+                    min_quickrecal_score=min_quickrecal_score
                 )
                 
                 if local_results:
@@ -201,19 +207,26 @@ class ToolsMixin:
             logger.error(f"Error searching memory: {e}")
             return []
     
-    async def _perform_semantic_search(self, connection, query: str, limit: int, min_significance: float) -> List[Dict]:
+    async def _perform_semantic_search(self, connection, query: str, limit: int, min_significance: float, min_quickrecal_score: float = None) -> List[Dict]:
         """
         Perform semantic search using tensor server connection.
         
         Args:
             connection: WebSocket connection to tensor server
             query: Search query
-            limit: Maximum results to return
-            min_significance: Minimum significance threshold
+            limit: Maximum number of results to return
+            min_significance: Minimum significance threshold (deprecated, use min_quickrecal_score)
+            min_quickrecal_score: Minimum quickrecal score threshold
             
         Returns:
             List of matching memories
         """
+        if not query or not connection:
+            return []
+        
+        # Use min_quickrecal_score if provided, otherwise fall back to min_significance
+        threshold = min_quickrecal_score if min_quickrecal_score is not None else min_significance
+        
         # Send search request with proper format
         timestamp = time.time()
         message_id = f"{int(timestamp * 1000)}-{id(self):x}"
@@ -225,7 +238,7 @@ class ToolsMixin:
             "type": "search",
             "text": query,
             "limit": request_limit,
-            "min_significance": max(0.0, min_significance - 0.2),  # Lower threshold for more results
+            "min_significance": max(0.0, threshold - 0.2),  # Lower threshold for more results
             "client_id": self.session_id or "unknown",
             "message_id": message_id,
             "timestamp": timestamp
@@ -256,7 +269,7 @@ class ToolsMixin:
                 # Filter by significance
                 filtered_results = [
                     r for r in results 
-                    if r.get('significance', 0.0) >= min_significance
+                    if r.get('significance', 0.0) >= threshold
                 ]
                 
                 # Sort by similarity and limit
@@ -275,15 +288,16 @@ class ToolsMixin:
             
         return []
     
-    def _perform_local_text_search(self, query: str, limit: int, min_significance: float) -> List[Dict]:
+    def _perform_local_text_search(self, query: str, limit: int, min_significance: float, min_quickrecal_score: float = None) -> List[Dict]:
         """
         Perform local text-based search on in-memory data.
         This is a CPU-bound operation that should be run in a separate thread.
         
         Args:
             query: Search query
-            limit: Maximum results to return
-            min_significance: Minimum significance threshold
+            limit: Maximum number of results to return
+            min_significance: Minimum significance threshold (deprecated, use min_quickrecal_score)
+            min_quickrecal_score: Minimum quickrecal score threshold
             
         Returns:
             List of matching memories
@@ -291,12 +305,15 @@ class ToolsMixin:
         query_lower = query.lower()
         results = []
         
+        # Use min_quickrecal_score if provided, otherwise fall back to min_significance
+        threshold = min_quickrecal_score if min_quickrecal_score is not None else min_significance
+        
         # First try exact substring match (highest confidence)
         for memory in self.memories:
             content = memory.get("content", "")
             significance = memory.get("significance", 0.0)
             
-            if significance >= min_significance and content and query_lower in content.lower():
+            if significance >= threshold and content and query_lower in content.lower():
                 # Create a result with the same structure as tensor server results
                 results.append({
                     **memory,
@@ -317,7 +334,7 @@ class ToolsMixin:
                     content = memory.get("content", "")
                     significance = memory.get("significance", 0.0)
                     
-                    if significance >= min_significance and content:
+                    if significance >= threshold and content:
                         content_words = set(content.lower().split())
                         common_words = query_words.intersection(content_words)
                         
@@ -520,7 +537,7 @@ class ToolsMixin:
         except Exception as e:
             logger.error(f"Error checking persistence task result for memory {memory_id}: {e}")
 
-    async def search_memory_tool(self, query: str = "", memory_type: str = "all", max_results: int = 5, min_significance: float = 0.0, time_range: Dict = None) -> Dict[str, Any]:
+    async def search_memory_tool(self, query: str = "", memory_type: str = "all", max_results: int = 5, min_significance: float = 0.0, min_quickrecal_score: float = None, time_range: Dict = None) -> Dict[str, Any]:
         """
         Tool implementation for memory search.
         
@@ -528,7 +545,8 @@ class ToolsMixin:
             query: The search query string
             memory_type: Type of memory to search (default: all)
             max_results: Maximum number of results to return (default: 5)
-            min_significance: Minimum significance threshold (default: 0.0)
+            min_significance: Minimum significance threshold (default: 0.0) (deprecated, use min_quickrecal_score)
+            min_quickrecal_score: Minimum quickrecal score threshold (default: None)
             time_range: Optional time range filter
             
         Returns:
@@ -610,7 +628,8 @@ class ToolsMixin:
                     # If we couldn't get it directly, search with higher significance threshold
                     # and add category-specific terms to the query
                     enhanced_query = f"{category} {query}"
-                    min_significance = max(min_significance, 0.7)  # Raise significance threshold
+                    threshold = min_quickrecal_score if min_quickrecal_score is not None else min_significance
+                    threshold = max(threshold, 0.7)  # Raise threshold
                     
                     # Use the enhanced query for the search
                     query = enhanced_query
@@ -620,8 +639,11 @@ class ToolsMixin:
         # For backward compatibility, use max_results as limit
         limit = max_results
         
+        # Use min_quickrecal_score if provided, otherwise fall back to min_significance
+        threshold = min_quickrecal_score if min_quickrecal_score is not None else min_significance
+        
         # Perform the actual memory search
-        results = await self.search_memory(query, limit, min_significance)
+        results = await self.search_memory(query, limit, threshold)
         
         # Format for LLM consumption
         formatted_results = [
@@ -697,13 +719,14 @@ class ToolsMixin:
             logger.error(f"Error storing important memory: {e}")
             return {"success": False, "error": str(e)}
     
-    async def get_important_memories(self, limit: int = 5, min_significance: float = 0.7) -> Dict[str, Any]:
+    async def get_important_memories(self, limit: int = 5, min_significance: float = 0.7, min_quickrecal_score: float = None) -> Dict[str, Any]:
         """
         Tool implementation to get important memories.
         
         Args:
             limit: Maximum number of memories to return
-            min_significance: Minimum significance threshold (0.0-1.0)
+            min_significance: Minimum significance threshold (0.0-1.0) (deprecated, use min_quickrecal_score)
+            min_quickrecal_score: Minimum quickrecal score threshold (0.0-1.0)
             
         Returns:
             Dict with important memories
@@ -715,13 +738,16 @@ class ToolsMixin:
                 logger.error("Failed to get tensor connection for important memories")
                 return {"memories": [], "count": 0}
             
+            # Use min_quickrecal_score if provided, otherwise fall back to min_significance
+            threshold = min_quickrecal_score if min_quickrecal_score is not None else min_significance
+            
             # Send search request with proper format
             timestamp = time.time()
             message_id = f"{int(timestamp * 1000)}-{id(self):x}"
             
             payload = {
                 "type": "search",
-                "min_significance": min_significance,
+                "min_significance": threshold,
                 "limit": limit,
                 "sort_by": "significance",
                 "client_id": self.session_id or "unknown",
@@ -943,6 +969,11 @@ class ToolsMixin:
                                 "type": "number",
                                 "description": "Minimum significance threshold (0.0 to 1.0)",
                                 "default": 0.0
+                            },
+                            "min_quickrecal_score": {
+                                "type": "number",
+                                "description": "Minimum quickrecal score threshold (0.0 to 1.0)",
+                                "default": None
                             }
                         },
                         "required": ["query"]
@@ -988,6 +1019,11 @@ class ToolsMixin:
                                 "type": "number",
                                 "description": "Minimum significance threshold (0.0 to 1.0)",
                                 "default": 0.7
+                            },
+                            "min_quickrecal_score": {
+                                "type": "number",
+                                "description": "Minimum quickrecal score threshold (0.0 to 1.0)",
+                                "default": None
                             }
                         }
                     }

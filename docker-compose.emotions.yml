@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  emotion-analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile.emotions
+    container_name: emotion-analyzer
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONPATH=/workspace/project
+    volumes:
+      - ./:/workspace/project
+      - ./models:/workspace/models
+    ports:
+      - "5007:5007"  # WebSocket port
+      - "8007:8007"  # REST API port
+    networks:
+      - lucid-net
+    command: >
+      bash -c "/opt/nvidia/nvidia_entrypoint.sh python /workspace/project/emotion_analyzer.py"
+    tty: true
+    stdin_open: true
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+
+  port-forward-5007:
+    image: alpine/socat
+    container_name: port-forward-5007
+    depends_on:
+      - emotion-analyzer
+    command: tcp-listen:5007,fork,reuseaddr tcp-connect:emotion-analyzer:5007
+    network_mode: host
+
+  port-forward-8007:
+    image: alpine/socat
+    container_name: port-forward-8007
+    depends_on:
+      - emotion-analyzer
+    command: tcp-listen:8007,fork,reuseaddr tcp-connect:emotion-analyzer:8007
+    network_mode: host
+
+networks:
+  lucid-net:
+    external: true

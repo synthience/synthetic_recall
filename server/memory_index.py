@@ -12,10 +12,14 @@ class MemoryIndex:
         self.memories = []
         self.index = None
 
-    async def add_memory(self, memory_id, embedding, timestamp, significance=1.0, content=None):
+    async def add_memory(self, memory_id, embedding, timestamp, significance=1.0, content=None, quickrecal_score=None):
         """
         Add a memory with HPC-QR 'quickrecal_score' (renamed from significance).
         """
+        # Use quickrecal_score if provided, otherwise use significance
+        if quickrecal_score is not None:
+            significance = quickrecal_score
+            
         if isinstance(embedding, torch.Tensor):
             embedding = embedding.clone().detach()
         else:

@@ -200,21 +200,30 @@ class DreamAPIClient:
                 return {"status": "error", "message": "Dream API communication failed completely"}
     
     async def consolidate_memories(self, target: str = "all", limit: int = 100, 
-                               min_significance: float = 0.3) -> Dict[str, Any]:
+                               min_significance: float = 0.3,
+                               min_quickrecal_score: float = None) -> Dict[str, Any]:
         """
         Consolidate memories in the memory system.
         
         Args:
             target: Memory target to consolidate ('all', 'recent', 'dreams')
             limit: Maximum number of memories to consolidate
-            min_significance: Minimum significance threshold
+            min_significance: Minimum significance threshold (deprecated, use min_quickrecal_score)
+            min_quickrecal_score: Minimum quick recall score threshold
             
         Returns:
             Consolidation results
         """
-        # Server just uses a simple POST to /memory/consolidate with no parameters
+        # Create request payload with parameters
+        payload = {
+            "target": target,
+            "limit": limit,
+            "min_significance": min_significance,
+            "min_quickrecal_score": min_quickrecal_score
+        }
+        
         try:
-            return await self._make_request('POST', '/memory/consolidate')
+            return await self._make_request('POST', '/memory/consolidate', json=payload)
         except Exception as e:
             logger.error(f"Error accessing /memory/consolidate: {e}")
             # Fall back to a status check

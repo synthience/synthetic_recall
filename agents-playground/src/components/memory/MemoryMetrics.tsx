@@ -5,13 +5,13 @@ import { createGlitchEffect } from '@/lib/animations';
 
 type MemoryMetricsProps = {
   accentColor: string;
-  significance?: number[];
+  quickrecal_score?: number[];
   surprise?: number[];
 };
 
 const MemoryMetrics: React.FC<MemoryMetricsProps> = ({ 
   accentColor,
-  significance = [0.7, 0.5, 0.6, 0.4, 0.8],
+  quickrecal_score = [0.7, 0.5, 0.6, 0.4, 0.8],
   surprise = [0.4, 0.2, 0.7, 0.3, 0.5]
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -56,8 +56,8 @@ const MemoryMetrics: React.FC<MemoryMetricsProps> = ({
       vx: (Math.random() - 0.5) * 0.5,
       vy: (Math.random() - 0.5) * 0.5,
       connections: [] as number[],
-      synapseStrength: i < 5 ? significance[i] : Math.random() * 0.8 + 0.2, // Use provided significance for first 5 nodes
-      significance: i < 5 ? significance[i] : Math.random(),
+      synapseStrength: i < 5 ? quickrecal_score[i] : Math.random() * 0.8 + 0.2, // Use provided quickrecal_score for first 5 nodes
+      quickrecal_score: i < 5 ? quickrecal_score[i] : Math.random(),
       surprise: i < 5 ? surprise[i] : Math.random()
     }));
 
@@ -105,17 +105,17 @@ const MemoryMetrics: React.FC<MemoryMetricsProps> = ({
           const strength = Math.max(0, 1 - distance / (canvas.width / 3));
           const synapseActivity = (node.synapseStrength + target.synapseStrength) / 2;
           
-          // Draw connection line with color based on significance or surprise
-          const significanceColor = `rgba(255, 191, 0, ${strength * synapseActivity * 0.5})`;
+          // Draw connection line with color based on quickrecal_score or surprise
+          const quickrecalScoreColor = `rgba(255, 191, 0, ${strength * synapseActivity * 0.5})`;
           const surpriseColor = `rgba(255, 0, 255, ${strength * synapseActivity * 0.5})`;
           
-          // Alternate between significance and surprise colors
-          const useSignificance = (i + targetIndex) % 2 === 0;
+          // Alternate between quickrecal_score and surprise colors
+          const useQuickrecalScore = (i + targetIndex) % 2 === 0;
           
           ctx.beginPath();
           ctx.moveTo(node.x, node.y);
           ctx.lineTo(target.x, target.y);
-          ctx.strokeStyle = useSignificance ? significanceColor : surpriseColor;
+          ctx.strokeStyle = useQuickrecalScore ? quickrecalScoreColor : surpriseColor;
           ctx.lineWidth = strength * 2;
           ctx.stroke();
 
@@ -126,7 +126,7 @@ const MemoryMetrics: React.FC<MemoryMetricsProps> = ({
           
           ctx.beginPath();
           ctx.arc(pulsePosX, pulsePosY, 1.5, 0, Math.PI * 2);
-          ctx.fillStyle = useSignificance ? 'rgba(255, 191, 0, 0.8)' : 'rgba(255, 0, 255, 0.8)';
+          ctx.fillStyle = useQuickrecalScore ? 'rgba(255, 191, 0, 0.8)' : 'rgba(255, 0, 255, 0.8)';
           ctx.fill();
         });
       });
@@ -144,9 +144,9 @@ const MemoryMetrics: React.FC<MemoryMetricsProps> = ({
         ctx.beginPath();
         ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
         
-        // Color based on significance/surprise blend
+        // Color based on quickrecal_score/surprise blend
         const r = Math.floor(0 + node.surprise * 255);
-        const g = Math.floor(node.significance * 191);
+        const g = Math.floor(node.quickrecal_score * 191);
         const b = Math.floor(node.surprise * 255);
         ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.8)`;
         ctx.fill();
@@ -163,7 +163,7 @@ const MemoryMetrics: React.FC<MemoryMetricsProps> = ({
       window.removeEventListener('resize', setCanvasSize);
       cancelAnimationFrame(animationId);
     };
-  }, [significance, surprise]);
+  }, [quickrecal_score, surprise]);
 
   return (
     <ConfigurationPanelItem title="Neural Activity Visualization">
@@ -184,7 +184,7 @@ const MemoryMetrics: React.FC<MemoryMetricsProps> = ({
         <div className="absolute top-2 right-2 flex flex-col gap-1">
           <div className="flex items-center gap-1">
             <div className="w-2 h-2 rounded-full bg-amber-500"></div>
-            <span className="text-xs text-gray-400">Significance</span>
+            <span className="text-xs text-gray-400">Quickrecal Score</span>
           </div>
           <div className="flex items-center gap-1">
             <div className="w-2 h-2 rounded-full bg-fuchsia-500"></div>
