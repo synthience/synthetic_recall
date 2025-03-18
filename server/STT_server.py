@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger("stt_server")
 
 # Configuration
-HPC_SERVER_URL = os.getenv("HPC_SERVER_URL", "hpc_server:5005")
+EMOTION_ANALYZER_SERVER_URL = os.getenv("EMOTION_ANALYZER_SERVER_URL", "emotion-analyzer:5007")
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 STT_SERVER_PORT = 5002
 
@@ -61,7 +61,7 @@ app.add_middleware(
 connected_clients = set()  # Set of connected client IDs
 audio_buffer = {}  # Buffer to store audio chunks for each client
 transcription_history = {}  # Store transcription history for each client
-hpc_client = None  # HPC client for semantic processing
+emotion_analyzer_client = None  # Emotion analyzer client for semantic processing
 active_connections = {}
 stt_server = None
 model = None
@@ -242,14 +242,14 @@ class STTServer:
                 "text": ""
             }
 
-class HPCClient:
-    """Client for connecting to HPC server and processing embeddings and stats."""
+class EmotionAnalyzerClient:
+    """Client for connecting to emotion analyzer service and processing embeddings and stats."""
     
     def __init__(self, url):
-        """Initialize HPC client with server URL.
+        """Initialize emotion analyzer client with server URL.
         
         Args:
-            url: WebSocket URL for HPC server
+            url: WebSocket URL for emotion analyzer server
         """
         # Ensure the URL has the proper WebSocket scheme
         if not url.startswith('ws://') and not url.startswith('wss://'):
@@ -264,10 +264,10 @@ class HPCClient:
         self.send_loop = None  # Store the event loop for sending messages
 
     async def connect(self):
-        """Connect to HPC server."""
+        """Connect to emotion analyzer server."""
         async with self.connection_lock:
             if self.connected:
-                logger.info("Already connected to HPC server")
+                logger.info("Already connected to emotion analyzer server")
                 return
             
             try:
@@ -276,24 +276,24 @@ class HPCClient:
                 self.send_loop = self.loop  # Store the send loop
                 
                 # Connect to WebSocket server
-                logger.info(f"Connecting to HPC server at {self.url}")
+                logger.info(f"Connecting to emotion analyzer server at {self.url}")
                 self.ws = await websockets.connect(self.url, ping_interval=30)
                 self.connected = True
-                logger.info(f"Connected to HPC server at {self.url}")
+                logger.info(f"Connected to emotion analyzer server at {self.url}")
                 
                 # Start message handling task
                 self.message_task = asyncio.create_task(self._handle_messages())
             except Exception as e:
-                logger.error(f"Error connecting to HPC server: {e}")
+                logger.error(f"Error connecting to emotion analyzer server: {e}")
                 self.connected = False  # Mark as disconnected for reconnect
                 raise
     
     async def disconnect(self):
-        """Disconnect from HPC server."""
+        """Disconnect from emotion analyzer server."""
         if self.ws:
             await self.ws.close()
             self.connected = False
-            logger.info("Disconnected from HPC server")
+            logger.info("Disconnected from emotion analyzer server")
         
         # Cancel message handling task
         if hasattr(self, 'message_task'):
@@ -305,7 +305,7 @@ class HPCClient:
             await self.connect()
     
     async def send_message(self, message):
-        """Send a message to the HPC server and wait for a response.
+        """Send a message to the emotion analyzer server and wait for a response.
         
         Args:
             message (dict): Message to send
@@ -318,8 +318,8 @@ class HPCClient:
             await self.ensure_connected()
             
             if not self.ws or not self.connected:
-                logger.error("Cannot send message: not connected to HPC server")
-                return {"error": "Not connected to HPC server"}
+                logger.error("Cannot send message: not connected to emotion analyzer server")
+                return {"error": "Not connected to emotion analyzer server"}
             
             # Create a future to get the response
             message_id = str(uuid.uuid4())
@@ -351,15 +351,15 @@ class HPCClient:
                 # Remove the pending response to avoid memory leaks
                 if message_id in self.pending_responses:
                     del self.pending_responses[message_id]
-                return {"error": "Timeout waiting for response from HPC server"}
+                return {"error": "Timeout waiting for response from emotion analyzer server"}
         
         except Exception as e:
-            logger.error(f"Error communicating with HPC server: {e}")
+            logger.error(f"Error communicating with emotion analyzer server: {e}")
             logger.error(traceback.format_exc())
             return {"error": str(e)}
     
     async def process_embedding(self, text):
-        """Send text to HPC server for embedding processing.
+        """Send text to emotion analyzer server for embedding processing.
         
         Args:
             text (str): Text to process
@@ -384,13 +384,13 @@ class HPCClient:
             response = await self.send_message(message)
             
             if response and "error" not in response and ("embedding" in response or "embedding_result" in response.get("type", "")):
-                logger.info("Successfully received embedding from HPC server")
+                logger.info("Successfully received embedding from emotion analyzer server")
                 # If the response has type 'embedding_result', extract embedding from the response
                 if response.get("type") == "embedding_result" and "embedding" in response:
                     return {"embedding": response["embedding"]}
                 return response
             else:
-                error_msg = response.get("error", "Unknown error in embedding response") if response else "No response from HPC server"
+                error_msg = response.get("error", "Unknown error in embedding response") if response else "No response from emotion analyzer server"
                 logger.error(f"Error getting embedding: {error_msg}")
                 return {"error": error_msg}
         
@@ -399,7 +399,7 @@ class HPCClient:
             return {"error": str(e)}
 
     async def get_stats(self, embedding_data):
-        """Get stats for an embedding from the HPC server.
+        """Get stats for an embedding from the emotion analyzer server.
         
         Args:
             embedding_data (dict): Embedding data returned from process_embedding
@@ -424,12 +424,12 @@ class HPCClient:
             if response and "error" not in response:
                 # Handle stats_result type response
                 if response.get("type") == "stats_result" and "significance" in response:
-                    logger.info(f"Received stats from HPC server: Significance = {response.get('significance', 'N/A')}")
+                    logger.info(f"Received stats from emotion analyzer server: Significance = {response.get('significance', 'N/A')}")
                     return {"significance": response.get("significance", 0.0)}
-                logger.info(f"Received stats from HPC server: Significance = {response.get('significance', 'N/A')}")
+                logger.info(f"Received stats from emotion analyzer server: Significance = {response.get('significance', 'N/A')}")
                 return response
             else:
-                error_msg = response.get("error", "Unknown error in stats response") if response else "No response from HPC server"
+                error_msg = response.get("error", "Unknown error in stats response") if response else "No response from emotion analyzer server"
                 logger.error(f"Error getting stats: {error_msg}")
                 return {"error": error_msg}
         
@@ -470,7 +470,7 @@ class HPCClient:
             message_str (str): JSON message string to send
         """
         if not self.ws or not self.connected:
-            raise ConnectionError("Not connected to HPC server")
+            raise ConnectionError("Not connected to emotion analyzer server")
         
         try:
             await self.ws.send(message_str)
@@ -481,7 +481,7 @@ class HPCClient:
             raise
 
     async def _handle_messages(self):
-        """Background task to handle incoming messages from the HPC server."""
+        """Background task to handle incoming messages from the emotion analyzer server."""
         try:
             while self.connected and self.ws:
                 try:
@@ -530,31 +530,31 @@ class HPCClient:
 
 # Initialize the STT server
 async def initialize_stt_server():
-    global hpc_client, model, model_loaded, DEVICE
+    global emotion_analyzer_client, model, model_loaded, DEVICE
     
     # Load configuration
     logger.info("Initializing STT server...")
     
-    # Set up the HPC client if URL is provided
-    hpc_server_url = os.environ.get('HPC_SERVER_URL')
-    if hpc_server_url:
-        logger.info(f"Connecting to HPC server at {hpc_server_url}")
-        hpc_client = HPCClient(hpc_server_url)
+    # Set up the emotion analyzer client if URL is provided
+    emotion_analyzer_server_url = os.environ.get('EMOTION_ANALYZER_SERVER_URL')
+    if emotion_analyzer_server_url:
+        logger.info(f"Connecting to emotion analyzer server at {emotion_analyzer_server_url}")
+        emotion_analyzer_client = EmotionAnalyzerClient(emotion_analyzer_server_url)
         try:
-            # Connect the HPC client
-            await hpc_client.connect()
+            # Connect the emotion analyzer client
+            await emotion_analyzer_client.connect()
             # Send a ping to test the connection
-            ping_result = await hpc_client.send_message({"type": "ping"})
+            ping_result = await emotion_analyzer_client.send_message({"type": "ping"})
             if ping_result and ping_result.get("type") == "pong":
-                logger.info("Successfully connected to HPC server and received pong response")
+                logger.info("Successfully connected to emotion analyzer server and received pong response")
             else:
-                logger.warning(f"Connected to HPC server but ping test failed: {ping_result}")
+                logger.warning(f"Connected to emotion analyzer server but ping test failed: {ping_result}")
         except Exception as e:
-            logger.error(f"Error connecting to HPC server: {e}")
-            logger.error("HPC client will attempt to reconnect automatically when needed")
+            logger.error(f"Error connecting to emotion analyzer server: {e}")
+            logger.error("Emotion analyzer client will attempt to reconnect automatically when needed")
     else:
-        logger.warning("No HPC_SERVER_URL provided. Semantic processing will be disabled.")
-        hpc_client = None
+        logger.warning("No EMOTION_ANALYZER_SERVER_URL provided. Semantic processing will be disabled.")
+        emotion_analyzer_client = None
 
     # Initialize the ASR model
     try:
@@ -589,13 +589,13 @@ async def initialize_stt_server():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up resources on shutdown."""
-    global stt_server, hpc_client
+    global stt_server, emotion_analyzer_client
     logger.info("Shutting down STT server...")
     
-    # Disconnect HPC client
-    if hpc_client:
-        logger.info("Disconnecting from HPC server...")
-        await hpc_client.disconnect()
+    # Disconnect emotion analyzer client
+    if emotion_analyzer_client:
+        logger.info("Disconnecting from emotion analyzer server...")
+        await emotion_analyzer_client.disconnect()
     
     # Clear CUDA cache if using GPU
     if torch.cuda.is_available():
@@ -706,8 +706,8 @@ async def websocket_transcribe(websocket: WebSocket):
                             "processing_time": transcription.get("processing_time", 0.0)
                         })
                         
-                        # Process semantic data if HPC client is available and we have text
-                        if hpc_client and transcription["text"].strip():
+                        # Process semantic data if emotion analyzer client is available and we have text
+                        if emotion_analyzer_client and transcription["text"].strip():
                             try:
                                 # Send status message first
                                 await safe_send_json(websocket, {"type": "status", "message": "Processing semantic data..."})
@@ -733,8 +733,8 @@ async def websocket_transcribe(websocket: WebSocket):
                             "timestamp": time.time()
                         })
                         
-                        # Process with HPC if available
-                        if hpc_client and text.strip():
+                        # Process with emotion analyzer if available
+                        if emotion_analyzer_client and text.strip():
                             await safe_send_json(websocket, {"type": "status", "message": "Processing message..."})
                             try:
                                 semantic_task = asyncio.create_task(process_semantic_data(
@@ -792,7 +792,7 @@ async def websocket_transcribe(websocket: WebSocket):
         logger.info(f"WebSocket connection cleanup complete for client {client_id}")
 
 async def process_semantic_data(websocket, text, client_id):
-    """Process semantic data using HPC client.
+    """Process semantic data using emotion analyzer client.
     
     Args:
         websocket: WebSocket connection
@@ -802,9 +802,9 @@ async def process_semantic_data(websocket, text, client_id):
     Returns:
         None
     """
-    if not hpc_client:
-        # HPC client not available
-        error_msg = "Semantic processing unavailable - no HPC client"
+    if not emotion_analyzer_client:
+        # Emotion analyzer client not available
+        error_msg = "Semantic processing unavailable - no emotion analyzer client"
         logger.warning(error_msg)
         
         # Only try to send error if connection is still active
@@ -821,12 +821,12 @@ async def process_semantic_data(websocket, text, client_id):
     logger.info(f"Processing semantic data for text: {text[:50]}..." if len(text) > 50 else f"Processing semantic data for text: {text}")
     
     try:
-        # Make sure HPC client is connected
-        if not hpc_client.connected:
-            logger.info("HPC client not connected, attempting to connect...")
-            connection_result = await hpc_client.connect()
+        # Make sure emotion analyzer client is connected
+        if not emotion_analyzer_client.connected:
+            logger.info("Emotion analyzer client not connected, attempting to connect...")
+            connection_result = await emotion_analyzer_client.connect()
             if not connection_result:
-                error_msg = "Could not connect to HPC server"
+                error_msg = "Could not connect to emotion analyzer server"
                 logger.error(error_msg)
                 if client_id in active_connections and websocket == active_connections[client_id]:
                     try:
@@ -840,7 +840,7 @@ async def process_semantic_data(websocket, text, client_id):
         
         # Get embedding
         logger.info("Getting embedding...")
-        embedding_result = await hpc_client.process_embedding(text)
+        embedding_result = await emotion_analyzer_client.process_embedding(text)
         
         if "error" in embedding_result:
             error_msg = f"Error processing embedding: {embedding_result['error']}"
@@ -860,7 +860,7 @@ async def process_semantic_data(websocket, text, client_id):
             
         # Get stats
         logger.info("Getting stats...")
-        stats_result = await hpc_client.get_stats(embedding_result)
+        stats_result = await emotion_analyzer_client.get_stats(embedding_result)
         
         if "error" in stats_result:
             error_msg = f"Error getting stats: {stats_result['error']}"
