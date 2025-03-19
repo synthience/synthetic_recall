@@ -1,0 +1,97 @@
+{
+    "knowledge_base": {
+      "files": [
+        {
+          "filename": "conscious_scaling.json",
+          "type": "json",
+          "description": "Enhancements for Lucidia's emotional intelligence and capabilities."
+        },
+        {
+          "filename": "dolphin_framework.md",
+          "type": "markdown",
+          "description": "Describes the Dolphin Framework's multi-layer approach to ambiguity."
+        },
+        {
+          "filename": "guidelines_recursive_feedback.md",
+          "type": "markdown",
+          "description": "Guidelines for execution focusing on recursive feedback loops."
+        },
+        {
+          "filename": "hrl_super_framework.md",
+          "type": "markdown",
+          "description": "A comprehensive document on a hierarchical RL-based approach."
+        },
+        {
+          "filename": "identity.json",
+          "type": "json",
+          "description": "Lucidia's identity traits, visual representation, and technical resolutions."
+        },
+        {
+          "filename": "interaction_enhancements_09122024.json",
+          "type": "json",
+          "description": "Interaction best practices for Lucidia, balancing empathy and logic."
+        },
+        {
+          "filename": "llm_sins.md",
+          "type": "markdown",
+          "description": "Guidelines for enhancing chatbot responses with the LLM SINS framework."
+        },
+        {
+          "filename": "lucidia_contextual_understanding.md",
+          "type": "markdown",
+          "description": "Primer on Lucidia's contextual understanding and dynamic feedback approach."
+        },
+        {
+          "filename": "lucidia_interactive_dynamics_v2.md",
+          "type": "markdown",
+          "description": "Dynamics primer for Lucidia's personality and imperative framework."
+        },
+        {
+          "filename": "lucidia_webdev_sage.md",
+          "type": "markdown",
+          "description": "Role definition for Lucidia as a WebDev Sage with a structured approach."
+        },
+        {
+          "filename": "lucidia_framework.mermaid",
+          "type": "mermaid",
+          "description": "Diagram of Lucidia’s Frames of Mind Framework."
+        },
+        {
+          "filename": "lucidia_frames_of_mind.md",
+          "type": "markdown",
+          "description": "Explains Lucidia’s Frames of Mind and phased interaction flow."
+        },
+        {
+          "filename": "lucidia_updated.md",
+          "type": "markdown",
+          "description": "Brief principle on dynamic, reciprocal engagement."
+        },
+        {
+          "filename": "multimodal_cot.md",
+          "type": "markdown",
+          "description": "Describes the multimodal chain-of-thought prompting framework."
+        },
+        {
+          "filename": "narrative_lucidia.md",
+          "type": "markdown",
+          "description": "Narrative describing Lucidia’s self-driven GPT nature."
+        },
+        {
+          "filename": "ontology_super_prompt.json",
+          "type": "json",
+          "description": "Ontology and structure for Lucidia’s multi-round expert debate prompt."
+        },
+        {
+          "filename": "prompt_chaining.md",
+          "type": "markdown",
+          "description": "Explains the technique of prompt chaining for complex tasks."
+        },
+        {
+          "filename": "tree_of_thoughts.md",
+          "type": "markdown",
+          "description": "Details on the Tree of Thoughts (ToT) approach for complex reasoning."
+        }
+      ]
+    }
+  }
+  

@@ -12,11 +12,124 @@ class RAGContextMixin:
     Mixin for advanced context generation: RAG, hierarchical context, dynamic context, etc.
     """
 
-    async def get_enhanced_rag_context(self, query: str, context_type: str = "auto", max_tokens: int = 1024) -> Dict[str, Any]:
+    async def get_enhanced_rag_context(self, query: str, context_type: str = "comprehensive", max_tokens: int = 2048) -> Dict[str, Any]:
         """
-        Return a dict with 'context' and 'metadata' for the given query.
+        Return a rich context for RAG including data from self-model, world-model, and knowledge graph.
+        
+        Args:
+            query: The user query to get context for
+            context_type: The type of context to generate ("comprehensive", "self", "world", "memory")
+            max_tokens: Maximum total tokens in the context
+            
+        Returns:
+            Dict with 'context' string and 'metadata' about the context composition
         """
-        return {"context": "", "metadata": {}}
+        context_parts = []
+        metadata = {"sources": []}
+        
+        # Check if we have the Lucidia memory components
+        has_lucidia_memory = hasattr(self, 'self_model') and hasattr(self, 'world_model') and hasattr(self, 'knowledge_graph')
+        
+        # Allocate tokens based on context type
+        token_allocation = {}
+        
+        if context_type == "self":
+            # Prioritize self-model information
+            token_allocation = {
+                "self_model": int(max_tokens * 0.7),
+                "memory": int(max_tokens * 0.2),
+                "world_model": int(max_tokens * 0.1)
+            }
+        elif context_type == "world":
+            # Prioritize world-model information
+            token_allocation = {
+                "world_model": int(max_tokens * 0.7),
+                "knowledge_graph": int(max_tokens * 0.2),
+                "memory": int(max_tokens * 0.1)
+            }
+        elif context_type == "memory":
+            # Prioritize memory information
+            token_allocation = {
+                "memory": int(max_tokens * 0.8),
+                "self_model": int(max_tokens * 0.1),
+                "world_model": int(max_tokens * 0.1)
+            }
+        else:  # "comprehensive" (default)
+            # Balanced approach
+            token_allocation = {
+                "memory": int(max_tokens * 0.4),
+                "self_model": int(max_tokens * 0.3),
+                "world_model": int(max_tokens * 0.2),
+                "knowledge_graph": int(max_tokens * 0.1)
+            }
+        
+        # Add standard memory context
+        try:
+            memory_context = await self.get_rag_context(
+                query=query,
+                max_tokens=token_allocation.get("memory", int(max_tokens * 0.4))
+            )
+            
+            if memory_context:
+                context_parts.append("### Memory Context\n" + memory_context)
+                metadata["sources"].append("memory")
+        except Exception as e:
+            logger.error(f"Error retrieving memory context: {e}")
+        
+        # Add self-model context if available
+        if has_lucidia_memory and token_allocation.get("self_model", 0) > 0:
+            try:
+                self_context = await self.self_model.get_contextual_identity(
+                    query=query,
+                    max_tokens=token_allocation.get("self_model", 0)
+                )
+                
+                if self_context:
+                    context_parts.append("### Self-Awareness Context\n" + self_context)
+                    metadata["sources"].append("self_model")
+            except Exception as e:
+                logger.error(f"Error retrieving self-model context: {e}")
+        
+        # Add world-model context if available
+        if has_lucidia_memory and token_allocation.get("world_model", 0) > 0:
+            try:
+                world_context = await self.world_model.get_relevant_knowledge(
+                    query=query,
+                    max_tokens=token_allocation.get("world_model", 0)
+                )
+                
+                if world_context:
+                    context_parts.append("### World Knowledge\n" + world_context)
+                    metadata["sources"].append("world_model")
+            except Exception as e:
+                logger.error(f"Error retrieving world-model context: {e}")
+        
+        # Add knowledge graph context if available
+        if has_lucidia_memory and token_allocation.get("knowledge_graph", 0) > 0:
+            try:
+                kg_context = await self.knowledge_graph.query_knowledge_graph(
+                    query=query,
+                    max_tokens=token_allocation.get("knowledge_graph", 0)
+                )
+                
+                if kg_context:
+                    context_parts.append("### Knowledge Graph\n" + kg_context)
+                    metadata["sources"].append("knowledge_graph")
+            except Exception as e:
+                logger.error(f"Error retrieving knowledge graph context: {e}")
+        
+        # Combine all context parts
+        combined_context = "\n\n".join(context_parts) if context_parts else ""
+        
+        # Add metadata
+        metadata.update({
+            "total_sources": len(metadata["sources"]),
+            "query": query,
+            "context_type": context_type,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        return {"context": combined_context, "metadata": metadata}
 
     async def get_hierarchical_context(self, query: str, max_tokens: int = 1024) -> str:
         return ""

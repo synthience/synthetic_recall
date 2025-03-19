@@ -146,14 +146,25 @@ class LocalLLMPipeline:
             return ""
         
         try:
-            # First, try to get context from the new hierarchical memory system
+            # First, try to use the enhanced RAG context with self-model and world-model integration
+            if hasattr(self.memory_client, 'get_enhanced_rag_context'):
+                context_result = await self.memory_client.get_enhanced_rag_context(
+                    query=prompt,
+                    context_type="comprehensive",
+                    max_tokens=self._memory_config['max_context_tokens']
+                )
+                
+                if context_result and context_result.get("context"):
+                    self.logger.info(f"Using enhanced RAG context with sources: {context_result.get('metadata', {}).get('sources', [])}")
+                    return context_result["context"]
+            
+            # Next, try to get context from the Memory Prioritization Layer if available
             if hasattr(self.memory_client, 'route_query'):
-                # Use MPL directly if available
                 result = await self.memory_client.route_query(prompt)
                 if result and 'context' in result:
                     return result['context']
             
-            # Next, try the enhanced RAG context method
+            # Next, fall back to standard RAG context method
             if hasattr(self.memory_client, 'get_rag_context'):
                 context = await self.memory_client.get_rag_context(
                     query=prompt, 

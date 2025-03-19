@@ -579,14 +579,28 @@ class LucidiaVoiceAgent:
         )
 
     async def _handle_tts_interrupt(self) -> None:
+        """Handle TTS interruption."""
         logger.info("TTS interrupted")
         self.metrics["interruptions"] += 1
         
-        if self.state_manager.current_state == VoiceState.INTERRUPTED:
-            await asyncio.sleep(0.1)
-            if self.state_manager.current_state == VoiceState.INTERRUPTED:
-                await self.state_manager.transition_to(VoiceState.LISTENING, {"reason": "interrupt_handled"})
+        # Log interrupt event for memory system
+        await self.memory_client.store_system_event("user_interrupt", {"timestamp": time.time()})
         
+        # Wait a moment for state transitions to complete
+        for _ in range(5):
+            await asyncio.sleep(0.1)
+            current_state = self.state_manager.current_state
+            
+            # Handle different interrupt states
+            if current_state == VoiceState.INTERRUPTED:
+                await self.state_manager.transition_to(VoiceState.LISTENING, {"reason": "interrupt_handled"})
+                break
+            elif current_state == VoiceState.PAUSED:
+                # PAUSED state is handled by the VoiceStateManager's pause monitor
+                # But we can log it for awareness
+                logger.info("Voice agent recognized PAUSED state - waiting for pause monitor")
+                break
+
     async def _handle_tts_complete(self, text: str) -> None:
         logger.info(f"TTS completed: '{text[:50]}...'")
         if self.state_manager.current_state == VoiceState.SPEAKING:

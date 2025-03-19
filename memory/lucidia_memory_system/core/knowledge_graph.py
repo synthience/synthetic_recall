@@ -3564,3 +3564,101 @@ class LucidiaKnowledgeGraph:
             result["error"] = str(e)
             
         return result
+    
+    async def add_knowledge_node(self, content: str, metadata: Dict[str, Any]) -> str:
+        """
+        Add a knowledge node to the knowledge graph from external content.
+        
+        Args:
+            content: The content of the knowledge file
+            metadata: Metadata about the content (source, type, description, etc.)
+            
+        Returns:
+            Node ID of the created knowledge node
+        """
+        try:
+            # Generate a unique node ID based on the source or content
+            source = metadata.get('source', '')
+            node_id = f"knowledge_{uuid.uuid4().hex[:8]}"
+            if source:
+                # Use source as part of the node ID to make it more meaningful
+                source_id = source.split('/')[-1].split('.')[0].lower()
+                node_id = f"knowledge_{source_id}_{uuid.uuid4().hex[:6]}"
+            
+            # Determine the node type based on metadata
+            file_type = metadata.get('type', 'text').lower()
+            if file_type == 'json':
+                node_type = 'structured_knowledge'
+            elif file_type == 'md' or file_type == 'markdown':
+                node_type = 'markdown_knowledge'
+            else:
+                node_type = 'text_knowledge'
+            
+            # Prepare node attributes
+            attributes = {
+                'content': content,
+                'source': metadata.get('source', 'knowledge_base'),
+                'description': metadata.get('description', ''),
+                'file_type': file_type,
+                'filename': metadata.get('filename', ''),
+                'confidence': 0.9,  # High confidence for curated knowledge
+                'indexed': True
+            }
+            
+            # Add the node to the graph
+            success = await self.add_node(
+                node_id,
+                node_type,
+                attributes,
+                domain="lucidia_knowledge_base"
+            )
+            
+            if success:
+                self.logger.info(f"Added knowledge node: {node_id} (source: {source})")
+                
+                # Extract concepts if available
+                if content and self.world_model and hasattr(self.world_model, '_extract_concepts'):
+                    try:
+                        # Extract key concepts from the content
+                        concepts = await self.world_model._extract_concepts(content)
+                        if concepts:
+                            # Create relationships between the knowledge node and extracted concepts
+                            for concept_name, concept_info in concepts.items():
+                                # Check if concept already exists or create it
+                                concept_id = concept_name.lower().replace(' ', '_')
+                                if not await self.has_node(concept_id):
+                                    # Create the concept node
+                                    await self.add_node(
+                                        concept_id,
+                                        'concept',
+                                        {
+                                            'name': concept_name,
+                                            'definition': concept_info.get('definition', f"Concept mentioned in {source}"),
+                                            'confidence': 0.7,
+                                            'extracted_from': node_id
+                                        },
+                                        domain="lucidia_knowledge_base"
+                                    )
+                                
+                                # Create relationship between knowledge and concept
+                                await self.add_edge(
+                                    node_id,
+                                    concept_id,
+                                    edge_type="mentions",
+                                    attributes={
+                                        'strength': concept_info.get('relevance', 0.7),
+                                        'confidence': 0.8,
+                                        'created': datetime.now().isoformat()
+                                    }
+                                )
+                    except Exception as e:
+                        self.logger.warning(f"Error extracting concepts from knowledge node {node_id}: {e}")
+                
+                return node_id
+            else:
+                self.logger.error(f"Failed to add knowledge node for {source}")
+                return ""
+                
+        except Exception as e:
+            self.logger.error(f"Error adding knowledge node: {e}")
+            return ""

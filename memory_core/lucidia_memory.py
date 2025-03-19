@@ -186,6 +186,198 @@ class LucidiaMemorySystemMixin:
         
         return "\n\n".join(context_parts) if context_parts else ""
 
+    async def get_contextual_identity(self, query: str, max_tokens: int = 1024) -> str:
+        """
+        Returns contextual information about Lucidia's identity based on the query.
+        
+        Args:
+            query: The user query to contextualize identity for
+            max_tokens: Maximum tokens in the returned context
+            
+        Returns:
+            Formatted identity context
+        """
+        try:
+            # Check if self_model is properly initialized
+            if not hasattr(self, 'self_model') or not self.self_model:
+                self.logger.warning("Self-model not properly initialized")
+                return ""
+                
+            # Try to get contextual identity from self_model
+            if hasattr(self.self_model, 'get_contextual_identity'):
+                return await self.self_model.get_contextual_identity(query, max_tokens)
+                
+            # Fallback to a stub implementation
+            return (
+                "I am Lucidia, a Synthien voice assistant created by MEGAPROMPT (Daniel). "
+                "I focus on providing helpful, concise responses while maintaining a personable "
+                "and occasionally playful tone. I can adapt to different interaction styles and "
+                "remember important details from previous conversations. I have extensive knowledge "
+                "about a wide range of topics and can help with information, creative tasks, and "
+                "personal assistance."
+            )
+        except Exception as e:
+            self.logger.error(f"Error retrieving contextual identity: {e}")
+            return ""
+    
+    async def get_relevant_knowledge(self, query: str, max_tokens: int = 1024) -> str:
+        """
+        Returns relevant knowledge from Lucidia's world model based on the query.
+        
+        Args:
+            query: The user query to retrieve knowledge for
+            max_tokens: Maximum tokens in the returned context
+            
+        Returns:
+            Formatted knowledge context
+        """
+        try:
+            # Check if world_model is properly initialized
+            if not hasattr(self, 'world_model') or not self.world_model:
+                self.logger.warning("World-model not properly initialized")
+                return ""
+                
+            # Try to get relevant knowledge from world_model
+            if hasattr(self.world_model, 'get_relevant_knowledge'):
+                return await self.world_model.get_relevant_knowledge(query, max_tokens)
+                
+            # Stub implementation
+            return ""  # Empty for now - will be filled by actual world model implementation
+        except Exception as e:
+            self.logger.error(f"Error retrieving relevant knowledge: {e}")
+            return ""
+    
+    async def query_knowledge_graph(self, query: str, max_tokens: int = 1024) -> str:
+        """
+        Queries the knowledge graph to find relevant connections and entities.
+        
+        Args:
+            query: The user query to search in the knowledge graph
+            max_tokens: Maximum tokens in the returned context
+            
+        Returns:
+            Formatted knowledge graph context
+        """
+        try:
+            # Check if knowledge_graph is properly initialized
+            if not hasattr(self, 'knowledge_graph') or not self.knowledge_graph:
+                self.logger.warning("Knowledge graph not properly initialized")
+                return ""
+                
+            # Try to query the knowledge graph
+            if hasattr(self.knowledge_graph, 'query_knowledge_graph'):
+                return await self.knowledge_graph.query_knowledge_graph(query, max_tokens)
+                
+            # Stub implementation
+            return ""  # Empty for now - will be filled by actual knowledge graph implementation
+        except Exception as e:
+            self.logger.error(f"Error querying knowledge graph: {e}")
+            return ""
+        
+    async def load_knowledge_base_files(self, directory_path: str = None) -> bool:
+        """
+        Load knowledge base files from the specified directory into the knowledge graph.
+        
+        Args:
+            directory_path: Path to the directory containing knowledge base files.
+                If None, uses the default path from config.
+        
+        Returns:
+            bool: True if successful, False otherwise.
+        """
+        try:
+            import os
+            import json
+            import logging
+            
+            logger = logging.getLogger(__name__)
+            
+            # Use default directory if not specified
+            if not directory_path:
+                default_path = os.path.join(
+                    os.path.expanduser("~"),
+                    "OneDrive",
+                    "Documents",
+                    "AI_Conversations",
+                    "lucid-recall-dist",
+                    "lucid-recall-dist",
+                    "memory",
+                    "lucidia_memory_system",
+                    "core",
+                    "Self",
+                    "Lucidia_Files_Archive"
+                )
+                directory_path = default_path
+            
+            # Verify directory exists
+            if not os.path.exists(directory_path) or not os.path.isdir(directory_path):
+                logger.error(f"Knowledge base directory not found: {directory_path}")
+                return False
+            
+            # Check for manifest.json
+            manifest_path = os.path.join(directory_path, "manifest.json")
+            if not os.path.exists(manifest_path):
+                logger.error(f"Manifest file not found: {manifest_path}")
+                return False
+            
+            # Load manifest
+            with open(manifest_path, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+            
+            if 'knowledge_base' not in manifest or 'files' not in manifest['knowledge_base']:
+                logger.error("Invalid manifest structure: missing 'knowledge_base.files'")
+                return False
+            
+            # Process each file in the manifest
+            files_loaded = 0
+            for file_info in manifest['knowledge_base']['files']:
+                filename = file_info.get('filename')
+                if not filename:
+                    continue
+                
+                file_path = os.path.join(directory_path, filename)
+                if not os.path.exists(file_path):
+                    logger.warning(f"File not found: {file_path}")
+                    continue
+                
+                # Load file content based on type
+                file_type = file_info.get('type', '').lower()
+                file_description = file_info.get('description', '')
+                
+                try:
+                    if file_type == 'json':
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content = json.load(f)
+                            # Convert JSON to string representation for storage
+                            content_str = json.dumps(content, indent=2)
+                    else:  # Default to text for markdown and other types
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content_str = f.read()
+                    
+                    # Store in knowledge graph
+                    if hasattr(self, 'knowledge_graph') and self.knowledge_graph:
+                        # Add to knowledge graph with metadata
+                        node_id = await self.knowledge_graph.add_knowledge_node(
+                            content=content_str,
+                            metadata={
+                                'source': f"lucidia_files_archive/{filename}",
+                                'description': file_description,
+                                'type': file_type,
+                                'filename': filename
+                            }
+                        )
+                        files_loaded += 1
+                        logger.info(f"Loaded file into knowledge graph: {filename} (node_id: {node_id})")
+                except Exception as e:
+                    logger.error(f"Error loading file {filename}: {e}")
+            
+            logger.info(f"Loaded {files_loaded} knowledge base files into knowledge graph")
+            return files_loaded > 0
+            
+        except Exception as e:
+            logger.error(f"Error loading knowledge base files: {e}")
+            return False
+        
     async def get_lucidia_memory_tools(self) -> List[Dict[str, Any]]:
         """
         Get tools for accessing Lucidia memory system components.

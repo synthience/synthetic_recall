@@ -2373,3 +2373,80 @@ class LucidiaWorldModel:
         self.dynamic_reality_update = None  # To be assigned appropriately
         self.adaptive_epistemological_framework = None
         self.reality_reprocessing_mechanism = None
+
+    async def _extract_concepts(self, text: str) -> Dict[str, Dict[str, Any]]:
+        """
+        Extract concepts and relationships from text content.
+        
+        Args:
+            text: The text to extract concepts from
+            
+        Returns:
+            Dictionary of concepts with their definitions and relevance scores
+        """
+        try:
+            # Simple pattern-based concept extraction
+            concepts = {}
+            
+            # Extract potential concepts with basic patterns
+            concept_patterns = [
+                r"concept of (\w+)",
+                r"(\w+) is defined as",
+                r"(\w+) refers to",
+                r"understanding of (\w+)",
+                r"(\w+) means",
+                r"(\w+) involves"
+            ]
+            
+            # Track potential definitions
+            definition_patterns = [
+                r"(\w+) is defined as (.+?)\.",
+                r"(\w+) refers to (.+?)\.",
+                r"(\w+) means (.+?)\.",
+                r"(\w+) involves (.+?)\."
+            ]
+            
+            # First extract definitions
+            definitions = {}
+            for pattern in definition_patterns:
+                matches = re.findall(pattern, text, re.IGNORECASE)
+                for match in matches:
+                    if len(match) == 2:
+                        concept, definition = match
+                        if len(concept) > 3:  # Ignore very short words
+                            definitions[concept.lower()] = definition
+            
+            # Then extract concepts
+            for pattern in concept_patterns:
+                matches = re.findall(pattern, text, re.IGNORECASE)
+                for match in matches:
+                    if isinstance(match, str) and len(match) > 3:  # Ignore very short words
+                        concept = match.lower()
+                        if concept not in concepts:
+                            # Check if we have a definition
+                            definition = definitions.get(concept, f"Concept mentioned in text: {concept}")
+                            concepts[concept] = {
+                                "definition": definition,
+                                "relevance": 0.7  # Default relevance
+                            }
+            
+            # Additional simple keyword extraction for important terms
+            if not concepts:  # If no concepts found with patterns
+                # Split text into sentences and look for potential important terms
+                sentences = re.split(r'[.!?]\s+', text)
+                
+                for sentence in sentences:
+                    words = re.findall(r'\b[A-Z][a-z]{3,}\b', sentence)  # Capitalized words (potential proper nouns)
+                    for word in words:
+                        word_lower = word.lower()
+                        if word_lower not in concepts and word_lower not in ['the', 'and', 'this', 'that', 'with', 'from']:
+                            concepts[word_lower] = {
+                                "definition": f"Term identified in content: {word}",
+                                "relevance": 0.6  # Lower relevance for simple extraction
+                            }
+            
+            return concepts
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting concepts: {e}")
+            return {}

@@ -1,0 +1,76 @@
+{
+    "ontology": {
+      "task_definition": {
+        "role": "Facilitating a multi-round expert debate",
+        "goal": "Analyze different perspectives and reach a well-reasoned conclusion",
+        "context": "Based on a defined problem or topic for a specific case",
+        "attributes": {
+          "problem_or_topic": "[INSERT Problem or TOPIC]",
+          "case": "[INSERT CASE]"
+        }
+      },
+      "expert_setup": {
+        "experts": {
+          "type": "Real or fictional, as defined by the user",
+          "perspectives": "Each expert brings a unique viewpoint"
+        },
+        "components": {
+          "list": "{{EXPERTS}}",
+          "topic": "{{TOPIC}}"
+        },
+        "attributes": {
+          "rounds": "{{ROUNDS}}",
+          "contribution": "Each expert provides arguments, counterarguments, and domain-specific examples"
+        }
+      },
+      "debate_guidelines": {
+        "expert_roles": {
+          "perspectives": "Experts should represent a consistent viewpoint",
+          "expertise": "Expertise should remain within their designated field"
+        },
+        "debate_format": {
+          "structure": "Round-based Structure",
+          "details": [
+            "Each round consists of arguments presented in a fixed order",
+            "Experts build upon or respond to previous arguments"
+          ],
+          "dimensions": ["Performance", "Readability", "Applicability", "Efficiency"]
+        },
+        "examples": {
+          "per_round": "Each expert must provide at least one relevant example (e.g., code, use case)",
+          "purpose": "To illustrate and support the argument"
+        },
+        "mistake_management": {
+          "mistake_rate": "In approximately 20% of the rounds, introduce a mistake in one expert’s argument or example",
+          "correction": "Have another expert identify and correct the mistake in the subsequent round"
+        }
+      },
+      "round_structure": {
+        "argumentation": {
+          "structure": "For each expert, the following structure applies per round",
+          "template": {
+            "expert_name": {
+              "argument": "[Expert’s argument]",
+              "use_case_example": "[Relevant example]"
+            }
+          }
+        }
+      },
+      "progress_tracking": {
+        "completion_status": "After each round, if the number of completed rounds is less than {{ROUNDS}}, the system prints: 'ROUNDS complete {i}, ROUNDS remain {j}'",
+        "variables": {
+          "i": "Number of completed rounds",
+          "j": "Number of remaining rounds"
+        }
+      },
+      "final_summary": {
+        "summary_expert": {
+          "role": "Summarizes the debate, highlighting key points",
+          "components": {
+            "summary": "[Summary of key points, including areas of agreement and disagreement]",
+            "conclusion": "[Well-reasoned conclusion addressing performance, readability, applicability, and efficiency]"
+          }
+        }
+      }
+    }
+  }
