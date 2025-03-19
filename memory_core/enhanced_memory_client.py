@@ -2890,3 +2890,27 @@ class EnhancedMemoryClient(BaseMemoryClient,
         except Exception as e:
             logger.error(f"Error retrieving memories by emotion: {e}")
             return []
+
+    async def store_system_event(self, event_name: str, data: dict) -> None:
+        """Store a system-level event (e.g., interrupts, state changes) in memory.
+        
+        This method logs significant system events that might be useful for analysis,
+        debugging, or measuring system behavior over time.
+        
+        Args:
+            event_name: The name/type of the event being logged
+            data: A dictionary containing event-specific data
+        """
+        self.logger.info(f"System event: {event_name} - {data}")
+        
+        # Create the event record
+        event = {
+            "event_name": event_name,
+            "data": data,
+            "timestamp": time.time(),
+            "session_id": self.session_id
+        }
+        
+        # Store in event collection if using a database backend
+        # For now, just log it - we can add persistence in a future update
+        # await self._store_event(event)  # This would be implemented if persistence is needed

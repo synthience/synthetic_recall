@@ -10,3 +10,4 @@ class VoiceState(Enum):
     PROCESSING = "processing"
     INTERRUPTED = "interrupted"
     ERROR = "error"
+    PAUSED = "paused"  # Temporary pause during soft interruptions

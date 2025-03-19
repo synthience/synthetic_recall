@@ -8,6 +8,7 @@ from typing import Optional, Callable, Any, Dict, List, AsyncIterator
 import livekit.rtc as rtc
 
 from voice_core.state.voice_state_manager import VoiceStateManager, VoiceState
+
 from voice_core.stt.livekit_identity_manager import LiveKitIdentityManager
 from voice_core.stt.audio_preprocessor import AudioPreprocessor
 from voice_core.stt.vad_engine import VADEngine
@@ -230,10 +231,32 @@ class EnhancedSTTService:
                 
                 # Early skip: if not speaking and no completed segment, nothing to do
                 if not vad_result["is_speaking"] and not vad_result["speech_segment_complete"]:
+                    self._was_speaking_last_frame = False
                     continue
                 
-                # Buffer audio during active speech more efficiently
+                # Early interrupt detection - trigger immediate response for responsiveness
                 if vad_result["is_speaking"]:
+                    # Check if this is the first frame of speech (speech onset)
+                    if not getattr(self, '_was_speaking_last_frame', False):
+                        # Track metrics about speech onset
+                        onset_time = time.time()
+                        self.logger.info(f"Speech onset detected! Audio level: {audio_level_db:.1f}dB at t={onset_time:.3f}")
+                        
+                        # Immediately trigger interrupt if system is currently speaking
+                        # This provides much faster responsiveness than waiting for transcript
+                        if self.state_manager and self.state_manager.current_state == VoiceState.SPEAKING:
+                            self.interruptions_detected += 1
+                            self.logger.info(f"Triggering early interrupt - state: {self.state_manager.current_state}, interruptions so far: {self.interruptions_detected}")
+                            # Create task to avoid blocking audio processing
+                            asyncio.create_task(
+                                self.state_manager.request_early_interrupt(
+                                    energy_level=audio_level_db,
+                                    duration_ms=30.0  # Initial frame duration
+                                )
+                            )
+                    self._was_speaking_last_frame = True
+                    
+                    # Buffer audio during active speech more efficiently
                     frames_to_add = len(processed_audio)
                     if buffer_position + frames_to_add <= max_buffer_size:
                         reserved_buffer[buffer_position:buffer_position + frames_to_add] = processed_audio
