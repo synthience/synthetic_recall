@@ -1,0 +1,65 @@
+# QuickRecal Configuration for Improved Sensitivity
+
+# ======= Base Configuration =======
+mode: "hpc_qr"  # Using the most comprehensive mode for better sensitivity
+
+# ======= Stage 1: Recalibrated Scoring Engine =======
+
+# 1. QR Score Normalization
+use_zscore_normalization: true    # Enable Z-score normalization for better score distribution
+z_score_window_size: 100         # Number of recent scores to use for normalization
+history_window: 500              # Increased from 100 to collect more data for adaptive thresholds
+
+# 2. Weight Factors - Rebalanced to prioritize semantic match and emotional variation
+factor_weights:
+  embedding_similarity: 0.4
+  emotion_weight: 0.25
+  surprise_factor: 0.15         # Corresponds to QuickRecallFactor.SURPRISE
+  novelty: 0.1                  # Corresponds to QuickRecallFactor.DIVERSITY
+  time_decay: 0.1
+
+# 3. Lowered novelty threshold for greater diversity in memory candidates
+novelty_threshold: 0.45         # Reduced from 0.7
+
+# 4. Minimum QR score floor
+min_qr_score: 0.0
+max_qr_score: 1.0
+
+# 5. Time decay settings
+time_decay_rate: 0.15           # Slightly increased for better temporal sensitivity
+min_time_decay: 0.02            # Lowered from 0.1 to allow older memories to have lower scores
+
+# ======= Stage 2: Enhanced Search Pipeline =======
+
+# 1. Weighted Score Fusion
+search_fusion:
+  similarity_weight: 0.6         # Increased to prioritize semantic match slightly more
+  quickrecal_weight: 0.4         # Decreased but still significant
+  use_logarithmic_fusion: true   # Use log scaling to prevent high scores from dominating
+
+# 2. Progressive Recall Mode (Experimental)
+progressive_recall:
+  enabled: true
+  similarity_threshold: 0.9      # If 90% of scores are similar, expand search
+  expansion_factor: 1.5          # How much to expand search by
+
+# 3. Soft Thresholding
+soft_threshold:
+  enabled: true                  # Use sigmoid-based soft thresholding instead of hard cutoffs
+  steepness: 12                  # Controls how steep the sigmoid curve is
+
+# ======= Advanced Settings =======
+
+# HPC-QR specific parameters
+alpha: 0.35                      # geometry (slightly reduced)
+beta: 0.35                       # causal novelty (increased)
+gamma: 0.2                       # self-org
+delta: 0.1                       # overlap penalty
+
+# Debugging and Monitoring
+debug: false                     # Enable detailed debug logs
+log_histogram_interval: 100      # Log score distribution every N calculations
+
+# Performance Settings
+batch_size: 32                   # Number of items to process at once
+cache_size: 1000                 # Maximum number of cached results
