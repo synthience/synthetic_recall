@@ -10,10 +10,12 @@ import websockets
 import json
 import logging
 import torch
+import numpy as np
 import time
 from sentence_transformers import SentenceTransformer
 from typing import Dict, Any, List
-from memory.lucidia_memory_system.core.integration.hpc_qr_flow_manager import HPCQRFlowManager
+# NOTE: HPCQRFlowManager import was removed to prevent circular imports
+# If you need flow manager functionality, use lazy imports or dependency injection
 from server.memory_system import MemorySystem
 
 logging.basicConfig(level=logging.INFO)
@@ -29,18 +31,26 @@ class TensorServer:
             self.model.to('cuda')
         logger.info(f"Model loaded on {self.model.device}")
         
-        # Initialize HPC manager
-        self.hpc_manager = HPCQRFlowManager({
-            'embedding_dim': 384,
-            'device': self.device
-        })
-        
         # Initialize unified memory system
         self.memory_system = MemorySystem({
             'device': self.device,
-            'embedding_dim': 384
+            'storage_path': 'memory/stored'
         })
-        logger.info("Initialized unified memory system")
+        
+        # Lazily initialize HPC manager to avoid circular imports
+        self._hpc_manager = None
+        
+    @property
+    def hpc_manager(self):
+        """Lazily initialize HPCQRFlowManager to avoid circular imports"""
+        if self._hpc_manager is None:
+            # Only import when needed
+            from memory.lucidia_memory_system.core.integration.hpc_qr_flow_manager import HPCQRFlowManager
+            self._hpc_manager = HPCQRFlowManager({
+                'embedding_dim': 384,
+                'device': self.device
+            })
+        return self._hpc_manager
 
     def setup_gpu(self) -> None:
         if torch.cuda.is_available():
@@ -52,6 +62,32 @@ class TensorServer:
         else:
             self.device = 'cpu'
             logger.warning("GPU not available, using CPU")
+
+    async def get_embedding(self, text: str) -> torch.Tensor:
+        """Generate an embedding for the given text using the SentenceTransformer model.
+        
+        Args:
+            text: The text to encode
+            
+        Returns:
+            A torch.Tensor containing the text embedding
+        """
+        try:
+            # Generate embedding
+            embedding = self.model.encode(text)
+            if isinstance(embedding, list):
+                embedding = torch.tensor(embedding)
+            elif isinstance(embedding, np.ndarray):
+                embedding = torch.from_numpy(embedding)
+            
+            # Move to the correct device
+            if torch.cuda.is_available():
+                embedding = embedding.to('cuda')
+                
+            return embedding
+        except Exception as e:
+            logger.error(f"Error generating embedding: {str(e)}")
+            raise
 
     async def add_memory(self, text: str, embedding: torch.Tensor) -> Dict[str, Any]:
         """
@@ -75,7 +111,7 @@ class TensorServer:
             'timestamp': memory['timestamp']
         }
 
-    async def search_memories(self, query_embedding: torch.Tensor, limit: int = 5) -> List[Dict]:
+    async def search_memories(self, query_embedding: torch.Tensor, limit: int = 5) -> List[Dict[str, Any]]:
         """Search for similar memories."""
         # Get processed query embedding
         processed_query, _ = await self.hpc_manager.process_embedding(query_embedding)
@@ -88,20 +124,17 @@ class TensorServer:
         
         return results
 
-    def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> Dict[str, Any]:
         """Get current system statistics."""
-        memory_stats = self.memory_system.get_stats()
-        stats = {
-            'type': 'stats',
+        memory_stats = await self.memory_system.get_stats()
+        return {
             'gpu_memory': torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0,
             'gpu_cached': torch.cuda.memory_reserved() / 1e9 if torch.cuda.is_available() else 0,
             'device': self.device,
-            'hpc_status': self.hpc_manager.get_stats(),
+            'hpc_status': await self.hpc_manager.get_stats(),
             'memory_count': memory_stats['memory_count'],
             'storage_path': memory_stats['storage_path']
         }
-        logger.info(f"Stats requested: {stats}")
-        return stats
 
     async def handle_websocket(self, websocket):
         """Handle WebSocket connections and messages."""
@@ -150,16 +183,17 @@ class TensorServer:
                         
                         response = {
                             'type': 'search_results',
+                            'query': data['text'],
                             'results': [{
                                 'id': r['memory']['id'],
                                 'text': r['memory']['text'],
                                 'similarity': r['similarity'],
-                                'quickrecal_score': r['memory']['quickrecal_score']
+                                'quickrecal_score': r['memory'].get('quickrecal_score', 0.0)
                             } for r in results]
                         }
                         
                     elif data['type'] == 'stats' or data['type'] == 'get_stats':
-                        response = self.get_stats()
+                        response = await self.get_stats()
                         
                     else:
                         response = {

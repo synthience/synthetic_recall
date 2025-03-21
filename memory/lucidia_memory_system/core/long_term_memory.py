@@ -180,9 +180,14 @@ class LongTermMemory:
                     with open(file_path, 'r') as f:
                         memory = json.load(f)
 
+                    # Support 'text' key as an alias for 'content'
+                    if 'text' in memory and 'content' not in memory:
+                        memory['content'] = memory['text']
+                        logger.debug(f"Converted 'text' to 'content' in memory {file_path.name}")
+
                     # Validate minimal fields
                     if not all(k in memory for k in ['id', 'content', 'timestamp']):
-                        logger.warning(f"Invalid memory format in {file_path}, skipping.")
+                        logger.warning(f"Invalid memory format in {file_path}, skipping. Missing required keys: {[k for k in ['id', 'content', 'timestamp'] if k not in memory]}")
                         continue
 
                     # Convert embedding from list to tensor if present

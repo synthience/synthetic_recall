@@ -382,7 +382,7 @@ async def initialize_components():
         # Configure LLM service to work with the model manager
         llm_config = LLMConfig(
             api_endpoint="http://127.0.0.1:1234/v1",  # Local LLM API endpoint
-            model=model_manager.active_model if model_manager else "qwen2.5-7b-instruct",
+            model=model_manager.active_model if model_manager else "qwen2.5-qwq-35b-eureka-cubed-abliterated-uncensored",
             max_tokens=2048,
             temperature=0.7
         )
@@ -394,7 +394,7 @@ async def initialize_components():
             # Use host.docker.internal to connect to host machine from Docker container
             "api_base_url": "http://host.docker.internal:1234/v1",
             "api_key": "lm-studio",  # Standard API key for LM Studio
-            "default_model": parameter_manager.config.get("lm_studio", {}).get("model", "qwen2.5-7b-instruct"),
+            "default_model": parameter_manager.config.get("lm_studio", {}).get("model", "qwen2.5-qwq-35b-eureka-cubed-abliterated-uncensored"),
             "local_model": True,
             "allow_simulation": False  # Disable simulation mode
         }

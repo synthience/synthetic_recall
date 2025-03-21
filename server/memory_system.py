@@ -308,10 +308,87 @@ class MemorySystem:
             if 'embedding' in memory_copy and isinstance(memory_copy['embedding'], torch.Tensor):
                 memory_copy['embedding'] = memory_copy['embedding'].tolist()
             
+            # Check for emotion data and log it
+            if 'metadata' in memory_copy:
+                metadata = memory_copy.get('metadata', {})
+                if 'emotions' in metadata or 'dominant_emotion' in metadata:
+                    logger.info(f"Memory {memory_id} contains emotion data: {metadata.get('dominant_emotion', 'unknown')}")
+                    logger.debug(f"Full emotion data: {metadata.get('emotions', {})}")
+                else:
+                    logger.warning(f"Memory {memory_id} does not contain any emotion data in metadata")
+                    logger.debug(f"Metadata content: {metadata}")
+            else:
+                logger.warning(f"Memory {memory_id} does not have a metadata field")
+            
+            # Ensure metadata is JSON serializable
+            try:
+                # Test JSON serialization before saving
+                json.dumps(memory_copy)
+            except TypeError as e:
+                logger.error(f"Memory {memory_id} contains non-JSON serializable data: {e}")
+                # Try to fix the metadata by converting problematic types
+                if 'metadata' in memory_copy:
+                    fixed_metadata = {}
+                    for key, value in memory_copy['metadata'].items():
+                        if isinstance(value, (set, tuple)):
+                            fixed_metadata[key] = list(value)
+                        elif isinstance(value, complex):
+                            fixed_metadata[key] = str(value)
+                        elif hasattr(value, '__dict__'):
+                            fixed_metadata[key] = str(value)
+                        else:
+                            # Try to serialize the value, if it fails, convert to string
+                            try:
+                                json.dumps({key: value})
+                                fixed_metadata[key] = value
+                            except:
+                                fixed_metadata[key] = str(value)
+                    
+                    # Replace the original metadata with fixed version
+                    memory_copy['metadata'] = fixed_metadata
+                    logger.info(f"Fixed non-serializable data in memory {memory_id}")
+                    
+                    # Verify fix worked
+                    try:
+                        json.dumps(memory_copy)
+                        logger.info(f"Serialization fix successful for memory {memory_id}")
+                    except Exception as e2:
+                        logger.error(f"Failed to fix serialization for memory {memory_id}: {e2}")
+                        # Last resort: remove problematic metadata
+                        if 'metadata' in memory_copy:
+                            logger.warning(f"Removing metadata for memory {memory_id} due to serialization failure")
+                            memory_copy['metadata'] = {}
+            
+            # Final verification before save - preserve emotion data if present
+            if 'metadata' in memory_copy:
+                metadata = memory_copy['metadata']
+                # Ensure emotion data is preserved - if we have it in the original
+                if 'metadata' in memory and 'emotions' in memory['metadata'] and 'emotions' not in metadata:
+                    metadata['emotions'] = memory['metadata']['emotions']
+                    logger.info(f"Restored emotions data for memory {memory_id}")
+                
+                if 'metadata' in memory and 'dominant_emotion' in memory['metadata'] and 'dominant_emotion' not in metadata:
+                    metadata['dominant_emotion'] = memory['metadata']['dominant_emotion']
+                    logger.info(f"Restored dominant_emotion data for memory {memory_id}")
+            
             with open(file_path, 'w') as f:
                 json.dump(memory_copy, f)
                 
             logger.info(f"Successfully saved memory {memory_id} to {file_path}")
+            
+            # Verify the data was saved correctly by loading it back
+            try:
+                with open(file_path, 'r') as f:
+                    saved_data = json.load(f)
+                    
+                if 'metadata' in saved_data:
+                    saved_metadata = saved_data['metadata']
+                    if 'emotions' in saved_metadata or 'dominant_emotion' in saved_metadata:
+                        logger.info(f"Verified emotional data was saved correctly for memory {memory_id}")
+                    else:
+                        logger.warning(f"Emotional data verification failed for memory {memory_id}")
+            except Exception as ve:
+                logger.error(f"Error verifying saved data for memory {memory_id}: {ve}")
             
         except Exception as e:
             logger.error(f"Error saving memory {memory.get('id','unknown')}: {str(e)}", exc_info=True)

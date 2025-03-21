@@ -82,3 +82,11 @@ whisper-finetune-output/
 # Misc
 .DS_Store
 Thumbs.db
+
+# Test data
+test_data/
+test_results/
+memory/test_*/
+memory/stored/*.json
+memory/stored/corrupted_backups/
+!memory/stored/memory_index.json
