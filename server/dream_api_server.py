@@ -3,6 +3,18 @@ import asyncio
 import logging
 import os
 import sys
+
+# Add the project root to Python path to fix imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# Add memory_core directory directly to path if it exists
+memory_core_path = os.path.join(project_root, 'memory_core')
+if os.path.exists(memory_core_path) and memory_core_path not in sys.path:
+    sys.path.insert(0, memory_core_path)
+    print(f"Added memory_core directory to path: {memory_core_path}")
+
 import uvicorn
 import json
 import time
@@ -96,11 +108,20 @@ hpc_lock = asyncio.Lock()
 # Environment variables
 STORAGE_PATH = os.getenv('STORAGE_PATH', './data')
 LUCIDIA_STORAGE_PATH = os.getenv('LUCIDIA_STORAGE_PATH', '/app/memory')
-TENSOR_SERVER_URL = os.getenv('TENSOR_SERVER_URL', 'ws://nemo_sig_v3:5001')
-HPC_SERVER_URL = os.getenv('HPC_SERVER_URL', 'ws://nemo_sig_v3:5005')
-LLM_API_ENDPOINT = os.getenv('LLM_API_ENDPOINT', 'http://localhost:1234/v1/chat/completions')
+# OVERRIDE environment variables with hardcoded values to ensure proper operation
+# For Docker internal communication, hardcode the URLs to addresses that will definitely resolve
+# The services need to communicate over the Docker network using the service name 'quickrecal'
+TENSOR_SERVER_URL = 'ws://quickrecal:5001'  # Hard override to ensure correct Docker service resolution
+HPC_SERVER_URL = 'ws://quickrecal:5005'      # Hard override to ensure correct Docker service resolution
+LLM_API_ENDPOINT = os.getenv('LLM_API_ENDPOINT', 'http://host.docker.internal:1234/v1/chat/completions')
 LLM_MODEL = os.getenv('LLM_MODEL', 'qwen2.5-7b-instruct')
-PING_INTERVAL = float(os.getenv('PING_INTERVAL', '30.0'))
+
+# Log connection parameters for debugging
+logging.info(f"FORCING tensor server URL to: {TENSOR_SERVER_URL}")
+logging.info(f"FORCING HPC server URL to: {HPC_SERVER_URL}")
+logging.info(f"Using LLM API endpoint: {LLM_API_ENDPOINT}")
+
+PING_INTERVAL = float(os.getenv('PING_INTERVAL', '20.0'))
 CONNECTION_RETRY_LIMIT = int(os.getenv('CONNECTION_RETRY_LIMIT', '5'))
 CONNECTION_RETRY_DELAY = float(os.getenv('CONNECTION_RETRY_DELAY', '2.0'))
 CONNECTION_TIMEOUT = float(os.getenv('CONNECTION_TIMEOUT', '10.0'))
@@ -320,19 +341,33 @@ async def initialize_components():
         
         logger.info("Initializing memory client...")
         # Connect to tensor and HPC servers running in the same Docker network
-        memory_client = EnhancedMemoryClient(config={
-            "tensor_server_url": TENSOR_SERVER_URL,
-            "hpc_server_url": HPC_SERVER_URL,
-            "ping_interval": PING_INTERVAL,
-            "max_retries": CONNECTION_RETRY_LIMIT,
-            "retry_delay": CONNECTION_RETRY_DELAY
-        }, memory_system=memory_system, memory_bridge=memory_bridge)  # Pass the memory system and bridge directly
-        await memory_client.initialize()
+        try:
+            memory_client = EnhancedMemoryClient(
+                tensor_server_url=TENSOR_SERVER_URL,
+                hpc_server_url=HPC_SERVER_URL,
+                ping_interval=PING_INTERVAL,
+                max_retries=CONNECTION_RETRY_LIMIT,
+                retry_delay=CONNECTION_RETRY_DELAY,
+                connection_timeout=CONNECTION_TIMEOUT,
+                memory_system=memory_system,  # Pass the memory system directly
+                memory_bridge=memory_bridge   # Pass the memory bridge directly
+            )
+            # Initialize the memory client (required for async connections)
+            await memory_client.initialize()
+            logger.info(f"Memory client initialized with tensor URL: {TENSOR_SERVER_URL} and HPC URL: {HPC_SERVER_URL}")
+        except Exception as e:
+            logger.error(f"Error initializing memory client: {e}")
+            raise
         
         logger.info("Initializing HypersphereDispatcher for enhanced embedding operations...")
+        from memory.lucidia_memory_system.core.hypersphere_dispatcher import HypersphereDispatcher
+        
+        # Force the HypersphereDispatcher to use the correct URLs
+        logger.info(f"Creating HypersphereDispatcher with FORCED URLs: tensor={TENSOR_SERVER_URL}, HPC={HPC_SERVER_URL}")
         hypersphere_manager = HypersphereDispatcher(
-            tensor_server_uri=TENSOR_SERVER_URL,
-            hpc_server_uri=HPC_SERVER_URL,
+            # Force the exact same URLs as used for memory_client to ensure consistency
+            tensor_server_uri=TENSOR_SERVER_URL,  
+            hpc_server_uri=HPC_SERVER_URL,       
             max_connections=5,
             min_batch_size=4,
             max_batch_size=32,
@@ -343,6 +378,14 @@ async def initialize_components():
             health_check_interval=60.0
         )
         await hypersphere_manager.start()
+        
+        # Register the memory client with the hypersphere manager to share connections
+        # Note: These methods are NOT async, so we removed the 'await' keywords
+        logger.info("Registering clients with hypersphere manager...")
+        hypersphere_manager.register_tensor_client(memory_client)
+        hypersphere_manager.register_hpc_client(memory_client)
+        
+        # RAGIntegrationService will be initialized later after all dependencies are properly set up
         
         logger.info("Initializing knowledge graph...")
         knowledge_graph = KnowledgeGraph({
@@ -403,8 +446,7 @@ async def initialize_components():
         # Initialize the LLM manager
         await llm_manager.initialize()
         
-        # Initialize RAG Integration Service
-        logger.info("Initializing RAG Integration Service...")
+        # Initialize RAGIntegrationService with the correct parameters
         from server.rag_integration_service import RAGIntegrationService
         rag_integration_service = RAGIntegrationService(
             memory_system=memory_system,
@@ -897,7 +939,7 @@ app.include_router(general_parameter_router)
 async def health_check():
     """Basic health check endpoint"""
     try:
-        # Record API call activity
+        # Record API call activity   
         activity_tracker = UserActivityTracker.get_instance()
         activity_tracker.record_activity(activity_type="api_call", details={"endpoint": "/health"})
         
