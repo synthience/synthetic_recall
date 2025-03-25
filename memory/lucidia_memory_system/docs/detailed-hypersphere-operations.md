@@ -63,8 +63,8 @@ sequenceDiagram
     activate TS
     TS-->>HD: Return Raw Embedding
     deactivate TS
-    HD->>HD: Calculate Significance
-    HD-->>MemCore: Return Embedding and Significance
+    HD->>HD: Calculate Quick recall score
+    HD-->>MemCore: Return Embedding and Quick recall score
     deactivate HD
     
     %% Embedding Decay Operation

@@ -49,7 +49,7 @@ class MemoryPrioritizationLayer:
             'max_stm_results': 5,       # Maximum results from STM
             'max_ltm_results': 10,      # Maximum results from LTM
             'max_hpc_results': 15,      # Maximum results from HPC
-            'min_significance': 0.3,    # Minimum significance threshold
+            'min_quickrecal_score': 0.3,    # Minimum quickrecal score threshold
             **(config or {})
         }
         
@@ -347,7 +347,7 @@ class MemoryPrioritizationLayer:
         
         # Evaluate significance for potential LTM storage
         significance = context.get('significance', 0.5)
-        if significance > self.config['min_significance']:
+        if significance > self.config['min_quickrecal_score']:
             # Also store in LTM for persistence
             ltm_id = await self.ltm.store_memory(query, significance=significance)
             logger.info(f"Stored significant memory in LTM with ID {ltm_id}")
@@ -383,9 +383,11 @@ class MemoryPrioritizationLayer:
         """
         try:
             # Get recent memory matches from STM
-            results = await self.stm.get_recent(query, 
-                                             limit=self.config['max_stm_results'] * 2,  # Increased limit for better recall
-                                             min_similarity=self.config['min_significance'])
+            results = await self.stm.search(
+                query,
+                limit=self.config['max_stm_results'] * 2,  # Increased limit for better recall
+                min_quickrecal_score=self.config['min_quickrecal_score'] * 0.5  # Lower threshold for better recall
+            )
             
             # Add source metadata
             for result in results:
@@ -412,7 +414,7 @@ class MemoryPrioritizationLayer:
             # Search LTM for matching memories
             results = await self.ltm.search_memory(query, 
                                                 limit=self.config['max_ltm_results'] * 3,  # Further increased limit for better cross-session recall
-                                                min_significance=self.config['min_significance'] * 0.7)  # Lower threshold for LTM to catch more cross-session memories
+                                                min_quickrecal_score=self.config['min_quickrecal_score'] * 0.7)  # Lower threshold for LTM to catch more cross-session memories
             
             # Add source metadata
             for result in results:
@@ -447,7 +449,7 @@ class MemoryPrioritizationLayer:
             stm_results = await self.stm.search(
                 query,
                 limit=self.config['max_stm_results'] * 2,  # Increased limit for better recall
-                min_significance=self.config['min_significance'] * 0.5  # Lower threshold for better recall
+                min_quickrecal_score=self.config['min_quickrecal_score'] * 0.5  # Lower threshold for better recall
             )
             
             # Get results from LTM

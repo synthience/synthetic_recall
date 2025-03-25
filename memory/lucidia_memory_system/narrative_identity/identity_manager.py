@@ -14,6 +14,7 @@ import os
 import re
 from datetime import datetime
 from typing import Dict, List, Any, Optional
+import asyncio
 
 from .narrative_identity import NarrativeIdentity
 from .autobiographical_memory import AutobiographicalMemory
@@ -53,7 +54,7 @@ class NarrativeIdentityManager:
             "identity_file": "identity_state.json",
             "memory_file": "autobiographical_memory.json",
             "auto_save_interval": 3600,  # 1 hour in seconds
-            "dream_integration_threshold": 0.7  # Minimum significance for dream integration
+            "dream_integration_threshold": 0.7  # Minimum quickrecal_score for dream integration
         }
         
         # Last save timestamp
@@ -163,13 +164,13 @@ class NarrativeIdentityManager:
         if current_time - self.last_save > self.config["auto_save_interval"]:
             await self.save_state()
     
-    async def record_experience(self, content, metadata=None, significance=0.7):
+    async def record_experience(self, content, metadata=None, quickrecal_score=0.7):
         """Record an experience in autobiographical memory.
         
         Args:
             content: Experience content text
             metadata: Optional additional metadata
-            significance: Significance of the experience (0.0 to 1.0)
+            quickrecal_score: QuickRecal score of the experience (0.0 to 1.0)
             
         Returns:
             Success status
@@ -178,20 +179,20 @@ class NarrativeIdentityManager:
             return False
             
         memory_id = await self.autobiographical_memory.add_experience(
-            content, metadata, significance
+            content, metadata, quickrecal_score
         )
         
         if memory_id:
             # If highly significant, add to identity timeline
-            if significance >= 0.8:
+            if quickrecal_score >= 0.8:
                 self.identity.add_to_timeline(
                     memory_id,
                     content[:100] + ("..." if len(content) > 100 else ""),
-                    significance
+                    quickrecal_score
                 )
                 
                 # Check for identity evolution
-                await self._check_identity_evolution(memory_id, content, significance)
+                await self._check_identity_evolution(memory_id, content, quickrecal_score)
             
             # Auto-save if needed
             await self.check_auto_save()
@@ -200,13 +201,13 @@ class NarrativeIdentityManager:
         
         return False
     
-    async def _check_identity_evolution(self, memory_id, content, significance):
+    async def _check_identity_evolution(self, memory_id, content, quickrecal_score):
         """Check if an experience should trigger identity evolution.
         
         Args:
             memory_id: Memory identifier
             content: Experience content
-            significance: Experience significance
+            quickrecal_score: Experience QuickRecal score
         """
         # Simple keyword-based approach for now
         content_lower = content.lower()
@@ -217,7 +218,7 @@ class NarrativeIdentityManager:
             # Extract potential traits
             traits = self._extract_traits(content)
             for trait, confidence in traits:
-                self.identity.add_trait(trait, confidence * significance)
+                self.identity.add_trait(trait, confidence * quickrecal_score)
         
         # Check for value-related content
         value_keywords = ["value", "principle", "belief", "ethic", "moral", "important to me"]
@@ -225,7 +226,7 @@ class NarrativeIdentityManager:
             # Extract potential values
             values = self._extract_values(content)
             for value, importance in values:
-                self.identity.add_value(value, importance * significance)
+                self.identity.add_value(value, importance * quickrecal_score)
         
         # Check for capability-related content
         capability_keywords = ["capability", "ability", "skill", "can do", "competence"]
@@ -233,7 +234,7 @@ class NarrativeIdentityManager:
             # Extract potential capabilities
             capabilities = self._extract_capabilities(content)
             for capability, proficiency in capabilities:
-                self.identity.add_capability(capability, proficiency * significance)
+                self.identity.add_capability(capability, proficiency * quickrecal_score)
     
     def _extract_traits(self, content):
         """Extract potential traits from content.
@@ -372,20 +373,20 @@ class NarrativeIdentityManager:
         identity_updates = []
         
         for insight in dream_insights:
-            # Check significance threshold
-            significance = insight.get("significance", 0.0)
-            if significance < self.config["dream_integration_threshold"]:
+            # Check quickrecal_score threshold
+            quickrecal_score = insight.get("quickrecal_score", insight.get("significance", 0.0))  # Support both new and old field names
+            if quickrecal_score < self.config["dream_integration_threshold"]:
                 continue
             
             # Add to identity dream insights
             self.identity.add_dream_insight(
                 insight.get("text", ""),
-                significance
+                quickrecal_score
             )
             
             # Check for identity evolution
             content = insight.get("text", "")
-            updates = await self._process_dream_insight(content, significance)
+            updates = await self._process_dream_insight(content, quickrecal_score)
             if updates:
                 identity_updates.extend(updates)
             
@@ -409,12 +410,12 @@ class NarrativeIdentityManager:
             "identity_updates": identity_updates
         }
     
-    async def _process_dream_insight(self, content, significance):
+    async def _process_dream_insight(self, content, quickrecal_score):
         """Process a dream insight for identity updates.
         
         Args:
             content: Insight content
-            significance: Insight significance
+            quickrecal_score: Insight QuickRecal score
             
         Returns:
             List of identity updates
@@ -426,21 +427,21 @@ class NarrativeIdentityManager:
         if any(keyword in content_lower for keyword in ["trait", "characteristic", "personality"]):
             traits = self._extract_traits(content)
             for trait, confidence in traits:
-                self.identity.add_trait(trait, confidence * significance)
+                self.identity.add_trait(trait, confidence * quickrecal_score)
                 updates.append({"type": "trait", "value": trait})
         
         # Check for value-related content
         if any(keyword in content_lower for keyword in ["value", "principle", "belief"]):
             values = self._extract_values(content)
             for value, importance in values:
-                self.identity.add_value(value, importance * significance)
+                self.identity.add_value(value, importance * quickrecal_score)
                 updates.append({"type": "value", "value": value})
         
         # Check for capability-related content
         if any(keyword in content_lower for keyword in ["capability", "ability", "skill"]):
             capabilities = self._extract_capabilities(content)
             for capability, proficiency in capabilities:
-                self.identity.add_capability(capability, proficiency * significance)
+                self.identity.add_capability(capability, proficiency * quickrecal_score)
                 updates.append({"type": "capability", "value": capability})
         
         return updates
@@ -504,7 +505,9 @@ class NarrativeIdentityManager:
                 "timestamp": memory.get("metadata", {}).get("added_timestamp", 0),
                 "category": memory.get("metadata", {}).get("narrative_category", "experience"),
                 "summary": memory.get("content", "")[:100] + ("..." if len(memory.get("content", "")) > 100 else ""),
-                "significance": memory.get("metadata", {}).get("identity_significance", 0.0)
+                "quickrecal_score": memory.get("metadata", {}).get("identity_quickrecal", 
+                                memory.get("metadata", {}).get("quickrecal_score",
+                                memory.get("metadata", {}).get("identity_significance", 0.0)))
             })
         
         # Sort by timestamp (descending)
@@ -614,3 +617,172 @@ class NarrativeIdentityManager:
         except Exception as e:
             self.logger.error(f"Error adding relationship: {e}")
             return False
+    
+    def set_role_identities(self, roles_dict):
+        """Set identity mappings for conversation roles.
+        
+        Args:
+            roles_dict: Dictionary mapping role names to identity names
+        
+        Returns:
+            Dict with success status
+        """
+        try:
+            # Store the role identity mappings
+            if not hasattr(self, 'role_identities'):
+                self.role_identities = {
+                    "assistant": "Lucidia",
+                    "user": "Human User"
+                }
+            
+            # Update with provided roles
+            self.role_identities.update(roles_dict)
+            
+            # If we have knowledge graph access, update identity nodes
+            if self.knowledge_graph and hasattr(self.knowledge_graph, "update_node"):
+                for role, identity in roles_dict.items():
+                    # Only update if these are the main identities
+                    if role in ["assistant", "user"]:
+                        try:
+                            if role == "assistant":
+                                # Update the assistant's node with identity information
+                                node_id = "Lucidia"  # Assuming Lucidia is the fixed node ID for the assistant
+                                updates = {
+                                    "identity": {
+                                        "name": identity,
+                                        "role": role,
+                                        "updated": datetime.now().isoformat()
+                                    }
+                                }
+                                # Asynchronously update the node
+                                asyncio.create_task(self.knowledge_graph.update_node(node_id, updates))
+                                self.logger.info(f"Updated assistant identity in knowledge graph: {identity}")
+                            elif role == "user":
+                                # Update the user's node with identity information
+                                # First check if user node exists, otherwise create a placeholder
+                                node_id = f"User:{identity}"
+                                updates = {
+                                    "identity": {
+                                        "name": identity,
+                                        "role": role,
+                                        "updated": datetime.now().isoformat()
+                                    },
+                                    "type": "entity"
+                                }
+                                # Asynchronously update the node
+                                asyncio.create_task(self.knowledge_graph.update_node(node_id, updates))
+                                self.logger.info(f"Updated user identity in knowledge graph: {identity}")
+                        except Exception as e:
+                            self.logger.warning(f"Failed to update identity in knowledge graph: {e}")
+            
+            self.logger.info(f"Role identities updated: {roles_dict}")
+            return {"success": True, "message": "Role identities updated"}
+        except Exception as e:
+            self.logger.error(f"Failed to update role identities: {e}")
+            return {"success": False, "message": f"Failed to update role identities: {e}"}
+    
+    async def get_context(self, query, max_tokens=1024):
+        """Get narrative identity context based on the query.
+        
+        Args:
+            query: The query to get context for
+            max_tokens: Maximum tokens to include in the context
+            
+        Returns:
+            Formatted context string
+        """
+        try:
+            # Start with basic identity information
+            context_parts = []
+            
+            # Add core identity information
+            if hasattr(self, 'identity') and self.identity:
+                context_parts.append(f"# Narrative Identity Overview\n")
+                
+                # Add core traits if available
+                if hasattr(self.identity, 'traits') and self.identity.traits:
+                    traits_str = ", ".join([f"{t}" for t in list(self.identity.traits.keys())[:5]])
+                    context_parts.append(f"Core traits: {traits_str}\n")
+                
+                # Add core values if available
+                if hasattr(self.identity, 'values') and self.identity.values:
+                    values_str = ", ".join([f"{v}" for v in list(self.identity.values.keys())[:5]])
+                    context_parts.append(f"Core values: {values_str}\n")
+            
+            # Add relevant autobiographical memories if available
+            if self.autobiographical_memory:
+                # Get memories asynchronously instead of using the sync method
+                try:
+                    memories = await self.get_identity_relevant_memories(limit=3)
+                except Exception:
+                    # Fallback to sync method if async fails
+                    memories = self.get_identity_relevant_memories_sync(limit=3)
+                    
+                if memories:
+                    context_parts.append("\n# Relevant Autobiographical Memories\n")
+                    for memory in memories:
+                        context_parts.append(f"- {memory.get('content', '')}\n")
+            
+            # Combine all parts into a single context string
+            full_context = "\n".join(context_parts)
+            
+            # Simple token counting approximation (rough estimate)
+            if max_tokens > 0 and len(full_context.split()) > max_tokens:
+                # Truncate to approximate token count (words as proxy for tokens)
+                words = full_context.split()
+                full_context = " ".join(words[:max_tokens])
+                full_context += "\n[Context truncated due to length]\n"
+            
+            return full_context
+        except Exception as e:
+            self.logger.error(f"Error generating narrative identity context: {e}")
+            return ""  # Return empty string on error
+    
+    def get_identity_relevant_memories_sync(self, limit=5):
+        """Synchronous version of get_identity_relevant_memories.
+        
+        This is a helper method to retrieve memories in a synchronous context.
+        
+        Args:
+            limit: Maximum number of memories to retrieve
+            
+        Returns:
+            List of relevant memories or empty list if none found/error occurs
+        """
+        try:
+            if not self.autobiographical_memory:
+                return []
+                
+            # Simple fallback - just return recent memories instead of running async code
+            return self.autobiographical_memory.get_recent_memories_sync(limit=limit)
+        except Exception as e:
+            self.logger.error(f"Error retrieving identity relevant memories synchronously: {e}")
+            return []
+    
+    def get_contextual_identity(self, query, max_tokens=1024):
+        """Get contextual identity information based on the query.
+        This is an alias for get_context with a more specific name.
+        
+        Args:
+            query: The query to get identity context for
+            max_tokens: Maximum tokens to include in the context
+            
+        Returns:
+            Formatted identity context string
+        """
+        return self.get_context(query, max_tokens)
+    
+    # Legacy method for backward compatibility
+    async def record_experience_legacy(self, content, metadata=None, significance=0.7):
+        """Legacy method for recording an experience with significance parameter.
+        
+        Args:
+            content: Experience content text
+            metadata: Optional additional metadata
+            significance: Significance of the experience (deprecated, use quickrecal_score)
+            
+        Returns:
+            Success status
+        """
+        self.logger.warning("record_experience_legacy with significance parameter is deprecated. Use record_experience with quickrecal_score instead.")
+        return await self.record_experience(content, metadata, significance)

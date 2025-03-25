@@ -251,14 +251,14 @@ class ShortTermMemory:
         
         return None
     
-    async def keyword_search(self, keywords: List[str], limit: int = 5, min_significance: float = 0.0) -> List[Dict[str, Any]]:
+    async def keyword_search(self, keywords: List[str], limit: int = 5, min_quickrecal_score: float = 0.0) -> List[Dict[str, Any]]:
         """
         Search memories by keywords.
         
         Args:
             keywords: List of keywords to search for
             limit: Maximum number of results to return
-            min_significance: Minimum significance threshold
+            min_quickrecal_score: Minimum quickrecal score threshold
             
         Returns:
             List of matching memories
@@ -274,8 +274,8 @@ class ShortTermMemory:
         lowercase_keywords = [k.lower() for k in keywords]
         
         for memory in self.memory:
-            # Skip memories below significance threshold
-            if memory.get('metadata', {}).get('significance', 0.0) < min_significance:
+            # Skip memories below quickrecal score threshold
+            if memory.get('metadata', {}).get('quickrecal_score', 0.0) < min_quickrecal_score:
                 continue
                 
             # Check if any keyword is in the memory content
@@ -297,31 +297,33 @@ class ShortTermMemory:
         logger.info(f"Keyword search found {len(results)} results")
         return results
     
-    async def search(self, query: str, limit: int = 5, min_significance: float = 0.0) -> List[Dict[str, Any]]:
+    async def search(self, query: str, limit: int = 5, min_quickrecal_score: float = 0.0) -> List[Dict[str, Any]]:
         """
-        Search memories by semantic similarity to a query.
+        Search for memories by semantic similarity.
         
         Args:
             query: Search query
             limit: Maximum number of results to return
-            min_significance: Minimum significance threshold
+            min_quickrecal_score: Minimum quickrecal score threshold
             
         Returns:
             List of matching memories
         """
-        logger.debug(f"Performing semantic search with query: {query}")
+        logger.debug(f"Searching short-term memory with query: {query}")
         
-        # Try to use the get_recent method first, which has semantic search capabilities
-        try:
-            results = await self.get_recent(query, limit, min_significance)
-            if results:
-                return results
-        except Exception as e:
-            logger.warning(f"Error using get_recent for search: {e}")
+        # For simple implementations, we can fall back to keyword search
+        # Extract keywords from the query
+        keywords = query.lower().split()
         
-        # As a fallback, treat this as a keyword search by splitting the query into words
-        keywords = query.split()
-        return await self.keyword_search(keywords, limit, min_significance)
+        # First try to get recent memories that match
+        results = await self.get_recent(query, limit, min_quickrecal_score)
+        
+        # If we don't have enough results, do a keyword search
+        if len(results) < limit:
+            keyword_results = await self.keyword_search(keywords, limit - len(results), min_quickrecal_score)
+            results.extend(keyword_results)
+        
+        return results[:limit]
         
     async def recency_biased_search(self, query: str, limit: int = 5, recency_weight: float = 0.5) -> List[Dict[str, Any]]:
         """

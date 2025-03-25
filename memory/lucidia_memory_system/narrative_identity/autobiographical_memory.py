@@ -474,7 +474,7 @@ class AutobiographicalMemory:
             if candidate_ids:
                 candidate_ids &= keyword_matches
             else:
-                candidate_ids = keyword_matches
+                keyword_matches = keyword_matches
         
         # Filter by QuickRecal score
         if quickrecal_threshold > 0:
@@ -640,6 +640,51 @@ class AutobiographicalMemory:
             start_time=start_time,
             limit=limit
         )
+    
+    def get_recent_memories_sync(self, days: int = 7, limit: int = 5) -> List[Dict[str, Any]]:
+        """Synchronous version of get_recent_memories.
+        
+        This method provides a non-async way to retrieve recent memories
+        without needing to use await. It's designed for use in synchronous contexts.
+        
+        Args:
+            days: Number of days to look back
+            limit: Maximum number of memories to return
+            
+        Returns:
+            List of recent memories or empty list on error
+        """
+        try:
+            # Calculate start time
+            start_time = time.time() - (days * 24 * 3600)
+            
+            # Get memory IDs manually from temporal index
+            recent_memory_ids = []
+            for timestamp, ids in self.temporal_index.items():
+                if timestamp >= start_time:
+                    recent_memory_ids.extend(ids)
+            
+            # Sort by time (newest first) and limit
+            memories = []
+            for memory_id in sorted(recent_memory_ids, reverse=True)[:limit]:
+                if memory_id in self.autobiographical_index:
+                    memory_data = self.autobiographical_index[memory_id]
+                    # Get full memory if available
+                    if self.memory_system and hasattr(self.memory_system, 'get_memory_by_id'):
+                        try:
+                            full_memory = self.memory_system.get_memory_by_id(memory_id)
+                            if full_memory:
+                                memories.append(full_memory)
+                                continue
+                        except:
+                            # Fall back to just using the index data
+                            pass
+                    memories.append(memory_data)
+            
+            return memories
+        except Exception as e:
+            logging.error(f"Error in get_recent_memories_sync: {e}")
+            return []  # Return empty list on error
     
     async def get_memory_stats(self) -> Dict[str, Any]:
         """Get statistics about autobiographical memory.

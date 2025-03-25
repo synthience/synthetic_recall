@@ -16,6 +16,7 @@ import random
 import logging
 import networkx as nx
 import matplotlib.pyplot as plt
+import numpy as np
 from typing import Dict, List, Any, Optional, Tuple, Set, Union, Callable
 from datetime import datetime
 from collections import defaultdict, deque
@@ -390,6 +391,18 @@ class LucidiaKnowledgeGraph:
             "emotion_count": 0  # Number of emotion insights integrated
         }
         
+        # Hyperbolic embeddings configuration
+        self.hyperbolic_embedding = {
+            "enabled": self.config.get("enable_hyperbolic", False),
+            "curvature": self.config.get("hyperbolic_curvature", 1.0),
+            "dimension": self.config.get("embedding_dimension", 128),
+            "embedding_nodes": set(),
+            "hierarchical_threshold": 0.7,
+            "use_for_similarity": True,
+            "embedding_type": "poincare",
+            "initialized": False
+        }
+        
         # Emotion analyzer service
         self.emotion_analyzer_url = emotion_analyzer_url
         self.emotion_analyzer_ws = None
@@ -446,8 +459,16 @@ class LucidiaKnowledgeGraph:
         # Register core modules
         self._register_core_modules()
         
-        # Subscribe to events
-        self._subscribe_to_events()
+        # Schedule async event subscription for later execution
+        try:
+            # Check if we're in an event loop
+            if asyncio.get_event_loop().is_running():
+                asyncio.create_task(self._subscribe_to_events())
+            else:
+                # No running event loop, log a message but continue initialization
+                self.logger.warning("No running event loop for async event subscription - will need to be initialized manually later")
+        except RuntimeError as e:
+            self.logger.warning(f"Could not schedule async event subscription: {e} - will need to be initialized manually later")
         
         # Initialize core nodes based on provided models if available
         self._initialize_core_nodes()
@@ -1366,7 +1387,7 @@ class LucidiaKnowledgeGraph:
         elif resolution_action == "merge_nodes":
             # Merge two nodes
             merge_target = resolution_data.get("merge_target", source_id)
-            merge_source = target_id if merge_target == source_id else source_id
+            merge_source = target_id if merge_target == source_id else target_id
             
             await self._merge_nodes(merge_source, merge_target)
         
@@ -1763,6 +1784,21 @@ class LucidiaKnowledgeGraph:
                 # Update modification time
                 current_attrs["modified"] = datetime.now().isoformat()
                 
+                # Update hyperbolic embedding if regular embedding is provided and hyperbolic is enabled
+                if self.hyperbolic_embedding["enabled"] and "embedding" in attributes:
+                    try:
+                        euclidean_embedding = attributes.get("embedding")
+                        # Convert to numpy array if needed
+                        if not isinstance(euclidean_embedding, np.ndarray):
+                            euclidean_embedding = np.array(euclidean_embedding, dtype=np.float32)
+                            
+                        # Project into hyperbolic space
+                        hyperbolic_emb = self._to_hyperbolic(euclidean_embedding)
+                        current_attrs["hyperbolic_embedding"] = hyperbolic_emb.tolist()
+                        self.hyperbolic_embedding["embedding_nodes"].add(node_id)
+                    except Exception as e:
+                        self.logger.error(f"Error updating hyperbolic embedding for {node_id}: {e}")
+                
                 self.logger.debug(f"Updated existing node: {node_id} (type: {node_type})")
                 return True
             
@@ -1772,6 +1808,21 @@ class LucidiaKnowledgeGraph:
             node_attrs["type"] = node_type
             node_attrs["domain"] = domain
             node_attrs["created"] = datetime.now().isoformat()
+            
+            # Create hyperbolic embedding if regular embedding is provided and hyperbolic is enabled
+            if self.hyperbolic_embedding["enabled"] and "embedding" in attributes:
+                try:
+                    euclidean_embedding = attributes.get("embedding")
+                    # Convert to numpy array if needed
+                    if not isinstance(euclidean_embedding, np.ndarray):
+                        euclidean_embedding = np.array(euclidean_embedding, dtype=np.float32)
+                        
+                    # Project into hyperbolic space
+                    hyperbolic_emb = self._to_hyperbolic(euclidean_embedding)
+                    node_attrs["hyperbolic_embedding"] = hyperbolic_emb.tolist()
+                    self.hyperbolic_embedding["embedding_nodes"].add(node_id)
+                except Exception as e:
+                    self.logger.error(f"Error creating hyperbolic embedding for {node_id}: {e}")
             
             # Add the node to the graph
             self.graph.add_node(node_id, **node_attrs)
@@ -2288,7 +2339,7 @@ class LucidiaKnowledgeGraph:
                 )
                 connected_concepts.append(concept)
                 
-                # Mark concept as dream enhanced
+                # Mark concept as dream influenced
                 self.dream_influenced_nodes.add(concept)
                 self.dream_integration["dream_enhanced_nodes"].add(concept)
                 
@@ -2461,7 +2512,7 @@ class LucidiaKnowledgeGraph:
             definition = concept_node.get("definition", "")
             
             # Calculate semantic similarity between concept and insight
-            similarity = self._text_similarity(definition, insight_text)
+            similarity = self._calculate_similarity(insight_text, definition)
             
             # Get related concepts (already in the graph)
             related_concepts = await self.get_connected_nodes(
@@ -2991,6 +3042,11 @@ class LucidiaKnowledgeGraph:
             type_groups = defaultdict(list)
             
             for neighbor in neighbors:
+                # Skip if already in primary nodes
+                if neighbor in nodes_to_reindex:
+                    continue
+                
+                # Get neighbor type
                 neighbor_type = self.graph.nodes[neighbor].get("type", "unknown")
                 type_groups[neighbor_type].append(neighbor)
             
@@ -3186,7 +3242,8 @@ class LucidiaKnowledgeGraph:
         return edges
 
     async def search_nodes(self, query: str, limit: int = 10, threshold: float = 0.5, 
-                      include_metadata: bool = True, domains: Optional[List[str]] = None) -> Dict[str, Any]:
+                      include_metadata: bool = True, domains: Optional[List[str]] = None,
+                      query_embedding: Optional[List[float]] = None) -> Dict[str, Any]:
         """
         Search for nodes in the knowledge graph based on a semantic query.
         
@@ -3196,6 +3253,7 @@ class LucidiaKnowledgeGraph:
             threshold: Minimum similarity threshold (0-1)
             include_metadata: Whether to include node metadata in results
             domains: Optional list of domains to search within
+            query_embedding: Optional pre-computed embedding for the query
             
         Returns:
             Dictionary with search results and metadata
@@ -3210,13 +3268,43 @@ class LucidiaKnowledgeGraph:
             "metadata": {
                 "total_nodes_searched": 0,
                 "search_time_ms": 0,
-                "threshold": threshold
+                "threshold": threshold,
+                "using_embeddings": query_embedding is not None,
+                "using_hyperbolic": False
             }
         }
-        
         start_time = time.time()
         
         try:
+            # Convert query_embedding to numpy array if provided
+            query_emb = None
+            query_hyperbolic_emb = None
+            using_hyperbolic = False
+            
+            if query_embedding is not None:
+                try:
+                    # Convert to numpy array
+                    if not isinstance(query_embedding, np.ndarray):
+                        query_emb = np.array(query_embedding, dtype=np.float32)
+                    else:
+                        query_emb = query_embedding
+                        
+                    # Validate embedding
+                    if np.isnan(query_emb).any() or np.isinf(query_emb).any():
+                        self.logger.warning("Query embedding contains NaN or Inf values, using text matching instead")
+                        query_emb = None
+                    
+                    # Convert to hyperbolic embedding if enabled and configured for similarity
+                    if (self.hyperbolic_embedding["enabled"] and 
+                        self.hyperbolic_embedding["use_for_similarity"] and 
+                        query_emb is not None):
+                        query_hyperbolic_emb = self._to_hyperbolic(query_emb)
+                        using_hyperbolic = True
+                        results["metadata"]["using_hyperbolic"] = True
+                except Exception as e:
+                    self.logger.error(f"Error processing query embedding: {e}")
+                    query_emb = None
+            
             # Get all nodes that match the search criteria
             matching_nodes = []
             total_nodes = 0
@@ -3229,9 +3317,45 @@ class LucidiaKnowledgeGraph:
                 if domains and node_data.get("domain") not in domains:
                     continue
                 
-                # Basic text matching for now - in a full implementation, this would use embeddings
-                node_text = f"{node_id} {node_data.get('name', '')} {node_data.get('description', '')}" 
-                similarity = self._calculate_similarity(query, node_text)
+                similarity = 0.0
+                
+                # Determine if we can use embeddings for comparison
+                node_emb = None
+                
+                # Get embedding based on whether we're using hyperbolic or standard embeddings
+                if using_hyperbolic and "hyperbolic_embedding" in node_data:
+                    # Use pre-computed hyperbolic embedding
+                    node_emb = node_data["hyperbolic_embedding"]
+                    if not isinstance(node_emb, np.ndarray):
+                        node_emb = np.array(node_emb, dtype=np.float32)
+                    similarity = self._hyperbolic_similarity(query_hyperbolic_emb, node_emb, already_in_hyperbolic=True)
+                elif query_emb is not None and "embedding" in node_data:
+                    # Use standard embedding
+                    node_emb = node_data["embedding"]
+                    if not isinstance(node_emb, np.ndarray):
+                        node_emb = np.array(node_emb, dtype=np.float32)
+                    
+                    # Align dimensions if needed (handling dimension mismatches gracefully)
+                    if len(query_embedding) != len(node_emb):
+                        self.logger.debug(f"Aligning embeddings: {len(query_embedding)} vs {len(node_emb)} dimensions")
+                        query_emb_aligned, node_emb_aligned = self._align_embeddings(query_embedding, node_emb)
+                    else:
+                        query_emb_aligned, node_emb_aligned = query_embedding, node_emb
+                    
+                    # Calculate cosine similarity
+                    norm_query = np.linalg.norm(query_emb_aligned)
+                    norm_node = np.linalg.norm(node_emb_aligned)
+                    
+                    # Handle zero norm vectors
+                    if norm_query < 1e-10 or norm_node < 1e-10:
+                        similarity = 0.0
+                    else:
+                        dot = np.dot(query_emb_aligned, node_emb_aligned)
+                        similarity = dot / (norm_query * norm_node)
+                else:
+                    # Fallback to text similarity
+                    node_text = f"{node_id} {node_data.get('name', '')} {node_data.get('description', '')}"  
+                    similarity = self._calculate_similarity(query, node_text)
                 
                 if similarity >= threshold:
                     matching_nodes.append({
@@ -3261,53 +3385,109 @@ class LucidiaKnowledgeGraph:
         
         return results
     
-    def _calculate_similarity(self, query: str, text: str) -> float:
+    def _calculate_similarity(self, query: str, text: str, query_embedding=None, node_embedding=None) -> float:
         """
         Calculate semantic similarity between query and text.
         
-        This is a placeholder implementation - in a real system, this would use 
+        This is a basic implementation that would be replaced with a more
         proper semantic similarity with embeddings.
         
         Args:
-            query: Search query
-            text: Text to compare against
+            query: Query string
+            text: Text to compare with query
+            query_embedding: Optional embedding of the query
+            node_embedding: Optional embedding of the node
             
         Returns:
             Similarity score between 0 and 1
         """
-        # Normalize both texts
+        # Check if we can use embeddings
+        if query_embedding is not None and node_embedding is not None:
+            try:
+                # Convert to numpy arrays if needed
+                if not isinstance(query_embedding, np.ndarray):
+                    query_embedding = np.array(query_embedding, dtype=np.float32)
+                if not isinstance(node_embedding, np.ndarray):
+                    node_embedding = np.array(node_embedding, dtype=np.float32)
+                    
+                # Check for NaN or Inf values
+                if (np.isnan(query_embedding).any() or np.isinf(query_embedding).any() or
+                    np.isnan(node_embedding).any() or np.isinf(node_embedding).any()):
+                    self.logger.warning("NaN or Inf values detected in embeddings for similarity calculation")
+                    # Fall back to text similarity
+                    return self._text_similarity(query, text)
+                
+                # Use hyperbolic or regular embedding similarity based on configuration
+                if self.hyperbolic_embedding["enabled"] and self.hyperbolic_embedding["use_for_similarity"]:
+                    # Check if node has a pre-computed hyperbolic embedding
+                    hyperbolic_node_embedding = None
+                    if isinstance(text, str) and self.graph.has_node(text):
+                        node_data = self.graph.nodes[text]
+                        if "hyperbolic_embedding" in node_data:
+                            hyperbolic_node_embedding = node_data["hyperbolic_embedding"]
+                            if isinstance(hyperbolic_node_embedding, list):
+                                hyperbolic_node_embedding = np.array(hyperbolic_node_embedding, dtype=np.float32)
+                    
+                    if hyperbolic_node_embedding is not None:
+                        # Use the stored hyperbolic embedding
+                        return self._hyperbolic_similarity(query_embedding, hyperbolic_node_embedding, already_in_hyperbolic=False)
+                    else:
+                        # Project both vectors to hyperbolic space and compare
+                        return self._hyperbolic_similarity(query_embedding, node_embedding, already_in_hyperbolic=False)
+                else:
+                    # Use regular cosine similarity
+                    norm_query = np.linalg.norm(query_embedding)
+                    norm_node = np.linalg.norm(node_embedding)
+                    
+                    # Handle zero norm vectors
+                    if norm_query < 1e-10 or norm_node < 1e-10:
+                        return 0.0
+                        
+                    dot = np.dot(query_embedding, node_embedding)
+                    return dot / (norm_query * norm_node)
+            except Exception as e:
+                self.logger.error(f"Error calculating embedding similarity: {e}")
+                # Fall back to text similarity if embedding similarity fails
+                return self._text_similarity(query, text)
+        
+        # Fallback to text-based similarity if embeddings not available
+        if not query or not text:
+            return 0.0
+            
+        # Normalize text for comparison
         query = query.lower()
         text = text.lower()
         
-        # Simple word matching for demonstration
-        query_words = set(query.split())
-        text_words = set(text.split())
+        # Extract words from query and text
+        query_words = set(re.findall(r'\w+', query))
+        text_words = set(re.findall(r'\w+', text))
         
-        if not query_words or not text_words:
+        if len(query_words) == 0 or len(text_words) == 0:
             return 0.0
-        
-        # Count matches
+            
+        # Find matching words
         matches = query_words.intersection(text_words)
         
         # Calculate Jaccard similarity
         similarity = len(matches) / len(query_words.union(text_words))
         
         # Boost similarity if direct query terms are found
-        if query in text:
+        if any(term in text for term in query_words):
             similarity = min(1.0, similarity + 0.3)
-        
+            
         return similarity
 
-    async def find_paths(self, source: str, target: str, max_depth: int = 3, min_confidence: float = 0.5) -> Dict[str, Any]:
+    async def find_paths(self, source: str, target: str, max_depth: int = 3, min_confidence: float = 0.5, use_hyperbolic: bool = False) -> Dict[str, Any]:
         """
         Find all paths between a source and target node in the knowledge graph.
-        
+
         Args:
             source: Source node ID
             target: Target node ID
             max_depth: Maximum path length to consider
             min_confidence: Minimum edge confidence to consider
-            
+            use_hyperbolic: Whether to use hyperbolic embeddings for path finding
+
         Returns:
             Dictionary with paths and metadata
         """
@@ -3320,61 +3500,31 @@ class LucidiaKnowledgeGraph:
             "metadata": {
                 "max_depth": max_depth,
                 "paths_found": 0,
-                "search_time_ms": 0
+                "search_time_ms": 0,
+                "use_hyperbolic": use_hyperbolic
             }
         }
-        
         start_time = time.time()
         
         try:
             # Check if source and target nodes exist
             if not await self.has_node(source):
-                results["error"] = f"Source node '{source}' not found"
+                self.logger.error(f"Source node {source} does not exist")
+                results["error"] = f"Source node {source} does not exist"
                 return results
-                
             if not await self.has_node(target):
-                results["error"] = f"Target node '{target}' not found"
+                self.logger.error(f"Target node {target} does not exist")
+                results["error"] = f"Target node {target} does not exist"
                 return results
                 
-            # Use NetworkX's all_simple_paths to find paths
-            # But we need to filter by edge confidence, so we can't use it directly
             all_paths = []
-            self._find_paths_recursive(source, target, [], all_paths, max_depth, min_confidence)
+            await self._find_paths_recursive(source, target, [], max_depth, min_confidence, all_paths, use_hyperbolic)
             
-            # Sort paths by length (shortest first)
-            all_paths.sort(key=lambda x: len(x))
-            
-            # Format paths for output
-            for path in all_paths:
-                path_info = {
-                    "nodes": path,
-                    "length": len(path) - 1,
-                    "edges": []
-                }
-                
-                # Add edge information for each segment of the path
-                for i in range(len(path) - 1):
-                    source_id = path[i]
-                    target_id = path[i + 1]
-                    edges = await self.get_edges(source_id, target_id)
-                    
-                    # Find highest confidence edge
-                    if edges:
-                        best_edge = max(edges, key=lambda e: e.get("confidence", 0))
-                        path_info["edges"].append({
-                            "source": source_id,
-                            "target": target_id,
-                            "type": best_edge.get("type", "related_to"),
-                            "confidence": best_edge.get("confidence", 0.5)
-                        })
-                
-                results["paths"].append(path_info)
-            
-            # Update metadata
             end_time = time.time()
-            results["metadata"]["paths_found"] = len(all_paths)
             results["metadata"]["search_time_ms"] = int((end_time - start_time) * 1000)
+            results["metadata"]["paths_found"] = len(all_paths)
             
+            results["paths"] = all_paths
             self.logger.info(f"Found {len(all_paths)} paths between {source} and {target}")
             
         except Exception as e:
@@ -3383,49 +3533,57 @@ class LucidiaKnowledgeGraph:
         
         return results
     
-    def _find_paths_recursive(self, current: str, target: str, current_path: List[str], 
-                            all_paths: List[List[str]], max_depth: int, min_confidence: float) -> None:
+    async def _find_paths_recursive(self, current_node: str, target: str, current_path: List[str],
+                                    max_depth: int, min_confidence: float, all_paths: List[List[str]],
+                                    use_hyperbolic: bool):
         """
-        Recursively find all paths from current to target node.
-        
+        Recursive helper function for find_paths
+
         Args:
-            current: Current node ID
+            current_node: Current node ID
             target: Target node ID
             current_path: Current path being built
-            all_paths: List to store all found paths
             max_depth: Maximum path length
             min_confidence: Minimum edge confidence
+            all_paths: List to store all found paths
+            use_hyperbolic: Whether to use hyperbolic embeddings for path finding
         """
-        # Add current node to path
-        current_path.append(current)
-        
-        # Stop if we reached target
-        if current == target:
-            all_paths.append(current_path.copy())
-            current_path.pop()
+        # Avoid cycles and respect depth limit
+        if current_node in current_path or len(current_path) > max_depth:
             return
         
-        # Stop if we reached max depth
-        if len(current_path) > max_depth:
-            current_path.pop()
+        # Check if target is reached
+        if current_node == target:
+            all_paths.append(current_path + [target])
             return
         
-        # Get all neighbors
-        for _, neighbor, edge_data in self.graph.edges(current, data=True):
-            # Skip if edge confidence is too low
-            if edge_data.get("confidence", 0) < min_confidence:
-                continue
+        # Explore neighbors
+        for neighbor, edge_data in self.graph[current_node].items():
+            
+            # Determine confidence based on hyperbolic embeddings or edge confidence
+            if (use_hyperbolic and 
+                "hyperbolic_embedding" in self.graph.nodes[current_node] and
+                "hyperbolic_embedding" in self.graph.nodes[neighbor]):
                 
-            # Skip if neighbor is already in path (avoid cycles)
-            if neighbor in current_path:
-                continue
+                # Calculate hyperbolic similarity
+                node1_emb = self.graph.nodes[current_node]["hyperbolic_embedding"]
+                node2_emb = self.graph.nodes[neighbor]["hyperbolic_embedding"]
                 
-            # Recursively explore neighbor
-            self._find_paths_recursive(neighbor, target, current_path, all_paths, max_depth, min_confidence)
-        
-        # Remove current node from path
-        current_path.pop()
-
+                # Ensure embeddings are numpy arrays
+                if not isinstance(node1_emb, np.ndarray):
+                    node1_emb = np.array(node1_emb, dtype=np.float32)
+                if not isinstance(node2_emb, np.ndarray):
+                    node2_emb = np.array(node2_emb, dtype=np.float32)
+                    
+                similarity = self._hyperbolic_similarity(node1_emb, node2_emb, already_in_hyperbolic=True)
+                confidence = similarity
+            else:
+                # Use edge confidence
+                confidence = edge_data.get("confidence", 0.0)
+            
+            if confidence >= min_confidence:
+                await self._find_paths_recursive(neighbor, target, current_path + [current_node],
+                                            max_depth, min_confidence, all_paths, use_hyperbolic)
     async def get_most_relevant_nodes(self, query: str, context_size: int = 5, include_related: bool = True) -> Dict[str, Any]:
         """
         Get the most relevant nodes for a given query, including related nodes.
@@ -3565,100 +3723,672 @@ class LucidiaKnowledgeGraph:
             
         return result
     
-    async def add_knowledge_node(self, content: str, metadata: Dict[str, Any]) -> str:
+    def generate_context(self, query: str, max_tokens: int = 512) -> str:
         """
-        Add a knowledge node to the knowledge graph from external content.
+        Generate context from the knowledge graph based on the query.
         
         Args:
-            content: The content of the knowledge file
-            metadata: Metadata about the content (source, type, description, etc.)
+            query: The query to generate context for
+            max_tokens: Maximum context tokens to generate
             
         Returns:
-            Node ID of the created knowledge node
+            Formatted context string for LLM consumption
         """
+        self.logger.info(f"Generating knowledge graph context for query: {query}")
+        
+        # Extract entities and concepts from the query
+        extracted_data = self._extract_query_elements(query)
+        entities = extracted_data.get('entities', [])
+        concepts = extracted_data.get('concepts', [])
+        
+        # Create a list to hold context parts
+        context_parts = []
+        
+        # Get related knowledge for entities
+        if entities:
+            context_parts.append("Entity information:")
+            for entity in entities[:3]:  # Limit to top 3 entities
+                entity_info = self._get_entity_info(entity)
+                if entity_info:
+                    context_parts.append(f"{entity}: {entity_info.get('description', 'No description')}")
+                    
+                    # Add key relationships for this entity
+                    relationships = entity_info.get('relationships', [])
+                    if relationships:
+                        context_parts.append("  Key relationships:")
+                        for rel in relationships[:3]:  # Limit to top 3 relationships
+                            context_parts.append(f"  - {rel['type']} → {rel['target']} (strength: {rel['strength']:.2f})")
+        
+        # Get concept insights
+        if concepts:
+            context_parts.append("\nConcept insights:")
+            for concept in concepts[:3]:  # Limit to top 3 concepts
+                concept_info = self._get_concept_info(concept)
+                if concept_info:
+                    context_parts.append(f"{concept}: {concept_info.get('description', 'No description')}")
+                    
+                    # Add related concepts
+                    related = concept_info.get('related_concepts', [])
+                    if related:
+                        context_parts.append("  Related concepts:")
+                        context_parts.append(f"  - {', '.join(related[:5])}")
+        
+        # Look for any dream insights related to the query
+        dream_insights = self._get_relevant_dream_insights(query)
+        if dream_insights:
+            context_parts.append("\nDream-derived insights:")
+            for insight in dream_insights[:2]:  # Limit to top 2 insights
+                context_parts.append(f"- {insight}")
+        
+        # Combine all parts with newlines
+        context = "\n".join(context_parts)
+        
+        # Approximate token count and truncate if needed
+        estimated_tokens = len(context.split())
+        if estimated_tokens > max_tokens:
+            words = context.split()
+            context = " ".join(words[:max_tokens])
+        
+        return context
+    
+    def _extract_query_elements(self, query):
+        """
+        Extract entities and concepts from a query string.
+        
+        Args:
+            query: The query string
+            
+        Returns:
+            Dictionary with extracted entities and concepts
+        """
+        # Stub implementation - in a real system, this would use NLP
+        words = query.lower().split()
+        
+        # Check if any words match existing nodes
+        entities = []
+        concepts = []
+        
+        for word in words:
+            # Simple check for known entities and concepts
+            if word in self.node_types['entity']:
+                entities.append(word)
+            elif word in self.node_types['concept']:
+                concepts.append(word)
+            elif len(word) > 3:  # Arbitrary length check to identify potential concepts
+                concepts.append(word)
+        
+        return {
+            'entities': entities or [words[0]] if words else [], # Return at least one entity if found
+            'concepts': concepts or words  # Use all words as concepts if no specific concepts found
+        }
+    
+    def _get_entity_info(self, entity):
+        """
+        Get information about an entity from the knowledge graph.
+        
+        Args:
+            entity: The entity to get information about
+            
+        Returns:
+            Dictionary with entity information
+        """
+        # Stub implementation - in a real system, this would query the graph
+        return {
+            'description': f"Entity related to {entity}",
+            'confidence': 0.75,
+            'relationships': [
+                {'type': 'related_to', 'target': f"{entity}_concept", 'strength': 0.8},
+                {'type': 'instance_of', 'target': entity.split('_')[0] if '_' in entity else entity, 'strength': 0.9},
+                {'type': 'associated_with', 'target': f"domain_{entity[0]}", 'strength': 0.7}
+            ]
+        }
+    
+    def _get_concept_info(self, concept):
+        """
+        Get information about a concept from the knowledge graph.
+        
+        Args:
+            concept: The concept to get information about
+            
+        Returns:
+            Dictionary with concept information
+        """
+        # Stub implementation - in a real system, this would query the graph
+        return {
+            'description': f"Concept representing {concept}",
+            'confidence': 0.8,
+            'related_concepts': [f"{concept}_theory", f"{concept}_application", f"practical_{concept}"]
+        }
+    
+    def _get_relevant_dream_insights(self, query):
+        """
+        Get dream insights relevant to the query.
+        
+        Args:
+            query: The query string
+            
+        Returns:
+            List of relevant dream insights
+        """
+        # Stub implementation - in a full implementation, this would search dream insight nodes
+        words = query.lower().split()
+        
+        insights = [
+            f"Dream insight: {words[0]} connects to deeper understanding of systemic patterns" if words else "",
+            f"Dream metaphor: {words[-1]} represents transformative potential" if words else ""
+        ]
+        
+        return [i for i in insights if i]
+
+    def _hyperbolic_distance(self, vector_a: np.ndarray, vector_b: np.ndarray, already_in_hyperbolic: bool = True) -> float:
+        """
+        Calculate the distance between two vectors in hyperbolic space (Poincaré model).
+        d_H(x, y) = acosh(1 + 2 * ||x-y||^2 / ((1-||x||^2) * (1-||y||^2)))
+        
+        Args:
+            vector_a: First vector
+            vector_b: Second vector
+            already_in_hyperbolic: Whether vectors are already in hyperbolic space
+            
+        Returns:
+            Hyperbolic distance between vectors
+        """
+        if not self.hyperbolic_embedding["enabled"]:
+            # Fallback to Euclidean distance
+            return np.linalg.norm(vector_a - vector_b)
+            
+        # Convert to hyperbolic space if needed
+        if not already_in_hyperbolic:
+            vector_a = self._to_hyperbolic(vector_a)
+            vector_b = self._to_hyperbolic(vector_b)
+        
+        # Calculate norms
+        norm_a = np.linalg.norm(vector_a)
+        norm_b = np.linalg.norm(vector_b)
+        
+        # Ensure vectors are within the Poincaré ball boundary to avoid numerical issues
+        if norm_a >= 1.0 or norm_b >= 1.0:
+            self.logger.warning("Vector outside Poincaré ball detected, adjusting")
+            if norm_a >= 1.0:
+                vector_a = vector_a * 0.99 / norm_a
+                norm_a = 0.99
+            if norm_b >= 1.0:
+                vector_b = vector_b * 0.99 / norm_b
+                norm_b = 0.99
+        
+        # Calculate the hyperbolic distance
+        euclidean_dist_squared = np.sum((vector_a - vector_b) ** 2)
+        denominator = (1 - norm_a ** 2) * (1 - norm_b ** 2)
+        
+        # Handle numerical stability for very small denominators
+        if denominator < 1e-10:
+            denominator = 1e-10
+            
+        argument = 1 + 2 * euclidean_dist_squared / denominator
+        
+        # Avoid numerical errors in acosh by ensuring argument >= 1
+        if argument < 1:
+            argument = 1
+            
+        return np.arccosh(argument)
+    
+    def _hyperbolic_similarity(self, vector_a: np.ndarray, vector_b: np.ndarray, already_in_hyperbolic: bool = True) -> float:
+        """
+        Calculate similarity between two vectors in hyperbolic space.
+        
+        Converts the hyperbolic distance to a similarity score in [0,1].
+        
+        Args:
+            vector_a: First vector
+            vector_b: Second vector
+            already_in_hyperbolic: Whether vectors are already in hyperbolic space
+            
+        Returns:
+            Similarity score between 0 and 1
+        """
+        if not self.hyperbolic_embedding["enabled"]:
+            # Fallback to cosine similarity
+            if np.all(vector_a == 0) or np.all(vector_b == 0):
+                return 0.0
+                
+            dot = np.dot(vector_a, vector_b)
+            norm_a = np.linalg.norm(vector_a)
+            norm_b = np.linalg.norm(vector_b)
+            if norm_a == 0 or norm_b == 0:
+                return 0.0
+            return dot / (norm_a * norm_b)
+        
+        # Check for None or zero vectors
+        if vector_a is None or vector_b is None or np.all(vector_a == 0) or np.all(vector_b == 0):
+            return 0.0
+        
+        # Get hyperbolic distance
+        distance = self._hyperbolic_distance(vector_a, vector_b, already_in_hyperbolic)
+        
+        # Convert distance to similarity (larger distances -> smaller similarity)
+        similarity = 1.0 / (1.0 + distance)
+        
+        return similarity
+    
+    def _to_hyperbolic(self, euclidean_vector: np.ndarray) -> np.ndarray:
+        """
+        Project a Euclidean vector into the Poincaré ball model of hyperbolic space.
+        
+        Args:
+            euclidean_vector: Vector in Euclidean space
+            
+        Returns:
+            Vector in hyperbolic space (Poincaré ball model)
+        """
+        if not self.hyperbolic_embedding["enabled"]:
+            return euclidean_vector
+            
+        # Validate input
+        if euclidean_vector is None:
+            # Return zero vector of appropriate dimension
+            return np.zeros(self.hyperbolic_embedding["dimension"])
+            
+        # Convert to numpy array if needed
+        if not isinstance(euclidean_vector, np.ndarray):
+            try:
+                euclidean_vector = np.array(euclidean_vector, dtype=np.float32)
+            except Exception as e:
+                self.logger.error(f"Error converting to numpy array: {e}")
+                return np.zeros(self.hyperbolic_embedding["dimension"])
+        
+        # Check for NaN or Inf values
+        if np.isnan(euclidean_vector).any() or np.isinf(euclidean_vector).any():
+            self.logger.warning("NaN or Inf values detected in embedding, replaced with zeros")
+            # Return zero vector of appropriate dimension
+            return np.zeros(self.hyperbolic_embedding["dimension"])
+            
+        # Normalize the Euclidean vector
+        norm = np.linalg.norm(euclidean_vector)
+        if norm == 0:
+            return euclidean_vector  # Return zero vector as is
+            
+        # Scale vector to fit within the Poincaré ball (norm < 1)
+        # Apply a tanh-based scaling to ensure the norm is < 1
+        scale_factor = np.tanh(norm / (self.hyperbolic_embedding["curvature"] * 4))
+        return (euclidean_vector / norm) * scale_factor
+    
+    def _from_hyperbolic(self, hyperbolic_vector: np.ndarray) -> np.ndarray:
+        """
+        Project a vector from the Poincaré ball model back to Euclidean space.
+        
+        Args:
+            hyperbolic_vector: Vector in hyperbolic space (Poincaré ball)
+            
+        Returns:
+            Vector in Euclidean space
+        """
+        if not self.hyperbolic_embedding["enabled"]:
+            return hyperbolic_vector
+            
+        # Validate input
+        if hyperbolic_vector is None:
+            # Return zero vector of appropriate dimension
+            return np.zeros(self.hyperbolic_embedding["dimension"])
+            
+        # Convert to numpy array if needed
+        if not isinstance(hyperbolic_vector, np.ndarray):
+            try:
+                hyperbolic_vector = np.array(hyperbolic_vector, dtype=np.float32)
+            except Exception as e:
+                self.logger.error(f"Error converting to numpy array: {e}")
+                return np.zeros(self.hyperbolic_embedding["dimension"])
+                
+        # Check for NaN or Inf values
+        if np.isnan(hyperbolic_vector).any() or np.isinf(hyperbolic_vector).any():
+            self.logger.warning("NaN or Inf values detected in hyperbolic embedding, replaced with zeros")
+            # Return zero vector of appropriate dimension
+            return np.zeros(self.hyperbolic_embedding["dimension"])
+            
+        # Get the norm of the hyperbolic vector
+        norm = np.linalg.norm(hyperbolic_vector)
+        
+        # If the vector is at or outside the ball boundary, adjust it
+        if norm >= 1.0:
+            return hyperbolic_vector * 0.99 / norm
+            
+        if norm == 0:
+            return hyperbolic_vector  # Return zero vector as is
+        
+        # Apply inverse of the tanh-based scaling used in to_hyperbolic
+        scale_factor = np.arctanh(norm) * (self.hyperbolic_embedding["curvature"] * 4)
+        return (hyperbolic_vector / norm) * scale_factor
+    
+    def _align_embeddings(self, vec_a: np.ndarray, vec_b: np.ndarray) -> tuple:
+        """
+        Align two embeddings to have the same dimension.
+        
+        Args:
+            vec_a: First embedding vector
+            vec_b: Second embedding vector
+            
+        Returns:
+            Tuple of aligned vectors
+        """
+        if vec_a is None or vec_b is None:
+            # Return zero vectors of matching dimension
+            dim = self.hyperbolic_embedding["dimension"]
+            return np.zeros(dim), np.zeros(dim)
+            
+        # Convert to numpy arrays if needed
+        if not isinstance(vec_a, np.ndarray):
+            vec_a = np.array(vec_a, dtype=np.float32)
+        if not isinstance(vec_b, np.ndarray):
+            vec_b = np.array(vec_b, dtype=np.float32)
+            
+        # Check if dimensions match
+        if len(vec_a) == len(vec_b):
+            return vec_a, vec_b
+            
+        # Align dimensions
+        len_a = len(vec_a)
+        len_b = len(vec_b)
+        
+        if len_a < len_b:
+            # Pad vec_a with zeros
+            padded_a = np.zeros(len_b, dtype=np.float32)
+            padded_a[:len_a] = vec_a
+            return padded_a, vec_b
+        else:
+            # Pad vec_b with zeros
+            padded_b = np.zeros(len_a, dtype=np.float32)
+            padded_b[:len_b] = vec_b
+            return vec_a, padded_b
+
+    async def convert_nodes_to_hyperbolic(self, node_types: Optional[List[str]] = None,
+                                         domains: Optional[List[str]] = None,
+                                         batch_size: int = 100) -> Dict[str, Any]:
+        """
+        Batch convert existing node embeddings to hyperbolic space.
+
+        This method is useful when enabling hyperbolic embeddings on an existing knowledge graph,
+        or when updating hyperbolic embeddings after a configuration change.
+
+        Args:
+            node_types: Optional list of node types to convert, all if None
+            domains: Optional list of domains to convert, all if None
+            batch_size: Number of nodes to process in each batch
+
+        Returns:
+            Dictionary with conversion statistics
+        """
+        if not self.hyperbolic_embedding["enabled"]:
+            self.logger.warning("Hyperbolic embeddings not enabled, skipping conversion")
+            return {"error": "Hyperbolic embeddings not enabled", "converted": 0}
+
+        self.logger.info(f"Starting batch conversion of embeddings to hyperbolic space")
+
+        stats = {
+            "total_nodes": 0,
+            "nodes_with_embeddings": 0,
+            "converted": 0,
+            "errors": 0,
+            "start_time": datetime.now().isoformat()
+        }
+
         try:
-            # Generate a unique node ID based on the source or content
-            source = metadata.get('source', '')
-            node_id = f"knowledge_{uuid.uuid4().hex[:8]}"
-            if source:
-                # Use source as part of the node ID to make it more meaningful
-                source_id = source.split('/')[-1].split('.')[0].lower()
-                node_id = f"knowledge_{source_id}_{uuid.uuid4().hex[:6]}"
-            
-            # Determine the node type based on metadata
-            file_type = metadata.get('type', 'text').lower()
-            if file_type == 'json':
-                node_type = 'structured_knowledge'
-            elif file_type == 'md' or file_type == 'markdown':
-                node_type = 'markdown_knowledge'
-            else:
-                node_type = 'text_knowledge'
-            
-            # Prepare node attributes
-            attributes = {
-                'content': content,
-                'source': metadata.get('source', 'knowledge_base'),
-                'description': metadata.get('description', ''),
-                'file_type': file_type,
-                'filename': metadata.get('filename', ''),
-                'confidence': 0.9,  # High confidence for curated knowledge
-                'indexed': True
-            }
-            
-            # Add the node to the graph
-            success = await self.add_node(
-                node_id,
-                node_type,
-                attributes,
-                domain="lucidia_knowledge_base"
-            )
-            
-            if success:
-                self.logger.info(f"Added knowledge node: {node_id} (source: {source})")
-                
-                # Extract concepts if available
-                if content and self.world_model and hasattr(self.world_model, '_extract_concepts'):
+            # Get all nodes that match the criteria
+            nodes_to_process = []
+            for node_id, node_data in self.graph.nodes(data=True):
+                stats["total_nodes"] += 1
+
+                # Skip if node is not of specified type
+                if node_types and node_data.get("type") not in node_types:
+                    continue
+
+                # Skip if node is not in specified domains
+                if domains and node_data.get("domain") not in domains:
+                    continue
+
+                # Skip nodes without embeddings
+                if "embedding" not in node_data:
+                    continue
+
+                # Check if node already has hyperbolic embedding that matches current config
+                if ("hyperbolic_embedding" in node_data and
+                        node_id in self.hyperbolic_embedding["embedding_nodes"]):
+                    continue
+
+                nodes_to_process.append(node_id)
+                stats["nodes_with_embeddings"] += 1
+
+            self.logger.info(f"Found {len(nodes_to_process)} nodes to convert to hyperbolic space")
+
+            # Process nodes in batches
+            for i in range(0, len(nodes_to_process), batch_size):
+                batch = nodes_to_process[i:i + batch_size]
+                self.logger.debug(
+                    f"Processing batch {i // batch_size + 1}/{(len(nodes_to_process) - 1) // batch_size + 1} ({len(batch)} nodes)")
+
+                for node_id in batch:
+                    node_data = self.graph.nodes[node_id]
+
                     try:
-                        # Extract key concepts from the content
-                        concepts = await self.world_model._extract_concepts(content)
-                        if concepts:
-                            # Create relationships between the knowledge node and extracted concepts
-                            for concept_name, concept_info in concepts.items():
-                                # Check if concept already exists or create it
-                                concept_id = concept_name.lower().replace(' ', '_')
-                                if not await self.has_node(concept_id):
-                                    # Create the concept node
-                                    await self.add_node(
-                                        concept_id,
-                                        'concept',
-                                        {
-                                            'name': concept_name,
-                                            'definition': concept_info.get('definition', f"Concept mentioned in {source}"),
-                                            'confidence': 0.7,
-                                            'extracted_from': node_id
-                                        },
-                                        domain="lucidia_knowledge_base"
-                                    )
-                                
-                                # Create relationship between knowledge and concept
-                                await self.add_edge(
-                                    node_id,
-                                    concept_id,
-                                    edge_type="mentions",
-                                    attributes={
-                                        'strength': concept_info.get('relevance', 0.7),
-                                        'confidence': 0.8,
-                                        'created': datetime.now().isoformat()
-                                    }
-                                )
+                        # Get Euclidean embedding
+                        euclidean_embedding = node_data["embedding"]
+
+                        # Convert to numpy array if needed
+                        if not isinstance(euclidean_embedding, np.ndarray):
+                            euclidean_embedding = np.array(euclidean_embedding, dtype=np.float32)
+
+                        # Check for NaN or Inf values (based on memory of embedding validation)
+                        if np.isnan(euclidean_embedding).any() or np.isinf(euclidean_embedding).any():
+                            self.logger.warning(f"Node {node_id} has invalid embedding values, replacing with zeros")
+                            euclidean_embedding = np.zeros_like(euclidean_embedding)
+                            stats["errors"] += 1
+
+                        # Project into hyperbolic space
+                        hyperbolic_emb = self._to_hyperbolic(euclidean_embedding)
+
+                        # Update node attributes
+                        node_data["hyperbolic_embedding"] = hyperbolic_emb.tolist()
+                        self.hyperbolic_embedding["embedding_nodes"].add(node_id)
+
+                        stats["converted"] += 1
                     except Exception as e:
-                        self.logger.warning(f"Error extracting concepts from knowledge node {node_id}: {e}")
-                
-                return node_id
-            else:
-                self.logger.error(f"Failed to add knowledge node for {source}")
-                return ""
-                
+                        self.logger.error(f"Error converting embedding for node {node_id}: {e}")
+                        stats["errors"] += 1
+
+                # Emit progress event
+                try:
+                    if hasattr(self, 'emit'):
+                        await self.emit("hyperbolic_conversion_progress", {
+                            "processed": i + len(batch),
+                            "total": len(nodes_to_process),
+                            "converted": stats["converted"],
+                            "errors": stats["errors"]
+                        })
+                except Exception as e:
+                    self.logger.warning(f"Could not emit progress event: {e}")
+
+            # Update completion time
+            stats["end_time"] = datetime.now().isoformat()
+            stats["duration_seconds"] = (datetime.fromisoformat(stats["end_time"]) -
+                                         datetime.fromisoformat(stats["start_time"])).total_seconds()
+
+            # Mark hyperbolic embeddings as initialized if any nodes were converted
+            if stats["converted"] > 0:
+                self.hyperbolic_embedding["initialized"] = True
+                self.logger.info("Hyperbolic embedding system marked as initialized")
+
+            self.logger.info(
+                f"Completed batch conversion: {stats['converted']} nodes converted, {stats['errors']} errors")
+
+            # Emit completion event
+            try:
+                if hasattr(self, 'emit'):
+                    await self.emit("hyperbolic_conversion_complete", stats)
+            except Exception as e:
+                self.logger.warning(f"Could not emit completion event: {e}")
+
         except Exception as e:
-            self.logger.error(f"Error adding knowledge node: {e}")
-            return ""
+            self.logger.error(f"Error during batch conversion: {e}")
+            stats["error"] = str(e)
+
+        return stats
+
+    async def find_similar_nodes(self, reference_node_id: str, limit: int = 10, threshold: float = 0.5,
+                       include_metadata: bool = True, domains: Optional[List[str]] = None, 
+                       use_hyperbolic: Optional[bool] = None) -> Dict[str, Any]:
+        """
+        Find nodes that are semantically similar to a given reference node.
+        
+        This method leverages embeddings (including hyperbolic embeddings when enabled)
+        to find semantically similar nodes in the knowledge graph.
+        
+        Args:
+            reference_node_id: ID of the reference node to find similar nodes for
+            limit: Maximum number of results to return
+            threshold: Minimum similarity threshold (0-1)
+            include_metadata: Whether to include node metadata in results
+            domains: Optional list of domains to search within
+            use_hyperbolic: Override default hyperbolic setting (None means use system default)
+        
+        Returns:
+            Dictionary with search results and metadata
+        """
+        self.logger.info(f"Finding nodes similar to {reference_node_id}, limit: {limit}")
+        
+        # Check if reference node exists
+        if not await self.has_node(reference_node_id):
+            self.logger.error(f"Reference node {reference_node_id} does not exist")
+            return {
+                "error": f"Reference node {reference_node_id} does not exist",
+                "results": [],
+                "metadata": {}
+            }
+        
+        # Get reference node data
+        reference_node = self.graph.nodes[reference_node_id]
+        
+        # Determine if we should use hyperbolic embeddings
+        should_use_hyperbolic = use_hyperbolic
+        if should_use_hyperbolic is None:
+            should_use_hyperbolic = (self.hyperbolic_embedding["enabled"] and 
+                                   self.hyperbolic_embedding["use_for_similarity"])
+
+        # Get the appropriate embeddings from the reference node
+        reference_embedding = None
+        is_hyperbolic = False
+        
+        if should_use_hyperbolic and "hyperbolic_embedding" in reference_node:
+            reference_embedding = reference_node["hyperbolic_embedding"]
+            is_hyperbolic = True
+            self.logger.debug(f"Using hyperbolic embedding for reference node {reference_node_id}")
+        elif "embedding" in reference_node:
+            reference_embedding = reference_node["embedding"]
+            self.logger.debug(f"Using standard embedding for reference node {reference_node_id}")
+        else:
+            self.logger.warning(f"Reference node {reference_node_id} has no embedding")
+            # Fallback to simple text search if no embedding available
+            node_text = f"{reference_node_id} {reference_node.get('name', '')} {reference_node.get('description', '')}"  
+            return await self.search_nodes(node_text, limit, threshold, include_metadata, domains)
+
+        # Initialize results
+        results = {
+            "reference_node": reference_node_id,
+            "timestamp": datetime.now().isoformat(),
+            "results": [],
+            "metadata": {
+                "total_nodes_searched": 0,
+                "search_time_ms": 0,
+                "threshold": threshold,
+                "using_hyperbolic": is_hyperbolic
+            }
+        }
+        start_time = time.time()
+        
+        try:
+            # Convert embedding to numpy array if needed
+            if not isinstance(reference_embedding, np.ndarray):
+                reference_embedding = np.array(reference_embedding, dtype=np.float32)
+            
+            # Validate embedding
+            if np.isnan(reference_embedding).any() or np.isinf(reference_embedding).any():
+                self.logger.error(f"Reference embedding contains NaN or Inf values")
+                return {
+                    "error": "Reference embedding contains invalid values",
+                    "results": [],
+                    "metadata": {}
+                }
+            
+            # Find similar nodes
+            matching_nodes = []
+            total_nodes = 0
+            
+            # Process each node in the graph
+            for node_id, node_data in self.graph.nodes(data=True):
+                total_nodes += 1
+                
+                # Skip the reference node itself
+                if node_id == reference_node_id:
+                    continue
+                
+                # Skip if node is not in specified domains
+                if domains and node_data.get("domain") not in domains:
+                    continue
+                
+                # Choose the appropriate embedding based on hyperbolic setting
+                if is_hyperbolic and "hyperbolic_embedding" in node_data:
+                    # Use hyperbolic embedding
+                    node_emb = node_data["hyperbolic_embedding"]
+                    if not isinstance(node_emb, np.ndarray):
+                        node_emb = np.array(node_emb, dtype=np.float32)
+                    similarity = self._hyperbolic_similarity(reference_embedding, node_emb, already_in_hyperbolic=True)
+                elif not is_hyperbolic and "embedding" in node_data:
+                    # Use standard embedding
+                    node_emb = node_data["embedding"]
+                    if not isinstance(node_emb, np.ndarray):
+                        node_emb = np.array(node_emb, dtype=np.float32)
+                    
+                    # Align dimensions if needed (handling dimension mismatches gracefully)
+                    if len(reference_embedding) != len(node_emb):
+                        reference_emb_aligned, node_emb_aligned = self._align_embeddings(reference_embedding, node_emb)
+                    else:
+                        reference_emb_aligned, node_emb_aligned = reference_embedding, node_emb
+                    
+                    # Calculate cosine similarity
+                    norm_ref = np.linalg.norm(reference_emb_aligned)
+                    norm_node = np.linalg.norm(node_emb_aligned)
+                    
+                    # Handle zero norm vectors
+                    if norm_ref < 1e-10 or norm_node < 1e-10:
+                        similarity = 0.0
+                    else:
+                        dot = np.dot(reference_emb_aligned, node_emb_aligned)
+                        similarity = dot / (norm_ref * norm_node)
+                else:
+                    # Skip nodes without appropriate embeddings
+                    continue
+            
+                if similarity >= threshold:
+                    matching_nodes.append({
+                        "id": node_id,
+                        "similarity": similarity,
+                        "data": node_data if include_metadata else {}
+                    })
+        
+            # Sort by similarity (highest first)
+            matching_nodes.sort(key=lambda x: x["similarity"], reverse=True)
+        
+            # Limit results
+            results["results"] = matching_nodes[:limit]
+        
+            # Update metadata
+            end_time = time.time()
+            results["metadata"]["total_nodes_searched"] = total_nodes
+            results["metadata"]["search_time_ms"] = int((end_time - start_time) * 1000)
+            results["metadata"]["results_found"] = len(matching_nodes)
+            results["metadata"]["results_returned"] = len(results["results"])
+        
+            self.logger.info(f"Found {len(matching_nodes)} nodes similar to {reference_node_id}, returning {len(results['results'])}")
+        
+        except Exception as e:
+            self.logger.error(f"Error finding similar nodes: {e}")
+            results["error"] = str(e)
+    
+        return results

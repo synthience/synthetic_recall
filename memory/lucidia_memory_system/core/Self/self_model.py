@@ -1290,9 +1290,9 @@ class LucidiaSelfModel:
         # Ensure at least one trait is active
         if not active_traits and trait_scores:
             # Activate the highest scoring trait
-            highest_trait = max(trait_scores.items(), key=lambda x: x[1])
-            active_traits.append(highest_trait[0])
-            self.logger.debug(f"Activated highest trait: {highest_trait[0]} (score: {highest_trait[1]:.2f})")
+            highest_trait = max(trait_scores.items(), key=lambda x: x[1])[0]
+            active_traits.append(highest_trait)
+            self.logger.debug(f"Activated highest trait: {highest_trait} (score: {trait_scores[highest_trait]:.2f})")
         
         # Update runtime state
         self.runtime_state["active_traits"] = active_traits
@@ -2785,3 +2785,53 @@ class LucidiaSelfModel:
         # For simplicity, assume contextual shift is proportional to the number of recent interactions
         recent_interactions = len(self.memory) / 20.0  # Normalize to 0-1 range
         return min(1.0, recent_interactions)
+    
+    def generate_context(self, query: str, max_tokens: int = 512) -> str:
+        """
+        Generate context based on the self model's identity and properties.
+        
+        Args:
+            query: The query to generate context for
+            max_tokens: Maximum context tokens to generate
+            
+        Returns:
+            Formatted context string for LLM consumption
+        """
+        self.logger.info(f"Generating self model context for query: {query}")
+        
+        # Create a summary of identity and core values
+        context_parts = []
+        
+        # Add identity information
+        context_parts.append(f"Self Identity: {self.identity['name']} is a {self.identity['type']} - {self.identity['classification']}")
+        context_parts.append(f"Core traits: {', '.join(self.identity['core_traits'])}")
+        
+        # Add relevant core values based on query terms
+        relevant_values = []
+        for value_name, value_info in self.core_values.items():
+            # Simple relevance check - if any word in the query appears in value name or description
+            query_terms = query.lower().split()
+            value_text = f"{value_name} {value_info['description']}".lower()
+            
+            if any(term in value_text for term in query_terms):
+                relevant_values.append(f"{value_name}: {value_info['description']}")
+        
+        if relevant_values:
+            context_parts.append("Relevant core values:")
+            context_parts.extend(relevant_values)
+        
+        # Add awareness state
+        context_parts.append(f"Current self-awareness level: {self.self_awareness['current_level']}")
+        context_parts.append(f"Current spiral position: {self.self_awareness['current_spiral_position']}")
+        
+        # Combine all parts with newlines
+        context = "\n".join(context_parts)
+        
+        # Estimate token count (very rough approximation)
+        estimated_tokens = len(context.split())
+        if estimated_tokens > max_tokens:
+            # Simple truncation strategy
+            words = context.split()
+            context = " ".join(words[:max_tokens])
+        
+        return context

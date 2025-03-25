@@ -19,11 +19,11 @@ import os
 import time
 import random
 import math
+import re
 from typing import Dict, List, Any, Optional, Tuple, Set, Union, Callable
 from datetime import datetime
 from collections import defaultdict, deque
 import logging
-import re
 
 # Set up logging
 logging.basicConfig(
@@ -2374,7 +2374,86 @@ class LucidiaWorldModel:
         self.adaptive_epistemological_framework = None
         self.reality_reprocessing_mechanism = None
 
-    async def _extract_concepts(self, text: str) -> Dict[str, Dict[str, Any]]:
+    def generate_context(self, query: str, max_tokens: int = 512) -> str:
+        """
+        Generate context based on the world model's knowledge domains and concepts.
+        
+        Args:
+            query: The query to generate context for
+            max_tokens: Maximum context tokens to generate
+            
+        Returns:
+            Formatted context string for LLM consumption
+        """
+        self.logger.info(f"Generating world model context for query: {query}")
+        
+        # Extract concepts from the query to find relevant knowledge
+        concepts = self._extract_concepts(query)
+        
+        # Create a list to hold context sections
+        context_parts = []
+        
+        # Add relevant knowledge domains
+        relevant_domains = []
+        for domain, info in self.knowledge_domains.items():
+            # Check if any concept in the query is related to this domain
+            domain_concepts = info.get('concepts', [])
+            domain_text = f"{domain} {info.get('description', '')}".lower()
+            
+            # Check if any extracted concept matches the domain concepts or text
+            if any(concept.lower() in domain_text for concept in concepts) or \
+               any(dc.lower() in query.lower() for dc in domain_concepts):
+                confidence = info.get('confidence', 0.8)
+                relevance = info.get('relevance', 0.7)
+                domain_entry = f"{domain} (confidence: {confidence:.2f}): {info.get('description', 'No description')}"  
+                relevant_domains.append((domain_entry, relevance))
+        
+        # Sort by relevance
+        relevant_domains.sort(key=lambda x: x[1], reverse=True)
+        
+        if relevant_domains:
+            context_parts.append("Relevant knowledge domains:")
+            context_parts.extend([domain for domain, _ in relevant_domains[:3]])
+        
+        # Add insights about specific concepts from the query
+        if concepts:
+            context_parts.append("\nRelevant concepts:")
+            for concept in concepts:
+                concept_info = self._get_concept_info(concept)
+                if concept_info:
+                    context_parts.append(f"{concept}: {concept_info.get('description', 'No description')}")
+        
+        # Combine all parts
+        context = "\n".join(context_parts)
+        
+        # Approximate token count
+        estimated_tokens = len(context.split())
+        if estimated_tokens > max_tokens:
+            # Simple truncation strategy
+            words = context.split()
+            context = " ".join(words[:max_tokens])
+        
+        return context
+    
+    def _get_concept_info(self, concept):
+        """
+        Retrieve information about a concept from the world model.
+        
+        Args:
+            concept: The concept to retrieve information about
+            
+        Returns:
+            Dictionary with concept information or None if not found
+        """
+        # Stub implementation - in a real system this would query the knowledge graph
+        # For now, return a simple result based on the concept name
+        return {
+            "description": f"General concept related to {concept}",
+            "confidence": 0.7,
+            "last_updated": datetime.now().isoformat()
+        }
+    
+    def _extract_concepts(self, text: str) -> Dict[str, Dict[str, Any]]:
         """
         Extract concepts and relationships from text content.
         
