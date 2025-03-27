@@ -73,6 +73,12 @@ class VoiceStateManager:
         self._interrupt_handled_event.set()  # Start in "handled" state
         self._last_interrupt_time: Optional[float] = None
         
+        # Enhanced interruption tracking
+        self._session_interruptions = 0
+        self._interruption_timestamps: List[float] = []
+        self._current_session_id = str(uuid.uuid4())
+        self._session_start_time = time.time()
+        
         # LiveKit integration
         self._room: Optional[rtc.Room] = None
         self._tts_track: Optional[rtc.LocalAudioTrack] = None
@@ -296,7 +302,7 @@ class VoiceStateManager:
             "state": state.name,
             "timestamp": time.time(),
             "metrics": {
-                "interruptions": 0,
+                "interruptions": self._session_interruptions,
                 "errors": 0,
                 "transcripts": len(self._recent_processed_transcripts)
             }
@@ -413,7 +419,14 @@ class VoiceStateManager:
         """
         # Only interrupt if we're currently in SPEAKING
         if self._state == VoiceState.SPEAKING:
-            self.logger.info(f"User speech detected while speaking (duration={duration_ms}ms). Interrupting TTS.")
+            # Track interruption for memory
+            interrupt_time = time.time()
+            self._session_interruptions += 1
+            self._interruption_timestamps.append(interrupt_time)
+            self._last_interrupt_time = interrupt_time
+            
+            self.logger.info(f"User speech detected while speaking (duration={duration_ms}ms). " +
+                          f"Interrupting TTS. Total interruptions: {self._session_interruptions}")
             
             # Hard vs. soft
             if self._tts_service:
@@ -562,128 +575,83 @@ class VoiceStateManager:
             True if transcript was processed, False if ignored
         """
         if not text or not text.strip():
-            self.logger.warning("Ignoring empty transcript")
+            self.logger.debug("Empty transcript ignored")
             return False
         
-        # Simple confidence check for clarifications
-        if confidence < 0.5:
-            self.logger.info(f"Low confidence transcript (conf={confidence:.2f}). Requesting clarification.")
-            # Provide a minimal clarification approach
-            await self.transition_to(VoiceState.LISTENING, {"reason": "low_confidence"})
-            if self._tts_service:
-                clarify_msg = "I'm sorry, I had trouble understanding. Could you repeat that?"
-                tts_task = asyncio.create_task(self._tts_service.speak(clarify_msg))
-                await self.start_speaking(tts_task)
-            return False
-        
-        # Check for duplicate or too recent
-        now = time.time()
-        normalized_text = self._normalize_text(text)
         if self._is_duplicate_transcript(text):
-            self.logger.warning(f"Ignoring duplicate transcript: '{text[:30]}...'")
-            if self._state != VoiceState.LISTENING:
-                await self.transition_to(VoiceState.LISTENING, {"reason": "duplicate_ignored"})
+            self.logger.debug(f"Duplicate transcript ignored: {text}")
             return False
         
-        self._last_transcript_time = now
-        self._recent_processed_transcripts.append((normalized_text, now))
+        # Mark transcript timestamp
+        timestamp = time.time()
+        self._last_transcript_time = timestamp
+        norm_text = self._normalize_text(text)
+        self._recent_processed_transcripts.append((norm_text, timestamp))
+        self._recent_transcripts[norm_text] = timestamp
         
-        self.logger.info(f"Processing transcript: '{text[:30]}...' (confidence={confidence:.2f})")
+        # Prepare interruption metadata
+        was_interrupted = False
+        interruption_context = {}
         
-        # Publish transcript
-        await self.publish_transcription(text, sender="user", is_final=True)
+        # Detect if this transcript came after an interruption
+        if self._last_interrupt_time and (timestamp - self._last_interrupt_time < 3.0):
+            was_interrupted = True
+            interruption_context = {
+                "was_interrupted": True,
+                "user_interruptions": self._session_interruptions,
+                "session_id": self._current_session_id
+            }
+            # Add timestamps if available (but limit to avoid overflow)
+            if self._interruption_timestamps:
+                # Only include the last 10 timestamps at most
+                interruption_context["interruption_timestamps"] = [
+                    round(ts - self._session_start_time, 2) # Store as relative time from session start
+                    for ts in self._interruption_timestamps[-10:]
+                ]
         
-        # If speaking, handle as interruption
-        if self._state == VoiceState.SPEAKING:
-            await self.handle_user_speech_detected(text, duration_ms=500.0)  # Hard stop
-            return True
+        # Track low confidence separately
+        if confidence < 0.7:
+            self.logger.info(f"Low confidence transcript: {confidence:.2f} - {text}")
+            # could add to interruption_context but not needed for now
         
-        # If already processing, cancel the current task
-        if self._state == VoiceState.PROCESSING and self._in_progress_task and not self._in_progress_task.done():
-            self.logger.info("Already processing, cancelling current task")
-            self._in_progress_task.cancel()
-            try:
-                await asyncio.wait_for(self._in_progress_task, timeout=1.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                pass
-            self._in_progress_task = None
+        # Process transcript through registered handler
+        transcript_sequence = self._transcript_sequence
+        self._transcript_sequence += 1
         
-        # Transition to PROCESSING
-        await self.transition_to(VoiceState.PROCESSING, {"text": text})
-        
-        # If transcript handler is registered
-        if self._transcript_handler:
-            task_name = f"transcript_{time.time()}"
-            task = asyncio.create_task(self._transcript_handler(text))
-            self._tasks[task_name] = task
-            self._in_progress_task = task
-            
-            try:
-                await asyncio.wait_for(task, timeout=self._processing_timeout)
-                self._tasks.pop(task_name, None)
-                self._in_progress_task = None
-                return True
-            except asyncio.TimeoutError:
-                self.logger.warning(f"Transcript processing timed out after {self._processing_timeout}s")
-                task.cancel()
-                try:
-                    await asyncio.wait_for(task, timeout=1.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    pass
-                self._tasks.pop(task_name, None)
-                self._in_progress_task = None
-                await self.transition_to(VoiceState.LISTENING, {"reason": "processing_timeout"})
-            except asyncio.CancelledError:
-                self.logger.info("Transcript processing was cancelled")
-                self._tasks.pop(task_name, None)
-                self._in_progress_task = None
-            except Exception as e:
-                self.logger.error(f"Error processing transcript: {e}", exc_info=True)
-                self._tasks.pop(task_name, None)
-                self._in_progress_task = None
-                await self.transition_to(VoiceState.ERROR, {"error": str(e)})
+        # Log transcript with interruption details if present
+        if was_interrupted:
+            self.logger.info(f"Processing transcript [{transcript_sequence}] (interrupted): {text}")
         else:
-            self.logger.warning("No transcript handler registered")
-            await self.transition_to(VoiceState.LISTENING, {"reason": "no_handler"})
+            self.logger.info(f"Processing transcript [{transcript_sequence}]: {text}")
+        
+        # If a handler is registered, call it with the transcript and interruption data
+        if self._transcript_handler:
+            try:
+                # Pass transcript and interruption metadata to handler
+                await self._transcript_handler(
+                    text, 
+                    transcript_sequence=transcript_sequence,
+                    timestamp=timestamp,
+                    confidence=confidence,
+                    **interruption_context
+                )
+            except Exception as e:
+                self.logger.error(f"Error in transcript handler: {e}", exc_info=True)
+        
+        # Publish transcript with updated info
+        await self.publish_transcription(
+            text=text,
+            sender="user",
+            is_final=True,
+            metadata={
+                "confidence": confidence,
+                "sequence": transcript_sequence,
+                "timestamp": timestamp,
+                **interruption_context
+            }
+        )
+        
         return True
-
-    async def setup_tts_track(self, room: rtc.Room) -> None:
-        """
-        Initialize a TTS track for the pipeline to send out audio.
-        
-        Args:
-            room: LiveKit room to publish the track to
-        """
-        self.logger.info("Setting up TTS track")
-        self._room = room
-        
-        # Clean up any existing track
-        await self.cleanup_tts_track()
-        
-        try:
-            self._tts_source = rtc.AudioSource(sample_rate=48000, num_channels=1)
-            self._tts_track = rtc.LocalAudioTrack.create_audio_track("tts-track", self._tts_source)
-            
-            options = rtc.TrackPublishOptions()
-            options.source = rtc.TrackSource.SOURCE_MICROPHONE
-            self.logger.info("Publishing TTS track to room")
-            await room.local_participant.publish_track(self._tts_track, options)
-            
-            # Publish track info
-            await self._publish_with_retry(
-                json.dumps({
-                    "type": "tts_track_published",
-                    "track_id": getattr(self._tts_track, "sid", None),
-                    "timestamp": time.time()
-                }).encode(),
-                "TTS track info"
-            )
-            
-            self.logger.info("TTS track setup complete")
-        except Exception as e:
-            self.logger.error(f"Error setting up TTS track: {e}", exc_info=True)
-            await self.register_error(e, "setup_tts_track")
-            await self.cleanup_tts_track()
 
     async def start_speaking(self, tts_task: asyncio.Task) -> None:
         """Begin a TTS task with cancellation of previous tasks if needed."""
@@ -814,7 +782,8 @@ class VoiceStateManager:
         text: str, 
         sender: str = "user", 
         is_final: bool = True,
-        participant_identity: Optional[str] = None
+        participant_identity: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
     ) -> bool:
         """Publish transcript to LiveKit using data channel and optional transcription API."""
         if not text or not text.strip():
@@ -859,6 +828,8 @@ class VoiceStateManager:
                 "timestamp": time.time(),
                 "is_final": is_final
             }
+            if metadata:
+                transcript_data.update(metadata)
             self.logger.info(f"Publishing transcript via data channel: '{text[:30]}...' from {sender}")
             data_success = await self._publish_with_retry(
                 json.dumps(transcript_data).encode(),

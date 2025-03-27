@@ -24,3 +24,4 @@ filelock>=3.13.1
 typing-extensions>=4.10.0
 networkx>=2.8.8
 whisper>=1.0.0
+faiss-cpu>=1.7.4  # Added for vector indexing

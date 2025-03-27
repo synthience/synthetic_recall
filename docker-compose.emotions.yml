@@ -17,9 +17,16 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - PYTHONPATH=/workspace/project
+      - EMOTION_MODEL_PATH=/app/models/emotion
+      # Auto-detect CUDA availability - don't force it
+      - CUDA_VISIBLE_DEVICES=0,1
     volumes:
       - ./:/workspace/project
+      # Specific volume mounts for emotion models that can be updated without rebuilding
+      - ./models/emotion:/app/models/emotion
       - ./models:/workspace/models
+      # Persistent cache storage for downloaded models
+      - emotion_cache:/root/.cache/huggingface
     ports:
       - "5007:5007"  # WebSocket port
       - "8007:8007"  # REST API port
@@ -53,3 +60,7 @@ services:
 networks:
   lucid-net:
     external: true
+
+volumes:
+  # Named volume for persisting model cache between container restarts
+  emotion_cache:

@@ -17,7 +17,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir \
     sentence-transformers \
     websockets \
-    requests
+    requests \
+    transformers
 
 # Install additional CUDA dependencies
 RUN pip install --no-cache-dir \
