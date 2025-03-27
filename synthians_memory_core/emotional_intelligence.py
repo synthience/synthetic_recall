@@ -5,46 +5,10 @@ import numpy as np
 from typing import Dict, List, Optional, Any
 
 from .custom_logger import logger # Use the shared custom logger
+from .emotion_analyzer import EmotionAnalyzer  # Import the proper implementation
 
-class EmotionalAnalyzer:
-    """Simplified interface for emotion analysis."""
-    async def analyze(self, text: str) -> Dict[str, Any]:
-        # Placeholder: In a real system, this would call an external service or model.
-        # Simulate analysis based on keywords for testing.
-        text_lower = text.lower()
-        emotions = {}
-        dominant_emotion = "neutral"
-        max_score = 0.1
-
-        positive_words = ["happy", "joy", "great", "wonderful", "progress", "good", "excited"]
-        negative_words = ["sad", "angry", "fear", "bugs", "problem", "crashed", "concerned"]
-
-        pos_score = sum(1 for word in positive_words if word in text_lower) * 0.2
-        neg_score = sum(1 for word in negative_words if word in text_lower) * 0.2
-
-        if pos_score > neg_score and pos_score > 0.1:
-            dominant_emotion = "joy"
-            max_score = pos_score
-            emotions["joy"] = max_score
-        elif neg_score > pos_score and neg_score > 0.1:
-            dominant_emotion = "sadness" if "sad" in text_lower else "anger" if "angry" in text_lower else "fear" if "fear" in text_lower else "concern"
-            max_score = neg_score
-            emotions[dominant_emotion] = max_score
-        else:
-             emotions["neutral"] = max_score
-
-        # Simulate sentiment and intensity
-        sentiment_value = (pos_score - neg_score) / max(1, pos_score + neg_score) if (pos_score + neg_score) > 0 else 0.0
-        intensity = max_score # Use max keyword score as intensity proxy
-
-        logger.debug("EmotionalAnalyzer", "Simulated emotion analysis", {"text": text[:30], "dominant": dominant_emotion, "intensity": intensity})
-
-        return {
-            "dominant_emotion": dominant_emotion,
-            "sentiment_value": sentiment_value,
-            "intensity": intensity,
-            "emotions": emotions
-        }
+# NOTE: The EmotionalAnalyzer class has been moved to emotion_analyzer.py
+# This file now only contains the EmotionalGatingService class
 
 class EmotionalGatingService:
     """Applies emotional gating to memory retrieval."""
@@ -52,7 +16,7 @@ class EmotionalGatingService:
         """Initialize the emotional gating service.
         
         Args:
-            emotion_analyzer: Any emotion analyzer with an `analyze(text)` method
+            emotion_analyzer: An instance of EmotionAnalyzer from emotion_analyzer.py
             config: Configuration parameters for the gating service
         """
         self.emotion_analyzer = emotion_analyzer

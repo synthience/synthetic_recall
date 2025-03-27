@@ -112,8 +112,33 @@ class SynthiansMemoryCore:
             for mem in loaded_memories:
                 self._memories[mem.id] = mem
             logger.info("SynthiansMemoryCore", f"Loaded {len(self._memories)} memories from persistence.")
-            # TODO: Load assemblies and memory_to_assemblies mapping
-
+            
+            # Load assemblies and memory_to_assemblies mapping
+            assembly_list = await self.persistence.list_assemblies()
+            loaded_assemblies_count = 0
+            
+            # Initialize memory_to_assemblies mapping
+            self.memory_to_assemblies = {memory_id: set() for memory_id in self._memories.keys()}
+            
+            # Load each assembly
+            for assembly_info in assembly_list:
+                assembly_id = assembly_info.get("id")
+                if assembly_id:
+                    assembly = await self.persistence.load_assembly(assembly_id, self.geometry_manager)
+                    if assembly:
+                        self.assemblies[assembly_id] = assembly
+                        loaded_assemblies_count += 1
+                        
+                        # Update memory_to_assemblies mapping
+                        for memory_id in assembly.memories:
+                            if memory_id in self.memory_to_assemblies:
+                                self.memory_to_assemblies[memory_id].add(assembly_id)
+                            else:
+                                # Create mapping entry if memory not in cache
+                                self.memory_to_assemblies[memory_id] = {assembly_id}
+            
+            logger.info("SynthiansMemoryCore", f"Loaded {loaded_assemblies_count} assemblies from persistence.")
+            
             # Load the vector index
             index_loaded = self.vector_index.load()
             

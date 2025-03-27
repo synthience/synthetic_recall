@@ -12,8 +12,9 @@ import numpy as np
 import torch
 import aiofiles # Use aiofiles for async file operations
 import uuid
-from .memory_structures import MemoryEntry # Use the unified structure
+from .memory_structures import MemoryEntry, MemoryAssembly # Use the unified structure
 from .custom_logger import logger # Use the shared custom logger
+from datetime import datetime
 
 class MemoryPersistence:
     """Handles disk-based memory operations with robustness."""
@@ -294,6 +295,215 @@ class MemoryPersistence:
                      logger.info("MemoryPersistence", f"Pruned old backup {old_backup.name}")
         except Exception as e:
             logger.error("MemoryPersistence", "Error pruning backups", {"error": str(e)})
+
+    async def save_assembly(self, assembly: 'MemoryAssembly') -> bool:
+        """Save a memory assembly to disk.
+        
+        Args:
+            assembly: The MemoryAssembly object to save
+            
+        Returns:
+            bool: Success status
+        """
+        if not assembly or not assembly.assembly_id:
+            logger.error("MemoryPersistence", "Cannot save assembly: Invalid or empty assembly object")
+            return False
+            
+        try:
+            # Create assemblies directory if it doesn't exist
+            assembly_dir = self.storage_path / 'assemblies'
+            assembly_dir.mkdir(exist_ok=True, parents=True)
+            
+            # Generate a filename based on the assembly ID
+            file_path = assembly_dir / f"{assembly.assembly_id}.json"
+            
+            # Convert the assembly to a serializable dict
+            assembly_dict = assembly.to_dict()
+            
+            # Validate critical fields before serialization
+            if not assembly_dict.get('assembly_id') or not assembly_dict.get('name'):
+                logger.error("MemoryPersistence", "Cannot save assembly: Missing required fields", 
+                            {"id": assembly.assembly_id})
+                return False
+
+            # Write the assembly to disk
+            async with aiofiles.open(file_path, 'w') as f:
+                # Use the same serializer as for memories
+                def default_serializer(obj):
+                    if isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
+                                        np.int16, np.int32, np.int64, np.uint8,
+                                        np.uint16, np.uint32, np.uint64)):
+                        return int(obj)
+                    elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+                        return float(obj)
+                    elif isinstance(obj, (np.ndarray,)):
+                        return obj.tolist()
+                    elif isinstance(obj, set):
+                        return list(obj)
+                    try:
+                        # Fallback for other types
+                        return str(obj)
+                    except:
+                        return "[Unserializable Object]"
+                try:
+                    json_data = json.dumps(assembly_dict, indent=2, default=default_serializer)
+                    await f.write(json_data)
+                except (TypeError, OverflowError) as json_err:
+                    logger.error("MemoryPersistence", f"JSON serialization error for assembly {assembly.assembly_id}", 
+                                {"error": str(json_err), "type": type(json_err).__name__})
+                    return False
+            
+            # Update the memory index with assembly info
+            self.memory_index[assembly.assembly_id] = {
+                'path': str(file_path.relative_to(self.storage_path)),
+                'timestamp': assembly.creation_time,
+                'type': 'assembly',
+                'name': assembly.name
+            }
+            
+            # Save the memory index
+            await self._save_index()
+            
+            self.stats['assembly_saves'] = self.stats.get('assembly_saves', 0) + 1
+            logger.info("MemoryPersistence", f"Saved assembly {assembly.assembly_id}", {"name": assembly.name})
+            return True
+        except Exception as e:
+            logger.error("MemoryPersistence", f"Error saving assembly {assembly.assembly_id}", 
+                        {"error": str(e), "type": type(e).__name__})
+            self.stats['failed_assembly_saves'] = self.stats.get('failed_assembly_saves', 0) + 1
+            return False
+
+    async def load_assembly(self, assembly_id: str, geometry_manager) -> Optional['MemoryAssembly']:
+        """Load a memory assembly from disk.
+        
+        Args:
+            assembly_id: ID of the assembly to load
+            geometry_manager: GeometryManager instance required for assembly initialization
+            
+        Returns:
+            MemoryAssembly or None if not found
+        """
+        if not assembly_id:
+            logger.error("MemoryPersistence", "Cannot load assembly: Invalid or empty assembly_id")
+            return None
+            
+        if not geometry_manager:
+            logger.error("MemoryPersistence", f"Cannot load assembly {assembly_id}: GeometryManager is required")
+            return None
+            
+        async with self._lock:
+            try:
+                # Check if in index first
+                if assembly_id in self.memory_index and self.memory_index[assembly_id].get('type') == 'assembly':
+                    file_path = self.storage_path / self.memory_index[assembly_id]['path']
+                else:
+                    # Fallback: check filesystem directly
+                    file_path = self.storage_path / 'assemblies' / f"{assembly_id}.json"
+                    if not await asyncio.to_thread(os.path.exists, file_path):
+                        logger.warning("MemoryPersistence", f"Assembly {assembly_id} not found")
+                        return None
+                    # If found directly, update index
+                    self.memory_index[assembly_id] = {
+                        'path': f"assemblies/{assembly_id}.json",
+                        'type': 'assembly'
+                    }
+
+                # Read and parse the assembly file
+                try:
+                    async with aiofiles.open(file_path, 'r') as f:
+                        content = await f.read()
+                        
+                    try:
+                        assembly_dict = json.loads(content)
+                    except json.JSONDecodeError as json_err:
+                        logger.error("MemoryPersistence", f"JSON parsing error for assembly {assembly_id}", 
+                                    {"error": str(json_err), "file": str(file_path)})
+                        return None
+                        
+                    # Validate required fields
+                    if not assembly_dict.get('assembly_id') or 'memories' not in assembly_dict:
+                        logger.error("MemoryPersistence", f"Invalid assembly data format for {assembly_id}",
+                                    {"missing_fields": [k for k in ['assembly_id', 'memories'] if k not in assembly_dict]})
+                        return None
+                    
+                    # Create assembly from dict with error handling
+                    try:   
+                        assembly = MemoryAssembly.from_dict(assembly_dict, geometry_manager)
+                    except (KeyError, ValueError, TypeError) as e:
+                        logger.error("MemoryPersistence", f"Error reconstructing assembly {assembly_id} from dict", 
+                                    {"error": str(e), "type": type(e).__name__})
+                        return None
+                        
+                    self.stats['assembly_loads'] = self.stats.get('assembly_loads', 0) + 1
+                    logger.info("MemoryPersistence", f"Loaded assembly {assembly_id}", {"name": assembly.name})
+                    return assembly
+                    
+                except FileNotFoundError:
+                    logger.warning("MemoryPersistence", f"Assembly file not found for {assembly_id}", 
+                                 {"expected_path": str(file_path)})
+                    # Remove from index if file doesn't exist
+                    if assembly_id in self.memory_index:
+                        del self.memory_index[assembly_id]
+                        await self._save_index()
+                    return None
+
+            except Exception as e:
+                logger.error("MemoryPersistence", f"Error loading assembly {assembly_id}", 
+                            {"error": str(e), "type": type(e).__name__})
+                self.stats['failed_assembly_loads'] = self.stats.get('failed_assembly_loads', 0) + 1
+                return None
+
+    async def list_assemblies(self) -> List[Dict[str, Any]]:
+        """List all memory assemblies.
+        
+        Returns:
+            List of assembly metadata dictionaries
+        """
+        async with self._lock:
+            try:
+                assemblies = []
+                for memory_id, info in self.memory_index.items():
+                    if info.get('type') == 'assembly':
+                        assemblies.append({
+                            'id': memory_id,
+                            'path': info['path'],
+                            'timestamp': info.get('timestamp', 0)
+                        })
+                return assemblies
+            except Exception as e:
+                logger.error("MemoryPersistence", "Error listing assemblies", {"error": str(e)})
+                return []
+
+    async def delete_assembly(self, assembly_id: str) -> bool:
+        """Delete a memory assembly.
+        
+        Args:
+            assembly_id: ID of the assembly to delete
+            
+        Returns:
+            bool: Success status
+        """
+        async with self._lock:
+            try:
+                if assembly_id not in self.memory_index or self.memory_index[assembly_id].get('type') != 'assembly':
+                    logger.warning("MemoryPersistence", f"Assembly {assembly_id} not found for deletion")
+                    return False
+                    
+                file_path = self.storage_path / self.memory_index[assembly_id]['path']
+                if await asyncio.to_thread(os.path.exists, file_path):
+                    await asyncio.to_thread(os.remove, file_path)
+                    
+                # Remove from index
+                del self.memory_index[assembly_id]
+                await self._save_index()
+                
+                self.stats['assembly_deletes'] = self.stats.get('assembly_deletes', 0) + 1
+                logger.info("MemoryPersistence", f"Deleted assembly {assembly_id}")
+                return True
+            except Exception as e:
+                logger.error("MemoryPersistence", f"Error deleting assembly {assembly_id}", {"error": str(e)})
+                self.stats['failed_assembly_deletes'] = self.stats.get('failed_assembly_deletes', 0) + 1
+                return False
 
     def get_stats(self) -> Dict[str, Any]:
         """Get persistence statistics."""
