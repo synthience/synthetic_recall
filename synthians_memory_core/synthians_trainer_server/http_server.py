@@ -1,369 +1,472 @@
+# synthians_trainer_server/http_server.py
+
 import os
 import tensorflow as tf
 import numpy as np
 import aiohttp
 import asyncio
 import json
-from fastapi import FastAPI, HTTPException, Body, Request
-from pydantic import BaseModel # Import BaseModel
-from typing import List, Dict, Any, Optional
+from fastapi import FastAPI, HTTPException, Body, Request, status
+from pydantic import BaseModel, Field
+from typing import List, Dict, Any, Optional, Tuple
 import logging
-import requests
-import json
-from typing import Dict, List, Optional, Any, Union
-from fastapi import FastAPI, HTTPException, Request, Response, status, BackgroundTasks, Depends
-from pydantic import BaseModel
-from .synthians_trainer import SynthiansSequencePredictor, TitanMemoryConfig as TrainerConfig, SynthiansSequenceTrainer
+import traceback # Import traceback
+import datetime  # Add datetime module for timestamps
+
+# Import the new Neural Memory module and config
+from .neural_memory import NeuralMemoryModule, NeuralMemoryConfig
+
+# Keep SurpriseDetector if needed for outer loop analysis
 from .surprise_detector import SurpriseDetector
+# Assume GeometryManager might be needed if surprise calculation uses it
+try:
+    from ..geometry_manager import GeometryManager
+except ImportError:
+    logger.warning("Could not import GeometryManager from synthians_memory_core. Using basic numpy ops.")
+    class GeometryManager: # Dummy version
+        def __init__(self, config=None): pass
+        def normalize_embedding(self, vec):
+            vec = np.array(vec, dtype=np.float32)
+            norm = np.linalg.norm(vec)
+            return vec / norm if norm > 0 else vec
+        def calculate_similarity(self, v1, v2):
+             v1 = self.normalize_embedding(v1)
+             v2 = self.normalize_embedding(v2)
+             return np.dot(v1, v2)
+        def align_vectors(self, v1, v2):
+             v1, v2 = np.array(v1), np.array(v2)
+             if v1.shape == v2.shape: return v1, v2
+             logger.warning("Dummy GeometryManager cannot align vectors.")
+             return v1, v2 # Assume they match or fail later
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Rename app title
-app = FastAPI(title="Synthians Sequence Trainer API")
+app = FastAPI(title="Synthians Neural Memory API (Titans)")
 
-# Global state for the trainer model and its memory vector
-trainer_model: Optional[SynthiansSequencePredictor] = None
-trainer_memory_vec: Optional[tf.Variable] = None
+# --- Global State ---
+neural_memory: Optional[NeuralMemoryModule] = None
 surprise_detector: Optional[SurpriseDetector] = None
-
-# Memory Core API connection details
-memory_core_url: Optional[str] = None
+geometry_manager: Optional[GeometryManager] = None
+memory_core_url: Optional[str] = None # URL for potential outer loop callbacks
 
 # --- Pydantic Models ---
-# Update models slightly to match terminology if desired, but structure is similar
 
-class InitConfig(TrainerConfig): # Keep using TrainerConfig structure
+class InitRequest(BaseModel):
+    config: Optional[dict] = Field(default_factory=dict, description="Neural Memory config overrides")
     memory_core_url: Optional[str] = None
+    load_path: Optional[str] = None
 
-class InitResponse(BaseModel): # Use BaseModel
+class InitResponse(BaseModel):
     message: str
-    config: TrainerConfig # Return the trainer's config
+    config: dict # Return as dict for JSON
 
-class TrainStepRequest(BaseModel): # Use BaseModel
-    x_t: List[float]
-    x_next: List[float]
+class RetrieveRequest(BaseModel):
+    query_embedding: List[float]
 
-class TrainStepResponse(BaseModel): # Use BaseModel
-    cost: float
-    predicted: List[float] # Prediction for x_{t+1}
-    surprise: float # Surprise based on x_t reconstruction
+class RetrieveResponse(BaseModel):
+    retrieved_embedding: List[float]
 
-class ForwardRequest(BaseModel): # Use BaseModel
-    x: List[float]
+class UpdateMemoryRequest(BaseModel):
+    input_embedding: List[float]
 
-class ForwardResponse(BaseModel): # Use BaseModel
-    predicted: List[float] # Prediction for next step
-    memory: List[float]    # The *new* internal memory state M_t
-    surprise: float      # Surprise based on reconstructing input x
+class UpdateMemoryResponse(BaseModel):
+    status: str
+    loss: Optional[float] = None
+    grad_norm: Optional[float] = None
 
-class SaveLoadRequest(BaseModel): # Use BaseModel
+class TrainOuterRequest(BaseModel):
+    input_sequence: List[List[float]]
+    target_sequence: List[List[float]]
+
+class TrainOuterResponse(BaseModel):
+    average_loss: float
+
+class SaveLoadRequest(BaseModel):
     path: str
 
-class StatusResponse(TrainerConfig): # Inherit directly
-     status: Optional[str] = None # Add status field for not-initialized case
+class StatusResponse(BaseModel):
+     status: str
+     config: Optional[dict] = None # Return as dict
 
-class PredictNextEmbeddingRequest(BaseModel):
-    embedding: List[float]
-    previous_memory_state: Optional[List[float]] = None
-
-class PredictNextEmbeddingResponse(BaseModel):
+class AnalyzeSurpriseRequest(BaseModel):
     predicted_embedding: List[float]
-    surprise: float
-    memory_state: Optional[List[float]] = None
+    actual_embedding: List[float]
 
 # --- Helper Functions ---
-def _get_trainer_model_and_memory():
-    global trainer_model, trainer_memory_vec, surprise_detector, memory_core_url
-    if trainer_model is None:
-        # Initialize the predictor model
-        logger.info("Initializing sequence predictor...")
-        trainer_model = SynthiansSequencePredictor(config=TrainerConfig())
-    
-    if trainer_memory_vec is None:
-        # Initialize the trainer memory vector
-        logger.info("Initializing sequence trainer memory...")
-        cfg = trainer_model.get_config()
-        mem_dim = cfg.get('outputDim', 256) # Use 'outputDim' from config which maps to memory_dim
-        initial_memory = tf.zeros([mem_dim], dtype=tf.float32)
-        trainer_memory_vec = tf.Variable(initial_memory, name="trainer_memory_vec", trainable=False)
-        
-    if surprise_detector is None:
-        # Initialize the surprise detector
-        logger.info("Initializing surprise detector...")
-        surprise_detector = SurpriseDetector(
-            surprise_threshold=0.6,
-            max_sequence_length=10,
-            surprise_decay=0.9
-        )
-    
-    # Get memory core URL from environment variable if not already set
-    if memory_core_url is None:
-        memory_core_url = os.environ.get("MEMORY_CORE_URL", "http://localhost:8000")
-        logger.info(f"Memory Core URL set to: {memory_core_url}")
-        
-    return trainer_model, trainer_memory_vec, surprise_detector, memory_core_url
 
-def _validate_vector(vec: List[float], expected_dim: int, name: str):
-    if len(vec) != expected_dim:
+def get_neural_memory() -> NeuralMemoryModule:
+    if neural_memory is None:
+        logger.error("Neural Memory module not initialized. Call /init first.")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Neural Memory module not initialized.")
+    return neural_memory
+
+def get_surprise_detector() -> SurpriseDetector:
+     global surprise_detector, geometry_manager
+     if surprise_detector is None:
+          if geometry_manager is None:
+               nm_conf = neural_memory.config if neural_memory else NeuralMemoryConfig()
+               # Use get with default for safety
+               gm_dim = nm_conf.get('input_dim', 768)
+               geometry_manager = GeometryManager({'embedding_dim': gm_dim})
+          surprise_detector = SurpriseDetector(geometry_manager=geometry_manager)
+          logger.info("Initialized SurpriseDetector.")
+     return surprise_detector
+
+
+def _validate_vector(vec: Optional[List[float]], expected_dim: int, name: str, allow_none=False):
+    """Validates vector type, length, and content."""
+    if vec is None:
+        if allow_none: return
+        else: raise HTTPException(status_code=400, detail=f"'{name}' cannot be null.")
+
+    if not isinstance(vec, list):
+         raise HTTPException(status_code=400, detail=f"'{name}' must be a list of floats.")
+
+    # <<< MODIFIED: Explicitly handle expected_dim == -1 >>>
+    if expected_dim != -1 and len(vec) != expected_dim:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid vector length for '{name}'. Expected {expected_dim}, got {len(vec)}."
         )
-        
-async def _fetch_from_memory_core(endpoint: str, payload: dict = None):
-    if memory_core_url is None:
-        raise HTTPException(status_code=400, detail="Memory Core URL not configured. Call /init with memory_core_url.")
-    
-    url = f"{memory_core_url}{endpoint}"
-    method = "GET" if payload is None else "POST"
-    
+    # Add NaN/Inf check
     try:
-        async with aiohttp.ClientSession() as session:
-            if method == "GET":
-                async with session.get(url) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise HTTPException(status_code=response.status, detail=f"Memory Core API error: {error_text}")
-                    return await response.json()
-            else:  # POST
-                async with session.post(url, json=payload) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise HTTPException(status_code=response.status, detail=f"Memory Core API error: {error_text}")
-                    return await response.json()
-    except aiohttp.ClientError as e:
-        logger.error(f"Failed to connect to Memory Core API: {e}")
-        raise HTTPException(status_code=503, detail=f"Failed to connect to Memory Core API: {str(e)}")
+         # Using np.isfinite is more efficient for checking both NaN and Inf
+         if not np.all(np.isfinite(vec)):
+             raise HTTPException(
+                  status_code=400,
+                  detail=f"Invalid values (NaN/Inf) found in '{name}'."
+             )
+    except TypeError:
+          # This might happen if vec contains non-numeric types
+          raise HTTPException(
+               status_code=400,
+               detail=f"Invalid value types in '{name}', expected floats."
+          )
+
 
 # --- API Endpoints ---
 
-@app.post("/init", response_model=InitResponse)
-async def init_trainer_model(config: InitConfig = Body(default_factory=dict)):
-    global trainer_model, trainer_memory_vec, surprise_detector, memory_core_url
-    logger.info(f"Initializing sequence trainer model with config: {config}")
+@app.post("/init", response_model=InitResponse, status_code=status.HTTP_200_OK)
+async def init_neural_memory(req: InitRequest):
+    """Initialize the Neural Memory Module."""
+    global neural_memory, memory_core_url, surprise_detector, geometry_manager
+    logger.info(f"Received /init request. Config overrides: {req.config}, Load path: {req.load_path}")
     try:
-        # Set Memory Core URL if provided
-        if config.memory_core_url:
-            memory_core_url = config.memory_core_url
+        # Use .get() for safer access to potentially missing keys in Pydantic model
+        mc_url = req.memory_core_url
+        if mc_url:
+            memory_core_url = mc_url
             logger.info(f"Memory Core URL set to: {memory_core_url}")
+
+        # Create config, overriding defaults with request body config
+        # req.config should be a dict here from Pydantic parsing
+        config_data = req.config if req.config is not None else {}
+        config = NeuralMemoryConfig(**config_data)
+        logger.info(f"Parsed config: {dict(config)}")
+
+
+        # Initialize or re-initialize
+        logger.info("Creating NeuralMemoryModule instance...")
+        neural_memory = NeuralMemoryModule(config=config)
+        logger.info("NeuralMemoryModule instance created.")
+
+        # Initialize shared geometry manager and surprise detector based on module's config
+        # Use dictionary access here too
+        geometry_manager = GeometryManager({'embedding_dim': neural_memory.config['input_dim']})
+        # Reset surprise detector to use new geometry manager if re-initializing
+        surprise_detector = None
+        get_surprise_detector() # Initialize if not already
+
+        loaded_ok = True
+        if req.load_path:
+            logger.info(f"Attempting to load state from: {req.load_path}")
+            # Build model before loading
+            try:
+                 logger.info("Building model before loading state...")
+                 _ = neural_memory(tf.zeros((1, neural_memory.config['query_dim'])))
+                 logger.info("Model built successfully.")
+            except Exception as build_err:
+                 logger.error(f"Error explicitly building model before load: {build_err}. Load might still succeed.")
+
+            loaded_ok = neural_memory.load_state(req.load_path)
+            if not loaded_ok:
+                # Fail init if loading was requested but failed
+                raise HTTPException(status_code=500, detail=f"Failed to load state from {req.load_path}")
+
+        effective_config = neural_memory.get_config_dict()
+        logger.info(f"Neural Memory module initialized. Effective Config: {effective_config}")
+        return InitResponse(message="Neural Memory module initialized successfully.", config=effective_config)
+
+    except AttributeError as ae:
+         # Catch the specific AttributeError related to config access during init
+         logger.error(f"AttributeError during initialization: {ae}. Config object: {config}", exc_info=True)
+         neural_memory = None
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                             detail=f"Initialization failed due to config access error: {ae}")
+    except Exception as e:
+        logger.error(f"Failed to initialize Neural Memory module: {e}", exc_info=True)
+        neural_memory = None # Ensure it's None on failure
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Initialization failed: {str(e)}")
+
+@app.post("/retrieve", response_model=RetrieveResponse)
+async def retrieve_memory(req: RetrieveRequest):
+    nm = get_neural_memory()
+    try:
+        _validate_vector(req.query_embedding, nm.config['query_dim'], "query_embedding")
         
-        trainer_model = SynthiansSequencePredictor(config) # Instantiate new class
-        cfg = trainer_model.get_config()
-        mem_dim = cfg.get('outputDim', 256) # Use 'outputDim' from config which maps to memory_dim
-        initial_memory = tf.zeros([mem_dim], dtype=tf.float32)
-        trainer_memory_vec = tf.Variable(initial_memory, name="trainer_memory_vec", trainable=False)
-        surprise_detector = SurpriseDetector(
-            surprise_threshold=0.6,
-            max_sequence_length=10,
-            surprise_decay=0.9
-        )
-        logger.info(f"Sequence trainer initialized with effective config: {cfg}")
-        return InitResponse(message="Sequence trainer model initialized", config=cfg)
-    except Exception as e:
-        logger.error(f"Failed to initialize trainer model: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to initialize trainer model: {str(e)}")
+        # Convert to proper tensor shape expected by the model (batch dimension)
+        query_tensor = tf.convert_to_tensor([req.query_embedding], dtype=tf.float32)
+        
+        # Call the model with the properly shaped tensor
+        retrieved_tensor = nm(query_tensor, training=False)
+        
+        if retrieved_tensor is None or not isinstance(retrieved_tensor, tf.Tensor):
+             raise ValueError("Retrieval process returned None or invalid type")
 
-@app.post("/trainStep", response_model=TrainStepResponse)
-async def train_step(data: TrainStepRequest):
-    m, mem_var, _, _ = _get_trainer_model_and_memory()
-    cfg = m.get_config()
-    input_dim = cfg.get('inputDim', 768)
+        # Ensure we get a flat list regardless of tensor shape
+        if len(tf.shape(retrieved_tensor)) > 1:
+             # If we get a batch of vectors (or matrix), we want the first one
+             retrieved_list = retrieved_tensor[0].numpy().tolist()
+        else:
+             retrieved_list = retrieved_tensor.numpy().tolist()
+
+        return RetrieveResponse(retrieved_embedding=retrieved_list)
+
+    except HTTPException as http_exc: raise http_exc
+    except Exception as e:
+        logger.error(f"Memory retrieval failed: {e}\n{traceback.format_exc()}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Retrieval error: {str(e)}")
+
+@app.post("/update_memory", response_model=UpdateMemoryResponse)
+async def update_memory(req: UpdateMemoryRequest):
+    nm = get_neural_memory()
+    try:
+        _validate_vector(req.input_embedding, nm.config['input_dim'], "input_embedding")
+        
+        # Create tensor with proper batch dimension as expected by TensorFlow
+        input_tensor = tf.convert_to_tensor([req.input_embedding], dtype=tf.float32)
+
+        # Pass to update_step which now expects a batched tensor with shape [1, input_dim]
+        loss_tensor, grads = nm.update_step(input_tensor)
+
+        grad_norm = 0.0
+        if grads:
+             valid_grads = [g for g in grads if g is not None]
+             if valid_grads:
+                 # Calculate L2 norm for each valid gradient tensor and sum them
+                 norms = [tf.norm(g) for g in valid_grads]
+                 grad_norm = tf.reduce_sum(norms).numpy().item()
+
+        loss_value = loss_tensor.numpy().item() if loss_tensor is not None else 0.0
+
+        # Include timestamp in response for tracking
+        timestamp = datetime.datetime.now().isoformat()
+        return UpdateMemoryResponse(status="success", loss=loss_value, grad_norm=grad_norm)
+
+    except HTTPException as http_exc: raise http_exc
+    except Exception as e:
+        logger.error(f"Memory update failed: {e}\n{traceback.format_exc()}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Update error: {str(e)}")
+
+@app.post("/train_outer", response_model=TrainOuterResponse)
+async def train_outer(req: TrainOuterRequest):
+    nm = get_neural_memory()
+    if not hasattr(nm, 'compiled') or not nm.compiled:
+        try:
+             # Make sure the optimizer is properly set
+             if not hasattr(nm, 'optimizer') or nm.optimizer is None:
+                 nm.optimizer = nm.outer_optimizer
+             nm.compile(optimizer=nm.optimizer, loss='mse')
+             logger.info("NeuralMemoryModule compiled for outer training.")
+        except Exception as compile_err:
+             logger.error(f"Error compiling NeuralMemoryModule: {compile_err}")
+             raise HTTPException(status_code=500, detail=f"Model compilation error: {compile_err}")
 
     try:
-        _validate_vector(data.x_t, input_dim, "x_t")
-        _validate_vector(data.x_next, input_dim, "x_next")
+        if not req.input_sequence or not req.target_sequence: raise HTTPException(status_code=400, detail="Sequences empty.")
+        seq_len = len(req.input_sequence)
+        if seq_len != len(req.target_sequence): raise HTTPException(status_code=400, detail="Sequence lengths mismatch.")
+        if seq_len == 0: raise HTTPException(status_code=400, detail="Sequences length 0.")
 
-        x_t_tensor = tf.convert_to_tensor(data.x_t, dtype=tf.float32)
-        x_next_tensor = tf.convert_to_tensor(data.x_next, dtype=tf.float32)
+        # Validate dimensions for first item in sequences
+        _validate_vector(req.input_sequence[0], nm.config['input_dim'], "input_sequence[0]")
+        _validate_vector(req.target_sequence[0], nm.config['value_dim'], "target_sequence[0]")
 
-        # Train step updates mem_var internally
-        cost_tensor = m.train_step(x_t_tensor, x_next_tensor, mem_var)
+        # Convert to tensors with proper shape: [batch_size=1, seq_len, dim]
+        input_seq_tensor = tf.convert_to_tensor([req.input_sequence], dtype=tf.float32)
+        target_seq_tensor = tf.convert_to_tensor([req.target_sequence], dtype=tf.float32)
 
-        # Get results *after* the step for the response
-        # The surprise here is based on reconstructing x_t
-        forward_result = m.forward(x_t_tensor, mem_var.value())
+        # Log tensor shapes for debugging
+        logger.info(f"Input sequence tensor shape: {input_seq_tensor.shape}, Target sequence tensor shape: {target_seq_tensor.shape}")
+        
+        # Directly call train_step with the properly shaped tensors
+        metrics = nm.train_step((input_seq_tensor, target_seq_tensor))
+        avg_loss = metrics.get('loss', 0.0)
+        
+        # Ensure we return a Python native float
+        return TrainOuterResponse(average_loss=float(avg_loss))
 
-        cost_val = float(cost_tensor.numpy())
-        pred_val = forward_result["predicted"].numpy().tolist() # Prediction of x_{t+1}
-        sur_val = float(forward_result["surprise"].numpy()) # Reconstruction surprise of x_t
-
-        return TrainStepResponse(cost=cost_val, predicted=pred_val, surprise=sur_val)
-
+    except HTTPException as http_exc: raise http_exc
+    except tf.errors.InvalidArgumentError as tf_err:
+         logger.error(f"TensorFlow argument error during outer training: {tf_err}", exc_info=True)
+         raise HTTPException(status_code=400, detail=f"TF Argument Error: {tf_err}")
     except Exception as e:
-        logger.error(f"Trainer train step failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Trainer train step failed: {str(e)}")
+        logger.error(f"Outer training failed: {e}\n{traceback.format_exc()}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Outer training error: {str(e)}")
 
-@app.post("/forward", response_model=ForwardResponse)
-async def forward_pass(data: ForwardRequest):
-    m, mem_var, _, _ = _get_trainer_model_and_memory()
-    cfg = m.get_config()
-    input_dim = cfg.get('inputDim', 768)
-
+@app.post("/save", status_code=status.HTTP_200_OK)
+async def save_neural_memory_state(req: SaveLoadRequest):
+    nm = get_neural_memory()
     try:
-        _validate_vector(data.x, input_dim, "x")
-        x_tensor = tf.convert_to_tensor(data.x, dtype=tf.float32)
-
-        # Run forward pass using the current memory state (M_{t-1})
-        forward_result = m.forward(x_tensor, mem_var.value())
-
-        new_memory_tensor = forward_result["newMemory"] # This is M_t
-        # Update the global trainer memory state
-        mem_var.assign(new_memory_tensor)
-
-        pred_val = forward_result["predicted"].numpy().tolist() # Prediction P_t for x_{t+1}
-        mem_val = new_memory_tensor.numpy().tolist()       # Updated memory M_t
-        sur_val = float(forward_result["surprise"].numpy())  # Surprise for x_t
-
-        return ForwardResponse(predicted=pred_val, memory=mem_val, surprise=sur_val)
-
+        nm.save_state(req.path)
+        return {"message": f"Neural Memory state saved to {req.path}"}
     except Exception as e:
-        logger.error(f"Trainer forward pass failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Trainer forward pass failed: {str(e)}")
+        logger.error(f"Failed to save neural memory state: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to save state: {str(e)}")
 
-@app.post("/save")
-async def save_trainer_model(data: SaveLoadRequest):
-    m, _, _, _ = _get_trainer_model_and_memory()
+@app.post("/load", status_code=status.HTTP_200_OK)
+async def load_neural_memory_state(req: SaveLoadRequest):
+    global neural_memory, surprise_detector, geometry_manager
     try:
-        await m.save_model(data.path)
-        return {"message": f"Trainer model saved to {data.path}"}
-    except Exception as e:
-        logger.error(f"Failed to save trainer model: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to save trainer model: {str(e)}")
+        # First, read the state file to examine the config without loading
+        if not os.path.exists(req.path):
+            raise FileNotFoundError(f"State file not found: {req.path}")
+            
+        with open(req.path, 'r') as f: 
+            state_data = json.load(f)
+            
+        # Extract config from saved state
+        saved_config = state_data.get("config")
+        if not saved_config:
+            raise ValueError("State file is missing 'config' section")
+        
+        # Create a properly initialized model with the saved config
+        temp_nm = NeuralMemoryModule(config=saved_config)
+        
+        # Force build by creating dummy inputs and running a forward pass
+        dummy_input = tf.zeros((1, temp_nm.config['input_dim']), dtype=tf.float32)
+        dummy_query = tf.zeros((1, temp_nm.config['query_dim']), dtype=tf.float32)
+        _ = temp_nm.get_projections(dummy_input)
+        _ = temp_nm(dummy_query)
+        
+        # Now load the state into the fully initialized model with matching config
+        loaded_ok = temp_nm.load_state(req.path)
 
-@app.post("/load")
-async def load_trainer_model(data: SaveLoadRequest):
-    # Ensure model exists to load into. If not, init first?
-    # For simplicity, assume init was called before load.
-    global trainer_model, trainer_memory_vec
-    if trainer_model is None:
-         # Optionally, initialize with default config if loading into non-existent model
-         logger.warning("Attempting to load into non-initialized model. Initializing with defaults.")
-         trainer_model = SynthiansSequencePredictor()
-         # Need to initialize memory_vec too
-         cfg = trainer_model.get_config()
-         mem_dim = cfg.get('outputDim', 256)
-         trainer_memory_vec = tf.Variable(tf.zeros([mem_dim], dtype=tf.float32), name="trainer_memory_vec")
+        if loaded_ok:
+            # Replace the global instance with our successfully loaded one
+            neural_memory = temp_nm
+            # Re-initialize dependent components with the loaded config
+            geometry_manager = GeometryManager({'embedding_dim': neural_memory.config['input_dim']})
+            surprise_detector = None  # Force re-init with new geometry manager
+            get_surprise_detector()
+            logger.info(f"Neural Memory state loaded from {req.path} and components re-initialized.")
+            return {"message": f"Neural Memory state loaded from {req.path}"}
+        else:
+             raise HTTPException(status_code=500, detail=f"Failed to load state from {req.path}. Check logs.")
 
-
-    m, mem_var, _, _ = _get_trainer_model_and_memory()
-    try:
-        await m.load_model(data.path)
-        # Check if memory dimension changed and update trainer_memory_vec if needed
-        new_cfg = m.get_config()
-        new_mem_dim = new_cfg.get('outputDim', 256)
-        if new_mem_dim != mem_var.shape[0]:
-            logger.warning(f"Trainer memory dimension changed after load ({mem_var.shape[0]} -> {new_mem_dim}). Re-initializing memory vector.")
-            mem_var.assign(tf.zeros([new_mem_dim], dtype=tf.float32))
-
-        logger.info(f"Trainer model weights loaded from {data.path}")
-        return {"message": f"Trainer model loaded from {data.path}"}
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Trainer model file not found: {data.path}")
+        raise HTTPException(status_code=404, detail=f"State file not found: {req.path}")
     except Exception as e:
-        logger.error(f"Failed to load trainer model: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to load trainer model: {str(e)}")
+        logger.error(f"Failed to load neural memory state: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to load state: {str(e)}")
 
 @app.get("/status", response_model=StatusResponse)
-async def get_trainer_status():
-    if trainer_model is None:
-        return StatusResponse(status="No trainer model initialized")
+async def get_neural_memory_status():
+    if neural_memory is None:
+        return StatusResponse(status="Neural Memory module not initialized.")
     try:
-        config = trainer_model.get_config()
-        return StatusResponse(**config) # Directly return config dict
+        config_dict = neural_memory.get_config_dict()
+        return StatusResponse(status="Initialized", config=config_dict)
     except Exception as e:
-        logger.error(f"Failed to get trainer status: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to get trainer status: {str(e)}")
-
-@app.post("/predict_next_embedding", response_model=PredictNextEmbeddingResponse)
-async def predict_next_embedding(request: PredictNextEmbeddingRequest):
-    """Predict the next embedding based on the given input embedding.
-    
-    This endpoint is designed to be stateless when used with previous_memory_state.
-    The Orchestrator manages state continuity by passing and receiving memory state.
-    
-    Args:
-        request: Contains the current embedding to predict from and optional previous memory state
-    """
-    m, _, surprise_detector, _ = _get_trainer_model_and_memory()
-    cfg = m.get_config()
-    
-    # Get and validate input embedding
-    embedding = request.embedding
-    input_dim = cfg.get("inputDim", 768)  # Default to 768-dimensional embeddings
-    _validate_vector(embedding, input_dim, "Input embedding")
-    
-    # Convert embedding to tensor
-    input_tensor = tf.convert_to_tensor([embedding], dtype=tf.float32)
-    
-    # If previous_memory_state provided, use it for stateless operation
-    if request.previous_memory_state is not None:
-        try:
-            memory_tensor = tf.convert_to_tensor(request.previous_memory_state, dtype=tf.float32)
-            # Forward pass with external memory state
-            predicted_embedding, new_memory_tensor = m.forward(input_tensor, memory_tensor)
-        except Exception as e:
-            logger.error(f"Error using provided memory state: {e}", exc_info=True)
-            # Fallback to default forward pass
-            predicted_embedding, new_memory_tensor = m.forward(input_tensor)
-    else:
-        # First call, initialize with zeros
-        memory_dim = cfg.get("memoryDim", 128)
-        zero_memory = tf.zeros([1, memory_dim], dtype=tf.float32)
-        predicted_embedding, new_memory_tensor = m.forward(input_tensor, zero_memory)
-    
-    # Extract the prediction (first item in batch)
-    predicted = predicted_embedding[0].numpy().tolist()
-    
-    # Calculate surprise as 0 since we don't have actual to compare
-    surprise_value = 0.0
-    
-    # Return prediction with new memory state
-    # The orchestrator will handle passing this state to the next call
-    return PredictNextEmbeddingResponse(
-        predicted_embedding=predicted,
-        surprise=surprise_value,
-        memory_state=new_memory_tensor[0].numpy().tolist()
-    )
+        logger.error(f"Failed to get status: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get status: {str(e)}")
 
 @app.post("/analyze_surprise", response_model=Dict[str, Any])
-async def analyze_surprise(request: dict):
-    """Analyze the surprise between predicted and actual embeddings.
-    
-    This endpoint provides detailed metrics about how surprising an actual embedding
-    is compared to what was predicted, useful for cognitive modeling.
-    """
-    _, _, surprise_detector, _ = _get_trainer_model_and_memory()
-    
-    # Extract embeddings from request
-    predicted_embedding = request.get("predicted_embedding", [])
-    actual_embedding = request.get("actual_embedding", [])
-    
-    if not predicted_embedding or not actual_embedding:
-        raise HTTPException(status_code=400, detail="Both predicted_embedding and actual_embedding are required")
-    
-    # Calculate surprise metrics
-    surprise_metrics = surprise_detector.calculate_surprise(
-        predicted_embedding=predicted_embedding,
-        actual_embedding=actual_embedding
-    )
-    
-    # Calculate quickrecal boost
-    quickrecal_boost = surprise_detector.calculate_quickrecal_boost(surprise_metrics)
-    
-    # Add boost to response
-    surprise_metrics["quickrecal_boost"] = quickrecal_boost
-    
-    return surprise_metrics
+async def analyze_surprise(request: AnalyzeSurpriseRequest):
+    detector = get_surprise_detector()
+    nm = get_neural_memory() # Need this for dimension info
+    try:
+        # Validate embeddings using input_dim from the initialized model
+        _validate_vector(request.predicted_embedding, nm.config['input_dim'], "predicted_embedding")
+        _validate_vector(request.actual_embedding, nm.config['input_dim'], "actual_embedding")
+
+        surprise_metrics = detector.calculate_surprise(
+            predicted_embedding=request.predicted_embedding,
+            actual_embedding=request.actual_embedding
+        )
+        quickrecal_boost = detector.calculate_quickrecal_boost(surprise_metrics)
+
+        response_data = surprise_metrics.copy()
+        if 'delta' in response_data and isinstance(response_data['delta'], np.ndarray):
+             response_data['delta'] = response_data['delta'].tolist()
+        response_data["quickrecal_boost"] = quickrecal_boost
+
+        return response_data
+
+    except HTTPException as http_exc: raise http_exc
+    except Exception as e:
+        logger.error(f"Error analyzing surprise: {e}\n{traceback.format_exc()}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error analyzing surprise: {str(e)}")
+
+# --- Health Check ---
+@app.get("/health")
+async def health_check():
+    """Basic health check."""
+    try:
+         tf_version = tf.__version__
+         # Perform a minimal TF computation
+         tensor_sum = tf.reduce_sum(tf.constant([1.0, 2.0])).numpy()
+         can_compute = abs(tensor_sum - 3.0) < 1e-6
+         status_msg = "ok" if can_compute else "error_tf_compute"
+    except Exception as e:
+         logger.error(f"TensorFlow health check failed: {e}", exc_info=True)
+         tf_version = "error"
+         status_msg = f"error_tf_init: {str(e)}"
+
+    return {
+         "status": status_msg,
+         "tensorflow_version": tf_version,
+         "neural_memory_initialized": neural_memory is not None,
+         "timestamp": datetime.datetime.utcnow().isoformat() 
+     }
 
 # --- App startup/shutdown ---
+@app.on_event("startup")
+async def startup_event():
+     global geometry_manager
+     if geometry_manager is None:
+         geometry_manager = GeometryManager()
+     logger.info("Synthians Neural Memory API started. Send POST to /init to initialize.")
+
+
 @app.on_event("shutdown")
 async def shutdown():
-    logger.info("Shutting down sequence trainer server")
-    # Clean up resources here if needed
+    logger.info("Shutting down neural memory server.")
+    # if neural_memory:
+    #     try:
+    #         save_path = os.environ.get("SHUTDOWN_SAVE_PATH", "/app/memory/shutdown_state.json")
+    #         logger.info(f"Attempting final state save to {save_path}")
+    #         neural_memory.save_state(save_path)
+    #     except Exception as e:
+    #         logger.error(f"Error saving state on shutdown: {e}")
 
+
+# --- Main Execution ---
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8001))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    host = os.environ.get("HOST", "0.0.0.0")
+    log_level = os.environ.get("LOG_LEVEL", "info").lower()
+
+    logger.info(f"Starting Synthians Neural Memory API on http://{host}:{port}")
+    print(f"-> Using TensorFlow version: {tf.__version__}")
+    print(f"-> Using NumPy version: {np.__version__}")
+    if not np.__version__.startswith("1."):
+        print("\n\n!!!! WARNING: Numpy version is not < 2.0.0. This may cause issues with TensorFlow/other libs. !!!!\n\n")
+
+    uvicorn.run(app, host=host, port=port, log_level=log_level) # Run using the app object directly
