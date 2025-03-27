@@ -15,6 +15,19 @@ The Synthians Memory Core provides a lean, efficient, yet powerful memory system
 -   **Robust Persistence:** Handles disk storage, backups, and atomic writes asynchronously (`MemoryPersistence`).
 -   **Adaptive Thresholds:** Dynamically adjusts retrieval thresholds based on feedback (`ThresholdCalibrator`).
 -   **Unified Interface:** Provides a cohesive API through `SynthiansMemoryCore`.
+-   **Vector Search:** Fast retrieval using FAISS vector indexing with GPU acceleration support.
+
+## Recent Improvements (March 2025)
+
+The Synthians Memory Core has received significant enhancements in the `Synthience_memory_remaster` branch:
+
+-   **Fixed Vector Index Persistence:** The FAISS vector index and ID mappings are now properly saved during the persistence cycle, ensuring memories can be retrieved after system restarts.
+-   **Enhanced API Observability:** Added comprehensive vector index information to the `/stats` endpoint for better monitoring and debugging.
+-   **Improved Embedding Handling:** Robust dimension handling to ensure vector operations work correctly regardless of embedding dimensions (384 vs 768).
+-   **Retrieval Threshold Adjustments:** Lowered pre-filter threshold from 0.5 to 0.2 for improved recall while maintaining precision.
+-   **Validation Tools:** Added comprehensive test scripts to validate the full memory lifecycle.
+
+See `docs/memory_system_remaster.md` for detailed documentation on these improvements.
 
 ## Components
 
@@ -25,6 +38,7 @@ The Synthians Memory Core provides a lean, efficient, yet powerful memory system
 -   `memory_structures.py`: Defines `MemoryEntry` and `MemoryAssembly`.
 -   `memory_persistence.py`: Manages disk storage and backups.
 -   `adaptive_components.py`: Includes `ThresholdCalibrator`.
+-   `vector_index.py`: Handles FAISS vector indexing with GPU support.
 -   `custom_logger.py`: Simple logging utility.
 
 ## Usage
@@ -103,19 +117,5 @@ if __name__ == "__main__":
 -   **Improved Efficiency:** Leverages `asyncio` and dedicated persistence class.
 -   **Clearer Interfaces:** Simplified API focused on core memory operations.
 -   **Hyperbolic First-Class:** Hyperbolic geometry is treated as a core configuration option.
-```
-
-**Explanation and Design Choices:**
-
-1.  **Consolidation:** Logic from `base.py`, `connectivity.py`, `tools.py`, `personal_details.py`, `rag_context.py`, `enhanced_memory_client.py`, `advanced_memory_system.py`, `memory_core.py`, `memory_assembly.py` (manager part), `memory_manager.py` is largely consolidated or represented within `SynthiansMemoryCore` and its direct components.
-2.  **`SynthiansMemoryCore` (Orchestrator):** This class acts as the main entry point. It initializes and holds references to all the specialized components (`GeometryManager`, `UnifiedQuickRecallCalculator`, `EmotionalGatingService`, `MemoryPersistence`, `ThresholdCalibrator`). It orchestrates the flow for processing new memories and retrieving relevant ones, delegating specific tasks.
-3.  **`GeometryManager` (Centralized):** This is a crucial new component. It takes *all* responsibility for embedding validation, normalization, alignment (handling 384 vs 768 automatically based on config), geometric transformations (`_to_hyperbolic`, `_from_hyperbolic`), and distance/similarity calculations (`euclidean_distance`, `hyperbolic_distance`, `calculate_similarity`). This ensures consistency and avoids logic duplication.
-4.  **`hpc_quickrecal.py` (Focused):** Retains the `UnifiedQuickRecallCalculator` but is simplified. It now *uses* the `GeometryManager` for distance calculations instead of implementing its own. The complex `HPCQRFlowManager` logic is absorbed into `SynthiansMemoryCore`'s processing flow.
-5.  **`emotional_intelligence.py` (Focused):** Contains the `EmotionalGatingService` and a *simplified* `EmotionalAnalyzer` interface (assuming the actual analysis might be external or a simpler internal model).
-6.  **`memory_structures.py` (Definitions):** Defines `MemoryEntry` and `MemoryAssembly`. `MemoryAssembly` now uses the `GeometryManager` passed during initialization for its internal similarity calculations, ensuring geometric consistency.
-7.  **`memory_persistence.py` (Dedicated):** Consolidates all disk I/O logic using `aiofiles` for async operations, atomic writes via temp files, backup management, and pruning logic based on effective QuickRecal scores.
-8.  **`adaptive_components.py`:** Keeps the `ThresholdCalibrator` separate for clarity.
-9.  **Efficiency:** Uses `asyncio` extensively, especially for I/O in `MemoryPersistence`. Background tasks handle persistence and decay/pruning without blocking core operations. Simplifies the complex multi-layered routing of the original MPL by integrating assembly activation and direct search within `_get_candidate_memories`.
-10. **Leaner:** Explicitly excludes the full complexity of the original Synthien subsystem (Dreaming, Narrative, Spiral Awareness beyond basic phase reference) while retaining the core memory mechanisms identified as valuable.
 
 This new structure provides a more streamlined, maintainable, and potentially more efficient implementation while capturing the core value propositions (HPC-QR, Hyperbolic, Emotion, Assemblies) of the original system.
