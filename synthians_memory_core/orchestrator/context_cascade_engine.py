@@ -204,474 +204,198 @@ class ContextCascadeEngine:
                                 embedding: Optional[List[float]] = None,
                                 metadata: Optional[Dict[str, Any]] = None,
                                 intent_id: Optional[str] = None) -> Dict[str, Any]:
-        """Process new input through MemoryCore storage and NeuralMemory learning/retrieval.
-        
-        This method orchestrates the flow described in the Phase 3 sequence diagram:
-        1. Store memory in Memory Core (receive memory_id and actual_embedding)
-        2. Send actual_embedding to Neural Memory for learning
-        3. Receive surprise metrics (loss/grad_norm) from Neural Memory
-        4. Calculate quickrecal_boost from surprise metrics
-        5. Update quickrecal_score in Memory Core if boost > 0
-        6. Generate query and retrieve associated embedding from Neural Memory
-        7. Return both actual_embedding and retrieved_embedding for downstream use
-        
-        Args:
-            content: Text content of the input
-            embedding: Optional pre-computed embedding
-            metadata: Optional metadata for the input
-            intent_id: Optional intent tracking ID (creates new one if None)
-            
-        Returns:
-            Processing results including memory_id, surprise metrics, etc.
-        """
-        # Wait for configuration to be ready before processing
+        """Orchestrates the refactored cognitive cascade for a single input."""
+
         if not self._config_ready:
-            logger.info("Waiting for dynamic configuration to complete...")
+            logger.info("Waiting for dynamic configuration...")
             try:
-                # Wait with a timeout to avoid blocking forever if configuration fails
                 await asyncio.wait_for(self._config_ready_event.wait(), 10.0)
+                logger.info("Configuration ready, proceeding.")
             except asyncio.TimeoutError:
-                logger.warning("Timed out waiting for configuration. Proceeding with defaults.")
-                self._config_ready = True  # Prevent further waiting
-            
+                logger.error("Timed out waiting for configuration. Cannot process input.")
+                return self._finalize_error("Configuration timeout", {})
+
         async with self.processing_lock:
             start_time = time.time()
-            
-            # Begin intent tracking if metrics are enabled
-            if self.metrics_enabled:
-                if intent_id:
-                    self._current_intent_id = intent_id
-                else:
-                    self._current_intent_id = self.metrics_store.begin_intent()
-                
-                # Extract emotion from metadata if available for tracking
-                user_emotion = None
-                if metadata and "emotion" in metadata:
-                    user_emotion = metadata["emotion"]
-                elif metadata and "emotions" in metadata:
-                    # Handle case where emotions is a list/dict with scores
-                    if isinstance(metadata["emotions"], dict) and metadata["emotions"]:
-                        # Find emotion with highest score
-                        user_emotion = max(metadata["emotions"].items(), key=lambda x: x[1])[0] if metadata["emotions"] else None
-                    elif isinstance(metadata["emotions"], list) and metadata["emotions"]:
-                        user_emotion = metadata["emotions"][0]
-                
-            logger.info(f"Processing new input: {content[:50]}...")
+            # 1. Setup Intent & Metadata
+            intent_id, user_emotion = self._setup_intent_and_metadata(intent_id, metadata)
+            logger.info(f"Processing input: {content[:50]}... (Intent: {intent_id})")
 
-            # Step 1: Store memory in Memory Core
-            mem_core_resp = await self._make_request(
-                self.memory_core_url,
-                "/process_memory",  
-                method="POST",
-                payload={
-                    "content": content,
-                    "embedding": embedding,  
-                    "metadata": metadata or {}
-                }
-            )
-            memory_id = mem_core_resp.get("memory_id")
-            actual_embedding = mem_core_resp.get("embedding")  
-            quickrecal_initial = mem_core_resp.get("quickrecal_score")
-
-            response = {
-                "memory_id": memory_id,
-                "status": "processed" if memory_id and actual_embedding else "error_mem_core",
-                "quickrecal_initial": quickrecal_initial,
-                "timestamp": datetime.utcnow().isoformat(),
-                "intent_id": self._current_intent_id,
-                "variant_output": {
-                    "variant_type": self.active_variant_type.value if hasattr(self, "active_variant_type") else "NONE"
-                }
+            # Initialize context dict for this step
+            step_context = {
+                "content": content,
+                "input_embedding": embedding,
+                "metadata": metadata,
+                "user_emotion": user_emotion,
+                "memory_id": None,
+                "x_t": None, # Raw embedding from MemCore
+                "k_t": None, # Projections
+                "v_t": None,
+                "q_t": None,
+                "v_prime_t": None, # Potentially modified by MAL
+                "external_gates": None, # Calculated by MAG
+                "loss": None,
+                "grad_norm": None,
+                "y_t_raw": None, # Raw output from NM retrieve
+                "y_t_final": None, # Final output after MAC
+                "variant_metrics": {}
             }
 
-            if not actual_embedding or not memory_id:
-                logger.error("Failed to store or get valid embedding from Memory Core.", extra={"mem_core_resp": mem_core_resp})
-                response["error"] = mem_core_resp.get("error", "Failed in Memory Core processing")
-                
-                # Finalize intent with error if metrics enabled
-                if self.metrics_enabled:
-                    error_message = mem_core_resp.get("error", "Failed in Memory Core processing")
-                    self.metrics_store.finalize_intent(
-                        self._current_intent_id,
-                        response_text=f"Error: {error_message}",
-                        confidence=0.0
-                    )
-                return response
-            
-            # Step 2: Get projections from Neural Memory before updating
-            # This is needed for all Titans variants
-            key_projection = None
-            value_projection = None
-            query_projection = None
-            original_value_projection = None  # Store the original value for later context management
-            
-            projections_resp = await self._make_request(
-                self.neural_memory_url,
-                "/get_projections",
-                method="POST",
-                payload={"input_embedding": actual_embedding}
-            )
-            
-            # The response should contain direct projection fields, not nested under 'status'
-            if "error" not in projections_resp and "key_projection" in projections_resp and "value_projection" in projections_resp and "query_projection" in projections_resp:
-                key_projection = projections_resp.get("key_projection")
-                value_projection = projections_resp.get("value_projection")
-                original_value_projection = value_projection.copy() if isinstance(value_projection, list) else value_projection  # Store original for context
-                query_projection = projections_resp.get("query_projection")
-                logger.info(f"Got projections from Neural Memory: K:{len(key_projection) if key_projection else None}, "
-                            f"V:{len(value_projection) if value_projection else None}, "
-                            f"Q:{len(query_projection) if query_projection else None}")
-                
-                # Log dimensions for debugging
-                logger.debug(f"Projection dimensions: key_dim={len(key_projection) if key_projection else 'Unknown'}, "
-                            f"value_dim={len(value_projection) if value_projection else 'Unknown'}, "
-                            f"query_dim={len(query_projection) if query_projection else 'Unknown'}")
+            # 2. Store Memory
+            store_resp = await self._store_memory(content, embedding, metadata)
+            if not store_resp.get("success"):
+                return self._finalize_error("Memory storage failed", store_resp, intent_id)
+            step_context["memory_id"] = store_resp["memory_id"]
+            step_context["x_t"] = store_resp["embedding"] # Store the validated embedding
+            quickrecal_initial = store_resp.get("quickrecal_score")
+
+            # 3. Get Projections
+            proj_resp = await self._get_projections_from_nm(step_context["x_t"])
+            if not proj_resp.get("success"):
+                # Log warning but proceed, NM update/retrieve might handle it
+                logger.warning(f"Failed to get explicit projections: {proj_resp.get('error')}")
             else:
-                error_msg = projections_resp.get("error", "Unknown error")
-                logger.warning(f"Failed to get projections from Neural Memory: {error_msg}")
-                if "warning" in projections_resp:
-                    logger.warning(f"Additional warnings: {projections_resp['warning']}")
-            
-            # Initialize variant-specific parameters
-            external_gates = None
-            modified_value_projection = None
-            
-            # Prepare context data if we have the projections
-            x_t = None
-            k_t = None
-            v_t = None
-            q_t = None
-            y_t = None
-            context_valid = False
-            
-            if actual_embedding and key_projection and value_projection and query_projection:
-                try:
-                    # Convert all projections to numpy arrays if they're not already
-                    x_t = np.array(actual_embedding, dtype=np.float32)
-                    k_t = np.array(key_projection, dtype=np.float32)
-                    v_t = np.array(value_projection, dtype=np.float32)
-                    q_t = np.array(query_projection, dtype=np.float32)
-                    
-                    # Validate all embeddings to ensure they don't contain NaN/Inf values
-                    valid_embeddings = True
-                    for embedding_name, embedding in [("x_t", x_t), ("k_t", k_t), ("v_t", v_t), ("q_t", q_t)]:
-                        if not self._validate_embedding(embedding):
-                            logger.warning(f"Invalid values detected in {embedding_name} projection. Skipping context processing.")
-                            valid_embeddings = False
-                            break
-                    
-                    if valid_embeddings:
-                        context_valid = True
-                        logger.debug("Projections validated for context processing")
-                except Exception as e:
-                    logger.error(f"Error preparing projections for context: {e}")
-            
-            # Step 3: Apply Titans variant logic BEFORE Neural Memory update if context is valid
-            # This allows MAG and MAL variants to influence the update process
-            if context_valid and self.variant_processor and self.active_variant_type != TitansVariantType.NONE:
-                try:
-                    logger.info(f"Applying {self.active_variant_type.value} variant logic before update...")
-                    
-                    # Process input with the variant processor
-                    variant_results = self.variant_processor.process_input(
-                        memory_id=memory_id,
-                        x_t=x_t,
-                        k_t=k_t,
-                        v_t=v_t,
-                        q_t=q_t,
-                        y_t=None  # Will be populated after retrieval
-                    )
-                    
-                    response["variant_output"] = {
-                        "variant_type": self.active_variant_type.value,
-                        "applied_before_update": True
-                    }
-                    
-                    # For MAG variant: Get calculated gates to influence Neural Memory update
-                    if self.active_variant_type == TitansVariantType.MAG and "alpha" in variant_results:
-                        external_gates = {
-                            "alpha": float(variant_results.get("alpha")),
-                            "theta": float(variant_results.get("theta")),
-                            "eta": float(variant_results.get("eta"))
-                        }
-                        response["variant_output"].update(external_gates)
-                        logger.info(f"MAG variant calculated gates: alpha={external_gates['alpha']}, "
-                                  f"theta={external_gates['theta']}, eta={external_gates['eta']}")
-                    
-                    # For MAL variant: Get modified value projection
-                    elif self.active_variant_type == TitansVariantType.MAL and "v_prime" in variant_results:
-                        modified_value_projection = variant_results.get("v_prime")
-                        if isinstance(modified_value_projection, np.ndarray):
-                            modified_value_projection = modified_value_projection.tolist()
-                        response["variant_output"]["v_prime_applied"] = True
-                        logger.info("MAL variant calculated augmented value projection.")
-                    
-                    logger.info(f"{self.active_variant_type.value} variant pre-processing applied successfully.")
-                    
-                except Exception as e:
-                    logger.error(f"Error applying {self.active_variant_type.value} variant before update: {e}")
-                    response["variant_output"]["pre_processing_error"] = str(e)
-            
-            # Step 4: Send embedding to Neural Memory for learning with MAG/MAL modifications if applicable
-            update_payload = {"input_embedding": actual_embedding}
-            
-            # Add MAG external gates if available - properly format for the API endpoint
-            if external_gates and self.active_variant_type == TitansVariantType.MAG:
-                if "alpha" in external_gates and external_gates["alpha"] is not None:
-                    update_payload["external_alpha_gate"] = external_gates["alpha"]
-                if "theta" in external_gates and external_gates["theta"] is not None:
-                    update_payload["external_theta_gate"] = external_gates["theta"]
-                if "eta" in external_gates and external_gates["eta"] is not None:
-                    update_payload["external_eta_gate"] = external_gates["eta"]
-                
-                logger.info(f"MAG: Sending external gates to /update_memory: alpha={update_payload.get('external_alpha_gate')}, "
-                           f"theta={update_payload.get('external_theta_gate')}, eta={update_payload.get('external_eta_gate')}")
-            
-            # Add MAL modified value projection if available
-            if modified_value_projection is not None and self.active_variant_type == TitansVariantType.MAL:
-                update_payload["key_projection"] = key_projection
-                update_payload["value_projection"] = modified_value_projection
-                # Store the modified value projection for proper context recording
-                v_t = np.array(modified_value_projection, dtype=np.float32)
-            
-            # If we have projections but no MAL-specific modifications, we can still use them
-            elif key_projection is not None and value_projection is not None:
-                update_payload["key_projection"] = key_projection
-                update_payload["value_projection"] = value_projection
-            
-            update_resp = await self._make_request(
-                self.neural_memory_url,
-                "/update_memory",
-                method="POST",
-                payload=update_payload
-            )
-            
-            loss = update_resp.get("loss")
-            grad_norm = update_resp.get("grad_norm")
-            response["neural_memory_update"] = update_resp  
-            
-            # Log memory update metrics if enabled
-            if self.metrics_enabled and loss is not None:
-                # Ensure embedding is in an expected format using safe copy
-                safe_embedding = np.array(actual_embedding, dtype=np.float32).tolist() 
-                # Handle potential NaN or Inf values in the embedding
-                safe_embedding = [0.0 if not np.isfinite(x) else x for x in safe_embedding]
-                
-                self.metrics_store.log_memory_update(
-                    input_embedding=safe_embedding,
-                    loss=loss,
-                    grad_norm=grad_norm or 0.0,
-                    emotion=user_emotion,
-                    intent_id=self._current_intent_id,
-                    metadata={
-                        "memory_id": memory_id,
-                        "content_preview": content[:50] if content else "",
-                        "quickrecal_initial": quickrecal_initial,
-                        "variant_type": self.active_variant_type.value if hasattr(self, "active_variant_type") else "NONE"
-                    }
-                )
+                step_context["k_t"] = np.array(proj_resp["key_projection"], dtype=np.float32)
+                step_context["v_t"] = np.array(proj_resp["value_projection"], dtype=np.float32)
+                step_context["q_t"] = np.array(proj_resp["query_projection"], dtype=np.float32)
 
-            # Step 5: Calculate QuickRecal boost based on surprise metrics
-            quickrecal_boost = 0.0
-            if update_resp.get("status") == "success" or "error" not in update_resp:
-                 surprise_metric = grad_norm if grad_norm is not None else (loss if loss is not None else 0.0)
-                 quickrecal_boost = self._calculate_quickrecal_boost(surprise_metric)
-
-                 # Apply boost if significant
-                 if quickrecal_boost > 1e-4:  
-                     loss_str = f"{loss:.4f}" if isinstance(loss, (int, float)) else 'N/A'
-                     grad_norm_str = f"{grad_norm:.4f}" if isinstance(grad_norm, (int, float)) else 'N/A'
-                     feedback_resp = await self._make_request(
-                         self.memory_core_url,
-                         "/api/memories/update_quickrecal_score",  
-                         method="POST",
-                         payload={
-                             "memory_id": memory_id,
-                             "delta": quickrecal_boost,
-                             "reason": f"NM Surprise (Loss:{loss_str}, GradNorm:{grad_norm_str})"
-                         }
-                     )
-                     response["quickrecal_feedback"] = feedback_resp
-                     
-                     # Log QuickRecal boost metrics if enabled
-                     if self.metrics_enabled:
-                         self.metrics_store.log_quickrecal_boost(
-                             memory_id=memory_id,
-                             base_score=quickrecal_initial or 0.0,
-                             boost_amount=quickrecal_boost,
-                             emotion=user_emotion,
-                             surprise_source="neural_memory",
-                             intent_id=self._current_intent_id,
-                             metadata={
-                                 "loss": loss,
-                                 "grad_norm": grad_norm,
-                                 "reason": f"NM Surprise"
-                             }
-                         )
+            # 4. Variant Pre-Update Logic (MAG/MAL)
+            if self.variant_processor and self.active_variant_type in [TitansVariantType.MAG, TitansVariantType.MAL]:
+                 if step_context["k_t"] is not None and step_context["v_t"] is not None and step_context["q_t"] is not None:
+                     variant_pre_result = await self._apply_variant_pre_update(step_context)
+                     step_context["external_gates"] = variant_pre_result.get("gates") # For MAG
+                     step_context["v_prime_t"] = variant_pre_result.get("v_prime_t") # For MAL
+                     step_context["variant_metrics"].update(variant_pre_result.get("metrics", {}))
                  else:
-                     response["quickrecal_feedback"] = {"status": "skipped", "reason": "Boost too small"}
+                     logger.warning(f"Skipping {self.active_variant_type.value} pre-update: Missing projections.")
+
+            # 5. Update Neural Memory
+            update_resp = await self._update_neural_memory(step_context)
+            if not update_resp.get("success"):
+                 # Log error but proceed if possible (e.g., maybe retrieval still works)
+                 logger.error(f"Neural Memory update failed: {update_resp.get('error')}")
+                 # Store error in main response but don't necessarily exit yet
+                 response = {"error": update_resp.get("error"), **response}
             else:
-                 response["quickrecal_feedback"] = {"status": "skipped", "reason": "Neural Memory update failed"}
+                 step_context["loss"] = update_resp.get("loss")
+                 step_context["grad_norm"] = update_resp.get("grad_norm")
+                 # Update projections if returned (they should match if not MAL)
+                 if update_resp.get("key_projection"): step_context["k_t"] = np.array(update_resp["key_projection"], dtype=np.float32)
+                 if update_resp.get("value_projection"): step_context["v_t"] = np.array(update_resp["value_projection"], dtype=np.float32)
 
-            response["surprise_metrics"] = {"loss": loss, "grad_norm": grad_norm, "boost_calculated": quickrecal_boost}
+            # 6. Apply QuickRecal Boost (If update succeeded)
+            feedback_resp = None
+            if step_context["loss"] is not None or step_context["grad_norm"] is not None:
+                feedback_resp = await self._apply_quickrecal_boost(step_context, quickrecal_initial)
 
-            # Step 6: Generate query and retrieve associated embedding from Neural Memory
-            # Ensure we're sending the correctly formatted request with debug logging
-            retrieve_payload = {"input_embedding": actual_embedding}  # API expects raw input, handles projection internally
-            
-            # Add debug logging for MAG variant
-            if self.active_variant_type and self.active_variant_type.value == "MAG":
-                logger.info(f"MAG variant: Using input_embedding for /retrieve payload, dim={len(actual_embedding) if actual_embedding else 'None'}")
-                logger.debug(f"MAG variant input details: input_dim={len(actual_embedding) if actual_embedding else 'Unknown'}, "
-                            f"query_dim={len(q_t) if isinstance(q_t, np.ndarray) else 'Unknown'}")
-            
-            retrieve_resp = await self._make_request(
-                self.neural_memory_url,
-                "/retrieve",
-                method="POST",
-                payload=retrieve_payload
-            )
-            
-            retrieved_embedding = retrieve_resp.get("retrieved_embedding")
-            query_projection_from_retrieve = retrieve_resp.get("query_projection")  # May override earlier q_t
-            
-            # Enhanced logging for the retrieve response
-            if retrieved_embedding:
-                logger.info(f"Successfully retrieved embedding from Neural Memory, dim={len(retrieved_embedding)}")
-                if query_projection_from_retrieve and query_projection_from_retrieve != query_projection:
-                    # Update our q_t if the retrieve endpoint returned a different projection
-                    logger.info(f"Using query projection from /retrieve endpoint. Dim={len(query_projection_from_retrieve)}")
-                    query_projection = query_projection_from_retrieve
-                    if context_valid:
-                        q_t = np.array(query_projection, dtype=np.float32)
+            # 7. Retrieve from Neural Memory
+            retrieve_resp = await self._retrieve_from_neural_memory(step_context["x_t"])
+            if not retrieve_resp.get("success"):
+                # This is more critical than update failure for some use cases
+                 logger.error(f"Neural Memory retrieval failed: {retrieve_resp.get('error')}")
+                 # Update response with error and potentially finalize
+                 response = {"error": retrieve_resp.get("error"), **response}
+                 # Don't finalize yet, try to add context first
             else:
-                logger.warning(f"Failed to retrieve embedding from Neural Memory: {retrieve_resp.get('error', 'Unknown error')}")
-                
-            response["neural_memory_retrieval"] = retrieve_resp  
-            
-            # Step 7: Process MAC variant or finalize context
-            if context_valid and retrieved_embedding:
-                try:
-                    # Convert retrieved embedding to numpy
-                    y_t_raw = np.array(retrieved_embedding, dtype=np.float32)
-                    
-                    # For MAC variant: Apply post-retrieval attention processing
-                    if self.variant_processor and self.active_variant_type == TitansVariantType.MAC:
-                        try:
-                            # Process with MAC variant to get attended output
-                            variant_results = self.variant_processor.process_input(
-                                memory_id=memory_id,
-                                x_t=x_t,
-                                k_t=k_t,
-                                v_t=v_t,
-                                q_t=q_t,
-                                y_t=y_t_raw
-                            )
-                            
-                            response["variant_output"] = {
-                                "variant_type": self.active_variant_type.value,
-                                "applied_after_retrieval": True
-                            }
-                            
-                            # Update the retrieved embedding with the attended output
-                            if "attended_output" in variant_results:
-                                y_t = variant_results["attended_output"]
-                                if isinstance(y_t, np.ndarray):
-                                    retrieved_embedding = y_t.tolist()
-                                else:
-                                    retrieved_embedding = y_t
-                                    y_t = np.array(y_t, dtype=np.float32)
-                                    
-                                # Update the response with the attended output
-                                response["neural_memory_retrieval"]["retrieved_embedding"] = retrieved_embedding
-                                response["variant_output"]["attended_output"] = "applied"
-                                logger.info("MAC variant updated retrieved_embedding with attended output.")
-                            else:
-                                # If no attended output, use the raw retrieved embedding
-                                y_t = y_t_raw
-                        except Exception as e:
-                            logger.error(f"Error applying MAC variant after retrieval: {e}")
-                            response["variant_output"]["post_processing_error"] = str(e)
-                            y_t = y_t_raw  # Fall back to raw retrieved embedding
-                    else:
-                        # For other variants, use the raw retrieved embedding
-                        y_t = y_t_raw
-                    
-                    # Now add the full context with all components to the sequence context manager
-                    # Use a SINGLE add with the properly prepared v_t (which might be modified by MAL)
-                    if self._validate_embedding(y_t):
-                        # Record the final projections (including any MAL modifications to v_t)
-                        self.sequence_context_manager.add_context(
-                            memory_id=memory_id,
-                            x_t=x_t,
-                            k_t=k_t,
-                            v_t=v_t,  # This is the v_t actually used in the update (possibly modified by MAL)
-                            q_t=q_t,
-                            y_t=y_t   # This is the final y_t (possibly modified by MAC)
-                        )
-                        logger.debug(f"Added complete context to SequenceContextManager. Current length: {len(self.sequence_context_manager)}")
-                        
-                        # Also store the original value projection for reference if it differs from what was used
-                        if original_value_projection is not None and self.active_variant_type == TitansVariantType.MAL:
-                            response["variant_output"]["original_v_preserved"] = True
-                except Exception as e:
-                    logger.error(f"Error finalizing context: {e}")
-            
-            # Log retrieval metrics if enabled
-            if self.metrics_enabled and retrieved_embedding:
-                # Create synthetic memory object since we don't have full metadata
-                retrieved_memory = {
-                    "memory_id": f"synthetic_{memory_id}_associated",
-                    "embedding": retrieved_embedding,
-                    "dominant_emotion": None  # We don't have this information yet
-                }
-                
-                safe_query = np.array(actual_embedding, dtype=np.float32).tolist()
-                safe_query = [0.0 if not np.isfinite(x) else x for x in safe_query]
-                
-                self.metrics_store.log_retrieval(
-                    query_embedding=safe_query,
-                    retrieved_memories=[retrieved_memory],
-                    user_emotion=user_emotion,
-                    intent_id=self._current_intent_id,
-                    metadata={
-                        "original_memory_id": memory_id,
-                        "embedding_dim": len(retrieved_embedding),
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "variant_type": self.active_variant_type.value if hasattr(self, "active_variant_type") else "NONE"
-                    }
-                )
+                 step_context["y_t_raw"] = np.array(retrieve_resp["retrieved_embedding"], dtype=np.float32)
+                 step_context["y_t_final"] = step_context["y_t_raw"] # Default final to raw
+                 # Use query projection returned by /retrieve for consistency
+                 if retrieve_resp.get("query_projection"):
+                      step_context["q_t"] = np.array(retrieve_resp["query_projection"], dtype=np.float32)
 
-            # Update sequence context for legacy compatibility
-            self.last_retrieved_embedding = retrieved_embedding
-            self.sequence_context.append({
-                "memory_id": memory_id,
-                "actual_embedding": actual_embedding,
-                "retrieved_embedding": retrieved_embedding,
-                "surprise_metrics": response.get("surprise_metrics"),
-                "timestamp": response["timestamp"],
-                "intent_id": self._current_intent_id
-            })
-            if len(self.sequence_context) > 20: self.sequence_context.pop(0)
 
-            # Finalize intent graph if enabled
-            if self.metrics_enabled:
-                intent_graph = self.metrics_store.finalize_intent(
-                    intent_id=self._current_intent_id,
-                    response_text=f"Retrieved associated embedding for memory {memory_id}",
-                    confidence=1.0 if retrieved_embedding else 0.5
-                )
-                # Store intent graph reference in response
-                if intent_graph:
-                    response["intent_graph"] = {
-                        "trace_id": intent_graph.get("trace_id"),
-                        "reasoning_steps": len(intent_graph.get("reasoning_steps", []))
-                    }
+            # 8. Variant Post-Retrieval Logic (MAC)
+            if self.variant_processor and self.active_variant_type == TitansVariantType.MAC:
+                 if step_context["y_t_raw"] is not None and step_context["q_t"] is not None:
+                     variant_post_result = await self._apply_variant_post_retrieval(step_context)
+                     if variant_post_result.get("success"):
+                         step_context["y_t_final"] = variant_post_result["attended_output"]
+                         step_context["variant_metrics"].update(variant_post_result.get("metrics", {}))
+                     else:
+                         logger.warning(f"MAC post-retrieval processing failed: {variant_post_result.get('error')}")
+                 else:
+                     logger.warning("Skipping MAC post-retrieval: Missing raw retrieval or query projection.")
 
-            response["status"] = "completed"  
+            # 9. Update History
+            # Use v_t (potentially modified by MAL), raw y_t (before MAC), and final y_t
+            await self._update_history(step_context)
+
+            # 10. Finalize Response
+            response = self._finalize_response(response, step_context, update_resp, retrieve_resp, feedback_resp)
+
             processing_time = (time.time() - start_time) * 1000
-            logger.info(f"Finished processing input for memory {memory_id} in {processing_time:.2f} ms")
+            logger.info(f"Finished processing input for memory {step_context['memory_id']} in {processing_time:.2f} ms (Variant: {self.active_variant_type.value})")
+
+            # Finalize intent graph
+            if self.metrics_enabled:
+                 final_text = f"Retrieved: {len(response.get('neural_memory_retrieval',{}).get('retrieved_embedding',[]))} dims" if response.get('status') == 'completed' else f"Error: {response.get('error','Unknown')}"
+                 self.metrics_store.finalize_intent(
+                     intent_id=intent_id,
+                     response_text=final_text,
+                     confidence=1.0 if response.get('status') == 'completed' else 0.0
+                 )
+
             return response
+
+    # --- Private Helper Methods for Refactored Flow ---
+
+    def _setup_intent_and_metadata(self, intent_id: Optional[str], metadata: Optional[Dict]) -> Tuple[str, Optional[str]]:
+        """Handles intent ID generation and extracts user emotion."""
+        metadata = metadata or {}
+        user_emotion = None
+        if self.metrics_enabled:
+            intent_id = intent_id or self.metrics_store.begin_intent()
+            self._current_intent_id = intent_id # Store current intent
+            if "emotion" in metadata: user_emotion = metadata["emotion"]
+            elif "emotions" in metadata:
+                # Simplified extraction
+                emo_data = metadata["emotions"]
+                if isinstance(emo_data, dict) and emo_data: user_emotion = max(emo_data.items(), key=lambda x: x[1])[0]
+                elif isinstance(emo_data, list) and emo_data: user_emotion = emo_data[0]
+        else:
+            intent_id = intent_id or f"intent_{int(time.time())}" # Simple ID if metrics off
+        return intent_id, user_emotion
+
+    async def _store_memory(self, content: str, embedding: Optional[List], metadata: Optional[Dict]) -> Dict:
+        """Stores input in MemoryCore, returns success status, ID, and validated embedding."""
+        logger.debug("Step 1: Storing memory in Memory Core...")
+        mem_core_resp = await self._make_request(
+            self.memory_core_url, "/process_memory", method="POST",
+            payload={"content": content, "embedding": embedding, "metadata": metadata or {}}
+        )
+        if "error" in mem_core_resp or not mem_core_resp.get("memory_id") or not mem_core_resp.get("embedding"):
+            logger.error(f"Memory Core storage failed: {mem_core_resp.get('error', 'Missing ID or embedding')}")
+            return {"success": False, "error": mem_core_resp.get('error', 'Store failed'), **mem_core_resp}
+        else:
+             # Validate embedding received from Memory Core
+             is_valid = self._validate_embedding(mem_core_resp["embedding"])
+             if not is_valid:
+                  logger.error("Memory Core returned an invalid embedding.")
+                  return {"success": False, "error": "Invalid embedding from Memory Core", **mem_core_resp}
+             logger.info(f"Memory stored successfully: ID {mem_core_resp['memory_id']}")
+             return {"success": True, **mem_core_resp}
+
+    async def _get_projections_from_nm(self, actual_embedding: List[float]) -> Dict:
+        """Fetches K/V/Q projections from Neural Memory."""
+        logger.debug("Step 2: Fetching projections from Neural Memory...")
+        if not self._validate_embedding(actual_embedding):
+            return {"success": False, "error": "Invalid embedding provided to get_projections"}
+
+        proj_resp = await self._make_request(
+            self.neural_memory_url, "/get_projections", method="POST",
+            payload={"input_embedding": actual_embedding}
+        )
+        if "error" in proj_resp or not all(k in proj_resp for k in ["key_projection", "value_projection", "query_projection"]):
+             logger.warning(f"Failed to get projections: {proj_resp.get('error', 'Missing projection keys')}")
+             return {"success": False, **proj_resp}
+        else:
+            # Validate received projections
+            valid = all(self._validate_embedding(proj_resp[k]) for k in ["key_projection", "value_projection", "query_projection"])
+            if not valid:
+                 logger.error("Neural Memory returned invalid projections.")
+                 return {"success": False, "error": "Invalid projections from Neural Memory", **proj_resp}
+            logger.info("Projections fetched successfully.")
+            return {"success": True, **proj_resp}
 
     async def _make_request(self, base_url: str, endpoint: str, method: str = "POST", payload: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict[str, Any]:
         """Shared function to make HTTP requests and handle common errors.
@@ -760,21 +484,389 @@ class ContextCascadeEngine:
             logger.error(f"Error validating embedding: {str(e)}")
             return False
 
-    def _calculate_quickrecal_boost(self, surprise_value: float) -> float:
-        """Calculate quickrecal boost based on surprise value (loss or grad_norm).
-        
-        Args:
-            surprise_value: Surprise metric (loss or grad_norm)
-            
-        Returns:
-            QuickRecal score boost amount
-        """
-        if surprise_value <= 0.0: return 0.0
-        max_expected_surprise = 2.0  
-        max_boost = 0.2             
+    async def _retrieve_from_neural_memory(self, actual_embedding: np.ndarray) -> Dict:
+        """Retrieves associated embedding from Neural Memory."""
+        logger.debug("Step 6: Retrieving from Neural Memory...")
+        if not self._validate_embedding(actual_embedding):
+             return {"success": False, "error": "Invalid embedding for retrieval"}
+
+        retrieve_payload = {"input_embedding": actual_embedding.tolist()}
+        retrieve_resp = await self._make_request(
+            self.neural_memory_url, "/retrieve", method="POST", payload=retrieve_payload
+        )
+
+        if "error" in retrieve_resp or not retrieve_resp.get("retrieved_embedding"):
+             logger.error(f"Neural Memory retrieval failed: {retrieve_resp.get('error', 'Missing retrieved_embedding')}")
+             return {"success": False, **retrieve_resp}
+        else:
+             # Validate retrieved embedding
+             if not self._validate_embedding(retrieve_resp["retrieved_embedding"]):
+                   logger.error("Neural Memory returned invalid retrieved_embedding.")
+                   return {"success": False, "error": "Invalid retrieved_embedding", **retrieve_resp}
+             # Validate query projection if returned
+             if "query_projection" in retrieve_resp and not self._validate_embedding(retrieve_resp["query_projection"]):
+                  logger.warning("Neural Memory returned invalid query_projection.")
+                  # Don't fail the whole step, but nullify it
+                  retrieve_resp["query_projection"] = None
+
+             # Log retrieval metrics if enabled
+             if self.metrics_enabled:
+                 # Create synthetic memory object since we don't have full metadata
+                 retrieved_memory = {
+                     "memory_id": f"synthetic_associated",
+                     "embedding": retrieve_resp["retrieved_embedding"],
+                     "dominant_emotion": None  # We don't have this information
+                 }
+                 
+                 self.metrics_store.log_retrieval(
+                     query_embedding=actual_embedding.tolist(),
+                     retrieved_memories=[retrieved_memory],
+                     user_emotion=None,
+                     intent_id=self._current_intent_id,
+                     metadata={
+                         "embedding_dim": len(retrieve_resp["retrieved_embedding"]),
+                         "timestamp": datetime.utcnow().isoformat(),
+                         "variant_type": self.active_variant_type.value
+                     }
+                 )
+
+             logger.info("Neural Memory retrieval successful.")
+             return {"success": True, **retrieve_resp}
+
+    async def _apply_variant_post_retrieval(self, step_context: Dict) -> Dict:
+        """Applies MAC logic after retrieval."""
+        if not self.variant_processor or self.active_variant_type != TitansVariantType.MAC:
+            return {"success": True, "attended_output": step_context.get("y_t_raw")} # Return raw if not MAC
+
+        logger.debug("Step 7: Applying MAC post-retrieval logic...")
+        y_t_raw = step_context.get("y_t_raw")
+        q_t = step_context.get("q_t")
+
+        if y_t_raw is None or q_t is None:
+             logger.warning("Skipping MAC: Missing raw retrieval or query projection.")
+             return {"success": False, "error": "Missing y_t_raw or q_t for MAC"}
+
+        try:
+            # Call variant processor - assumes process_input can handle None for some args if needed
+            variant_results = await self.variant_processor.process_input(
+                memory_id=step_context["memory_id"],
+                x_t=step_context["x_t"], k_t=step_context["k_t"],
+                v_t=step_context["v_t"], q_t=q_t, y_t=y_t_raw # Provide raw y_t
+            )
+            if variant_results and "attended_output" in variant_results:
+                 attended_y_t = variant_results["attended_output"]
+                 if self._validate_embedding(attended_y_t):
+                     logger.info("MAC variant successfully applied attention.")
+                     return {"success": True, "attended_output": attended_y_t, "metrics": variant_results.get("metrics", {})}
+                 else:
+                      logger.error("MAC variant returned invalid attended_output.")
+                      return {"success": False, "error": "Invalid attended_output from MAC", "attended_output": y_t_raw}
+            else:
+                 logger.warning("MAC variant did not return 'attended_output'.")
+                 return {"success": False, "error": "MAC variant failed", "attended_output": y_t_raw}
+
+        except Exception as e:
+            logger.error(f"Error applying MAC variant: {e}", exc_info=True)
+            return {"success": False, "error": str(e), "attended_output": y_t_raw}
+
+    async def _update_history(self, step_context: Dict):
+        """Adds the completed step context to the history manager."""
+        logger.debug("Step 8: Updating sequence history...")
+        # Ensure all components are valid numpy arrays before adding
+        required_keys = ["x_t", "k_t", "v_t", "q_t", "y_t_final"]
+        valid_context = True
+        context_tuple_args = {}
+
+        # Extract and validate required components
+        for key in required_keys:
+            value = step_context.get(key)
+            if value is None or not isinstance(value, np.ndarray):
+                 logger.warning(f"History update skipped: Missing or invalid '{key}'.")
+                 valid_context = False
+                 break
+            # Further validation (NaN/Inf) - _validate_embedding does this
+            if not self._validate_embedding(value):
+                 logger.warning(f"History update skipped: Invalid data in '{key}'.")
+                 valid_context = False
+                 break
+            context_tuple_args[key] = value
+
+        if valid_context:
+            try:
+                self.sequence_context_manager.add_context(
+                    timestamp=time.time(), # Use current time for history entry
+                    memory_id=step_context["memory_id"],
+                    x_t=context_tuple_args["x_t"],
+                    k_t=context_tuple_args["k_t"],
+                    v_t=context_tuple_args["v_t"], # Use the v_t that was ACTUALLY used in update
+                    q_t=context_tuple_args["q_t"],
+                    y_t=context_tuple_args["y_t_final"] # Use the final output y_t
+                )
+                logger.debug(f"Added context to SequenceContextManager. Length: {len(self.sequence_context_manager)}")
+            except Exception as e:
+                logger.error(f"Failed to add context to history manager: {e}", exc_info=True)
+        else:
+            logger.error("Failed to update history due to invalid/missing context components.")
+
+    def _finalize_response(self, base_response: Dict, step_context: Dict,
+                           update_resp: Dict, retrieve_resp: Dict, feedback_resp: Optional[Dict]) -> Dict:
+        """Constructs the final response dictionary."""
+        logger.debug("Step 9: Finalizing response.")
+        final_response = {
+            "memory_id": step_context["memory_id"],
+            "intent_id": self._current_intent_id,
+            "status": "completed", # Assume completion if we got this far
+            "timestamp": datetime.utcnow().isoformat(),
+            "neural_memory_update": update_resp,
+            "neural_memory_retrieval": { # Structure this more cleanly
+                 "success": retrieve_resp.get("success", False),
+                 "retrieved_embedding": step_context.get("y_t_final").tolist() if step_context.get("y_t_final") is not None else None,
+                 "query_projection": step_context.get("q_t").tolist() if step_context.get("q_t") is not None else None,
+                 "error": retrieve_resp.get("error")
+            },
+            "surprise_metrics": {
+                "loss": step_context.get("loss"),
+                "grad_norm": step_context.get("grad_norm"),
+                "boost_calculated": step_context.get("quickrecal_boost")
+            },
+            "quickrecal_feedback": feedback_resp or {"status": "N/A"},
+            "variant_output": step_context.get("variant_metrics", {}) # Include variant metrics if any
+        }
+         # Add variant type to variant_output
+        final_response["variant_output"]["variant_type"] = self.active_variant_type.value
+
+        # Merge any errors captured earlier
+        if "error" in base_response: final_response["error"] = base_response["error"]
+        if not update_resp.get("success"): final_response["update_error"] = update_resp.get("error")
+        if not retrieve_resp.get("success"): final_response["retrieval_error"] = retrieve_resp.get("error")
+
+        # Update overall status if errors occurred
+        if "error" in final_response or "update_error" in final_response or "retrieval_error" in final_response:
+             final_response["status"] = "error_partial" if step_context["memory_id"] else "error_total"
+
+
+        # Update CCE state
+        if step_context.get("y_t_final") is not None:
+             self.last_retrieved_embedding = step_context["y_t_final"].tolist()
+        # Add to legacy sequence context (maybe remove later)
+        self.sequence_context.append({
+             "memory_id": step_context["memory_id"],
+             "actual_embedding": step_context["x_t"].tolist() if step_context["x_t"] is not None else None,
+             "retrieved_embedding": self.last_retrieved_embedding,
+             "surprise_metrics": final_response["surprise_metrics"],
+             "timestamp": final_response["timestamp"],
+             "intent_id": self._current_intent_id
+         })
+        if len(self.sequence_context) > 20: self.sequence_context.pop(0)
+
+
+        return final_response
+
+    def _finalize_error(self, message: str, context: dict, intent_id: Optional[str] = None) -> dict:
+        """Constructs a standardized error response and finalizes intent."""
+        intent_id = intent_id or self._current_intent_id
+        logger.error(f"Finalizing with error: {message}", extra=context)
+        response = {
+            "status": "error",
+            "error": message,
+            "details": context.get("error", context.get("details", "No details")),
+            "timestamp": datetime.utcnow().isoformat(),
+            "intent_id": intent_id
+        }
+        if self.metrics_enabled:
+            self.metrics_store.finalize_intent(
+                intent_id=intent_id,
+                response_text=f"Error: {message}",
+                confidence=0.0
+            )
+        return response
+
+    def _calculate_quickrecal_boost(self, surprise_value: Optional[float]) -> float:
+        """Calculate quickrecal boost based on surprise value (loss or grad_norm)."""
+        if surprise_value is None or surprise_value <= 0.0: return 0.0
+        # Simple linear scaling for now, capped at 0.2
+        # Example: loss/grad_norm of 1.0 gives 0.1 boost, 2.0 gives 0.2 boost
+        max_expected_surprise = 2.0
+        max_boost = 0.2
         boost = min(surprise_value / max_expected_surprise, 1.0) * max_boost
-        logger.debug(f"Calculated quickrecal boost: {boost:.4f} from surprise value: {surprise_value:.4f}")
+        logger.debug(f"Calculated quickrecal boost: {boost:.6f} from surprise value: {surprise_value:.6f}")
         return boost
+
+    async def _apply_variant_pre_update(self, step_context: Dict) -> Dict:
+        """Applies MAG/MAL logic before the update step."""
+        if not self.variant_processor or self.active_variant_type not in [TitansVariantType.MAG, TitansVariantType.MAL]:
+            return {"success": True} # No pre-processing needed
+
+        logger.debug(f"Step 3: Applying {self.active_variant_type.value} pre-update logic...")
+        variant_results = {}
+        try:
+            # MAG: Calculate Gates
+            if self.active_variant_type == TitansVariantType.MAG:
+                # Retrieve K_hist
+                k_hist = self.sequence_context_manager.get_recent_keys()
+                if not k_hist:
+                    logger.info("MAG: Not enough context for gate calculation.")
+                    return {"success": True, "gates": None, "metrics": {}}
+
+                # Ensure q_t and k_hist are tensors for attention
+                try:
+                    from synthians_memory_core.orchestrator.titans_variants import _get_tf
+                    tf = _get_tf() # Lazy load TF
+                    q_tensor = tf.convert_to_tensor([step_context["q_t"]], dtype=tf.float32)
+                    k_hist_tensor = tf.convert_to_tensor(k_hist, dtype=tf.float32)
+                    if len(k_hist_tensor.shape) == 2: k_hist_tensor = tf.expand_dims(k_hist_tensor, 0)
+
+                    # Calculate attention output (Query attends to historical Keys)
+                    attention_output_tensor = self.attention_module(
+                        query=q_tensor, key=k_hist_tensor, value=k_hist_tensor, training=False
+                    )
+                    attention_output_list = tf.squeeze(attention_output_tensor).numpy().tolist()
+                except Exception as e:
+                    logger.error(f"Error during MAG attention calculation: {e}")
+                    return {"success": False, "error": str(e), "gates": None, "metrics": {}}
+
+                # Call NM API to calculate gates
+                gates_resp = await self._make_request(
+                    self.neural_memory_url, "/calculate_gates", method="POST",
+                    payload={"attention_output": attention_output_list}
+                )
+                if "error" not in gates_resp:
+                     variant_results = {
+                         "success": True,
+                         "gates": {"alpha_t": gates_resp["alpha"], "theta_t": gates_resp["theta"], "eta_t": gates_resp["eta"]},
+                         "metrics": getattr(self.attention_module, 'get_metrics', lambda: {})() # Safe access
+                     }
+                     logger.info(f"MAG calculated gates: {variant_results['gates']}")
+                else:
+                     logger.error(f"MAG failed to calculate gates via API: {gates_resp.get('error')}")
+                     variant_results = {"success": False, "error": gates_resp.get('error'), "gates": None, "metrics": {}}
+
+            # MAL: Calculate v_prime_t
+            elif self.active_variant_type == TitansVariantType.MAL:
+                k_hist, v_hist = self.sequence_context_manager.get_recent_kv_pairs()
+                if not k_hist or not v_hist:
+                     logger.info("MAL: Not enough context for value augmentation.")
+                     return {"success": True, "v_prime_t": step_context["v_t"], "metrics": {}} # Return original v_t
+
+                # Call variant processor's method (assuming it exists and handles TF conversion)
+                # This requires `titans_variants.MALVariant` to have the calculation logic
+                mal_output = await self.variant_processor.calculate_v_prime(
+                    q_t=step_context["q_t"],
+                    v_t=step_context["v_t"],
+                    k_hist=k_hist,
+                    v_hist=v_hist
+                )
+                if mal_output and mal_output.get("success"):
+                     v_prime_t = mal_output["v_prime_t"]
+                     if self._validate_embedding(v_prime_t):
+                         variant_results = {"success": True, "v_prime_t": v_prime_t, "metrics": mal_output.get("metrics", {})}
+                         logger.info("MAL calculated v_prime_t.")
+                     else:
+                          logger.error("MAL variant returned invalid v_prime_t.")
+                          variant_results = {"success": False, "error": "Invalid v_prime_t from MAL", "v_prime_t": step_context["v_t"]}
+                else:
+                     logger.error(f"MAL variant processing failed: {mal_output.get('error')}")
+                     variant_results = {"success": False, "error": mal_output.get('error'), "v_prime_t": step_context["v_t"]}
+
+
+        except Exception as e:
+            logger.error(f"Error during variant pre-update ({self.active_variant_type.value}): {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
+        return {"success": True, **variant_results} # Default success if no relevant variant
+
+    async def _update_neural_memory(self, step_context: Dict) -> Dict:
+        """Updates Neural Memory, potentially using variant outputs."""
+        logger.debug("Step 4: Updating Neural Memory...")
+        update_payload = {"input_embedding": step_context["x_t"].tolist()} # Base payload
+
+        # Add MAG gates if calculated
+        if step_context["external_gates"]:
+             gates = step_context["external_gates"]
+             # Use the specific keys expected by the updated UpdateMemoryRequest
+             update_payload["external_alpha_gate"] = gates.get("alpha_t")
+             update_payload["external_theta_gate"] = gates.get("theta_t")
+             update_payload["external_eta_gate"] = gates.get("eta_t")
+             logger.info("Using MAG external gates for update.")
+
+        # Add MAL projections if calculated (v_prime_t overrides default v_t)
+        elif step_context["v_prime_t"] is not None:
+             if step_context["k_t"] is None:
+                 logger.error("MAL Error: v_prime_t calculated but k_t is missing.")
+                 return {"success": False, "error": "k_t missing for MAL update"}
+             update_payload = { # Override payload for MAL
+                 "input_embedding": step_context["x_t"].tolist(),
+                 "key_projection": step_context["k_t"].tolist(),
+                 "value_projection": step_context["v_prime_t"].tolist()
+             }
+             logger.info("Using MAL external projections (k_t, v_prime_t) for update.")
+
+        update_resp = await self._make_request(
+            self.neural_memory_url, "/update_memory", method="POST", payload=update_payload
+        )
+
+        if "error" in update_resp:
+            return {"success": False, **update_resp}
+        else:
+            logger.info(f"Neural Memory updated: Loss={update_resp.get('loss'):.6f}, GradNorm={update_resp.get('grad_norm'):.6f}")
+            # Log memory update metrics if enabled
+            if self.metrics_enabled and update_resp.get("loss") is not None:
+                self.metrics_store.log_memory_update(
+                    input_embedding=step_context["x_t"].tolist(),
+                    loss=update_resp.get("loss"),
+                    grad_norm=update_resp.get("grad_norm", 0.0),
+                    emotion=step_context["user_emotion"],
+                    intent_id=self._current_intent_id,
+                    metadata={
+                        "memory_id": step_context["memory_id"],
+                        "content_preview": step_context["content"][:50] if step_context["content"] else "",
+                        "variant_type": self.active_variant_type.value
+                    }
+                )
+            return {"success": True, **update_resp}
+
+    async def _apply_quickrecal_boost(self, step_context: Dict, quickrecal_initial: Optional[float]) -> Optional[Dict]:
+         """Calculates and applies QuickRecal boost if needed."""
+         logger.debug("Step 5: Applying QuickRecal boost...")
+         loss = step_context.get("loss")
+         grad_norm = step_context.get("grad_norm")
+         memory_id = step_context["memory_id"]
+         user_emotion = step_context["user_emotion"]
+
+         if memory_id and (loss is not None or grad_norm is not None):
+             surprise_metric = grad_norm if grad_norm is not None else loss
+             boost = self._calculate_quickrecal_boost(surprise_metric)
+             step_context["quickrecal_boost"] = boost # Store calculated boost
+
+             if boost > 1e-4:
+                 loss_str = f"{loss:.6f}" if isinstance(loss, (float, int)) else 'N/A'
+                 grad_norm_str = f"{grad_norm:.6f}" if isinstance(grad_norm, (float, int)) else 'N/A'
+                 feedback_payload = {
+                     "memory_id": memory_id, "delta": boost,
+                     "reason": f"NM Surprise (Loss:{loss_str}, GradNorm:{grad_norm_str})"
+                 }
+                 feedback_resp = await self._make_request(
+                     self.memory_core_url, "/api/memories/update_quickrecal_score",
+                     method="POST", payload=feedback_payload
+                 )
+                 if "error" in feedback_resp:
+                      logger.error(f"QuickRecal boost failed: {feedback_resp.get('error')}")
+                      return {"status": "error", "error": feedback_resp.get('error')}
+                 else:
+                      logger.info(f"QuickRecal boost applied: Delta={boost:.6f}")
+                      if self.metrics_enabled:
+                          self.metrics_store.log_quickrecal_boost(
+                              memory_id=memory_id, base_score=quickrecal_initial or 0.0,
+                              boost_amount=boost, emotion=user_emotion, intent_id=self._current_intent_id,
+                              metadata={"loss": loss, "grad_norm": grad_norm, "reason": "NM Surprise"}
+                          )
+                 return feedback_resp
+             else:
+                  logger.debug("QuickRecal boost skipped (too small).")
+                  return {"status": "skipped", "reason": "Boost too small"}
+         else:
+              logger.warning("Skipping QuickRecal boost: Missing memory_id or surprise metrics.")
+              return {"status": "skipped", "reason": "Missing ID or surprise metrics"}
 
     async def get_sequence_embeddings_for_training(self, limit: int = 100, **filters) -> Dict[str, Any]:
         """Retrieve a sequence from Memory Core for training purposes.
