@@ -481,6 +481,40 @@ class MetricsStore:
         def section(title):
             return f"\n{title.center(width, '=')}\n"
         
+        # Ensure diagnostics dict has all expected keys with defaults
+        defaults = {
+            'diagnostic_window': 'Unknown',
+            'avg_loss': 0.0,
+            'avg_grad_norm': 0.0,
+            'avg_quickrecal_boost': 0.0,
+            'emotional_entropy': 0.0,
+            'emotion_bias_index': 0.0,
+            'user_emotion_match_rate': 0.0,
+            'dominant_emotions_boosted': [],
+            'cluster_update_hotspots': [],
+            'alerts': [],
+            'recommendations': [], 
+            'data_points': {
+                'memory_updates': 0,
+                'quickrecal_boosts': 0,
+                'retrievals': 0
+            }
+        }
+        
+        # Fill in any missing keys with defaults
+        for key, default_value in defaults.items():
+            if key not in diagnostics:
+                diagnostics[key] = default_value
+                logger.warning(f"Missing key '{key}' in diagnostics, using default value")
+                
+        # Ensure data_points has all expected keys
+        for key, default_value in defaults['data_points'].items():
+            if key not in diagnostics.get('data_points', {}):
+                if 'data_points' not in diagnostics:
+                    diagnostics['data_points'] = {}
+                diagnostics['data_points'][key] = default_value
+                logger.warning(f"Missing key '{key}' in data_points, using default value")
+        
         # Header
         output = []
         output.append("=" * width)
@@ -519,7 +553,9 @@ class MetricsStore:
         output.append(section("MEMORY HOTSPOTS"))
         if diagnostics['cluster_update_hotspots']:
             for hotspot in diagnostics['cluster_update_hotspots']:
-                output.append(f"* {hotspot['cluster_id']}: {hotspot['updates']} updates")
+                hotspot_id = hotspot.get('cluster_id', 'Unknown')
+                updates = hotspot.get('updates', 0)
+                output.append(f"* {hotspot_id}: {updates} updates")
         else:
             output.append("No significant memory hotspots detected")
         
@@ -533,13 +569,13 @@ class MetricsStore:
             output.append(f"* {rec}")
         
         # Data summary
-        data_points = diagnostics['data_points']
+        data_points = diagnostics.get('data_points', {})
         output.append(section("DATA SUMMARY"))
-        output.append(f"Based on {data_points['memory_updates']} updates, {data_points['quickrecal_boosts']} boosts, and {data_points['retrievals']} retrievals")
-        output.append("" * width)
+        output.append(f"Based on {data_points.get('memory_updates', 0)} updates, {data_points.get('quickrecal_boosts', 0)} boosts, and {data_points.get('retrievals', 0)} retrievals")
+        output.append("=" * width)  
         
         return "\n".join(output)
-
+    
 # --- Global Instance ---
 metrics_store = None
 
