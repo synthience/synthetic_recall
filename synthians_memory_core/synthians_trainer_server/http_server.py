@@ -71,6 +71,7 @@ class RetrieveRequest(BaseModel):
 
 class RetrieveResponse(BaseModel):
     retrieved_embedding: List[float]
+    query_projection: Optional[List[float]] = None
 
 class UpdateMemoryRequest(BaseModel):
     input_embedding: List[float]
@@ -79,6 +80,8 @@ class UpdateMemoryResponse(BaseModel):
     status: str
     loss: Optional[float] = None
     grad_norm: Optional[float] = None
+    key_projection: Optional[List[float]] = None
+    value_projection: Optional[List[float]] = None
 
 class TrainOuterRequest(BaseModel):
     input_sequence: List[List[float]]
@@ -247,70 +250,34 @@ async def init_neural_memory(req: InitRequest):
                             detail=f"Initialization failed: {str(e)}")
 
 @app.post("/retrieve", response_model=RetrieveResponse)
-async def retrieve_memory(req: RetrieveRequest):
+async def retrieve(req: RetrieveRequest):
     nm = get_neural_memory()
     try:
-        # Convert to tensor format
+        _validate_vector(req.query_embedding, nm.config['input_dim'], "query_embedding")
+        
+        # Create tensor with proper batch dimension as expected by TensorFlow
         query_tensor = tf.convert_to_tensor([req.query_embedding], dtype=tf.float32)
         
-        # Get projected query vector using NeuralMemoryModule's get_projections
-        logger.info(f"Getting projections for query with shape {query_tensor.shape}")
-        k_t, v_t, q_t = nm.get_projections(query_tensor)
+        # Get the query projection
+        _, _, q_t = nm.get_projections(query_tensor)
         
-        # Log debug information about shapes and config
-        logger.info(f"DEBUG: Shape of k_t: {tf.shape(k_t).numpy()}, Shape of q_t: {tf.shape(q_t).numpy()}")
-        logger.info(f"DEBUG: Config - query_dim={nm.config['query_dim']}, key_dim={nm.config['key_dim']}")
+        # Pass the query tensor to __call__ (equivalent to forward)
+        retrieved_embedding = nm(query_tensor)
         
-        # Check for dimension mismatch in configuration
-        if nm.config['query_dim'] != nm.config['key_dim']:
-            logger.warning(f"Configuration error detected! Using k_t (key projection) instead of q_t because q_t has incorrect dimensions")
-            # Use k_t which is already at key_dim (128) dimensionality
-            input_tensor = k_t
-        else:
-            # Configuration is correct, use q_t as intended
-            input_tensor = q_t
-            
-        # Use the properly dimensioned tensor for memory retrieval
-        retrieved_tensor = nm(input_tensor, training=False)
+        # Convert to Python list for JSON serialization
+        retrieved_embedding_list = retrieved_embedding[0].numpy().tolist() if len(tf.shape(retrieved_embedding)) > 1 else retrieved_embedding.numpy().tolist()
         
-        if retrieved_tensor is None or not isinstance(retrieved_tensor, tf.Tensor):
-             raise ValueError("Retrieval process returned None or invalid type")
-
-        # Ensure we get a flat list regardless of tensor shape
-        if len(tf.shape(retrieved_tensor)) > 1:
-             # If we get a batch of vectors (or matrix), we want the first one
-             retrieved_list = retrieved_tensor[0].numpy().tolist()
-        else:
-             retrieved_list = retrieved_tensor.numpy().tolist()
+        # Convert query projection to list for response
+        query_projection_list = q_t[0].numpy().tolist() if len(tf.shape(q_t)) > 1 else q_t.numpy().tolist()
         
-        # Log the retrieval metrics
-        # Note: In a real implementation, we would have more metadata about the retrieved memories
-        # This is a simplified version that just logs the retrieval vector
-        metrics = get_metrics_store()
-        
-        # Extract user emotion from request metadata if available
-        user_emotion = None
-        if hasattr(req, "metadata") and req.metadata and "user_emotion" in req.metadata:
-            user_emotion = req.metadata["user_emotion"]
-            
-        # For now, we don't have full memory metadata in this endpoint
-        # In a more complete implementation, we would track the actual memories retrieved
-        metrics.log_retrieval(
-            query_embedding=req.query_embedding,
-            retrieved_memories=[{"memory_id": "synthetic_memory", "embedding": retrieved_list}],
-            user_emotion=user_emotion,
-            metadata={
-                "timestamp": datetime.datetime.now().isoformat(),
-                "embedding_dim": len(retrieved_list)
-            }
+        return RetrieveResponse(
+            retrieved_embedding=retrieved_embedding_list,
+            query_projection=query_projection_list
         )
-
-        return RetrieveResponse(retrieved_embedding=retrieved_list)
-
     except HTTPException as http_exc: raise http_exc
     except Exception as e:
-        logger.error(f"Memory retrieval failed: {e}\n{traceback.format_exc()}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Retrieval error: {str(e)}")
+        logger.error(f"Retrieve failed: {e}\n{traceback.format_exc()}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Retrieve failed: {str(e)}")
 
 @app.post("/update_memory", response_model=UpdateMemoryResponse)
 async def update_memory(req: UpdateMemoryRequest):
@@ -321,6 +288,9 @@ async def update_memory(req: UpdateMemoryRequest):
         # Create tensor with proper batch dimension as expected by TensorFlow
         input_tensor = tf.convert_to_tensor([req.input_embedding], dtype=tf.float32)
 
+        # Get the key and value projections
+        k_t, v_t, _ = nm.get_projections(input_tensor)
+        
         # Pass to update_step which now expects a batched tensor with shape [1, input_dim]
         loss_tensor, grads = nm.update_step(input_tensor)
 
@@ -351,12 +321,17 @@ async def update_memory(req: UpdateMemoryRequest):
             }
         )
 
+        # Convert projections to lists for response
+        key_projection_list = k_t[0].numpy().tolist() if len(tf.shape(k_t)) > 1 else k_t.numpy().tolist()
+        value_projection_list = v_t[0].numpy().tolist() if len(tf.shape(v_t)) > 1 else v_t.numpy().tolist()
+
         return UpdateMemoryResponse(
             status="success",
             loss=loss_value,
-            grad_norm=grad_norm
+            grad_norm=grad_norm,
+            key_projection=key_projection_list,
+            value_projection=value_projection_list
         )
-
     except HTTPException as http_exc: raise http_exc
     except Exception as e:
         logger.error(f"Memory update failed: {e}\n{traceback.format_exc()}", exc_info=True)
@@ -628,11 +603,13 @@ async def startup_event():
         logger.info("Attempting auto-initialization of Neural Memory module...")
         # Use environment variables for default config or load path if needed
         default_config_dict = {
-            # Set input_dim and query_dim to match Memory Core's embedding dimension (768)
+            # Set input_dim to match Memory Core's embedding dimension (768)
             'input_dim': 768,
-            'query_dim': 768,
-            'hidden_dim': 768,  # Match this too for simplicity
-            'output_dim': 768   # Match this for consistency
+            # Key and query dimensions should match for proper attention computation
+            'key_dim': 128,
+            'query_dim': 128,  # Match key_dim for proper dimension alignment
+            'value_dim': 768,  # Output dimension matches input_dim for consistency
+            'hidden_dim': 512   # Intermediate projection dimension
         }
         load_path = os.environ.get("NM_DEFAULT_STATE_PATH", None)
         mc_url = os.environ.get("MEMORY_CORE_URL", "http://localhost:5010") # Get MC URL if needed
