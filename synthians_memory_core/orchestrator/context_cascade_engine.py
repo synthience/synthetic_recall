@@ -1,24 +1,20 @@
-import numpy as np
+import os
+import json
+import time
 import asyncio
 import logging
-import time
-from typing import Dict, List, Any, Optional, Union
-import datetime
-import json
+import numpy as np
+from typing import Dict, Any, List, Optional, Tuple, Union
 import aiohttp
+from datetime import datetime
+from urllib.parse import urljoin
 
-try:
-    from synthians_memory_core.geometry_manager import GeometryManager
-except ImportError:
-    logging.error("CRITICAL: Failed to import GeometryManager. Ensure synthians_memory_core is accessible.")
-    GeometryManager = None  
+# Import the sequence context manager
+from .history import SequenceContextManager
 
-# Import MetricsStore for cognitive flow instrumentation
-try:
-    from synthians_memory_core.synthians_trainer_server.metrics_store import MetricsStore, get_metrics_store
-except ImportError:
-    logging.warning("Failed to import MetricsStore. Cognitive instrumentation disabled.")
-    get_metrics_store = None
+# Import the titans variants - note we're importing the type and factory function
+# but not directly importing the variant classes which would trigger TensorFlow import
+from .titans_variants import TitansVariantType, create_titans_variant
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +32,9 @@ class ContextCascadeEngine:
     def __init__(self,
                  memory_core_url: str = "http://localhost:5010",  
                  neural_memory_url: str = "http://localhost:8001",  
-                 geometry_manager: Optional[GeometryManager] = None,
-                 metrics_enabled: bool = True):
+                 geometry_manager: Optional[Any] = None,
+                 metrics_enabled: bool = True,
+                 sequence_context_length: int = 50):
         """Initialize the Context Cascade Engine.
         
         Args:
@@ -45,19 +42,21 @@ class ContextCascadeEngine:
             neural_memory_url: URL of the Neural Memory Server
             geometry_manager: Optional shared geometry manager
             metrics_enabled: Whether to enable cognitive metrics collection
+            sequence_context_length: Maximum length of the sequence context buffer
         """
         self.memory_core_url = memory_core_url.rstrip('/')
         self.neural_memory_url = neural_memory_url.rstrip('/')
 
-        if GeometryManager is None:
+        if geometry_manager is None:
             raise ImportError("GeometryManager could not be imported. ContextCascadeEngine cannot function.")
-        self.geometry_manager = geometry_manager or GeometryManager()  
+        self.geometry_manager = geometry_manager  
 
         # Initialize metrics collection if enabled
-        self.metrics_enabled = metrics_enabled and get_metrics_store is not None
+        self.metrics_enabled = metrics_enabled
         self._current_intent_id = None
         if self.metrics_enabled:
             try:
+                from synthians_memory_core.synthians_trainer_server.metrics_store import MetricsStore, get_metrics_store
                 self.metrics_store = get_metrics_store()
                 logger.info("Cognitive metrics collection enabled")
             except Exception as e:
@@ -65,15 +64,140 @@ class ContextCascadeEngine:
                 self.metrics_enabled = False
 
         self.last_retrieved_embedding: Optional[List[float]] = None
+        
+        # Initialize sequence context manager for attention history
+        self.sequence_context_length = sequence_context_length
+        self.sequence_context_manager = SequenceContextManager(max_length=self.sequence_context_length)
+        
+        # Keep the legacy sequence_context list for backward compatibility
         self.sequence_context: List[Dict[str, Any]] = []
         self.processing_lock = asyncio.Lock()
-
-        logger.info(f"Context Cascade Engine initialized:")
+        
+        # Determine active Titans variant from environment
+        variant_name_str = os.environ.get("TITANS_VARIANT", "NONE").upper()
+        try:
+            self.active_variant_type = TitansVariantType(variant_name_str)
+        except ValueError:
+            logger.warning(f"Invalid TITANS_VARIANT '{variant_name_str}'. Defaulting to NONE.")
+            self.active_variant_type = TitansVariantType.NONE
+        logger.info(f"Active Titans Variant: {self.active_variant_type.value}")
+        
+        # Configuration ready flag and event
+        self._config_ready = False
+        self._config_ready_event = asyncio.Event()
+        self.variant_processor = None
+        
+        # Trigger dynamic configuration
+        asyncio.create_task(self._configure_and_set_ready())
+        
+        logger.info(f"Context Cascade Engine initializing:")
         logger.info(f" - Memory Core URL: {self.memory_core_url}")
         logger.info(f" - Neural Memory URL: {self.neural_memory_url}")
         logger.info(f" - Metrics Enabled: {self.metrics_enabled}")
+        logger.info(f" - Sequence Context Length: {self.sequence_context_length}")
+        logger.info(f" - Active Titans Variant: {self.active_variant_type.value}")
         gm_config = getattr(self.geometry_manager, 'config', {})
         logger.info(f" - Geometry type: {gm_config.get('geometry_type', 'N/A')}")
+        logger.info(f" - Dynamic configuration in progress...")
+        
+    async def _configure_and_set_ready(self):
+        """Initialize configuration and set the ready flag when complete."""
+        try:
+            await self._configure_attention_and_variant()
+            self._config_ready = True
+            self._config_ready_event.set()
+            logger.info("Dynamic configuration completed successfully.")
+        except Exception as e:
+            logger.error(f"Error during dynamic configuration: {e}")
+            # Set ready flag even on failure to prevent blocking forever
+            self._config_ready = True
+            self._config_ready_event.set()
+            
+    async def _configure_attention_and_variant(self):
+        """Retrieve configuration from Neural Memory and initialize the attention module and variant processor."""
+        try:
+            # Retrieve configuration from Neural Memory
+            config_resp = await self._make_request(
+                self.neural_memory_url,
+                "/config",
+                method="GET"
+            )
+            
+            if "error" in config_resp:
+                logger.warning(f"Failed to retrieve configuration from Neural Memory: {config_resp.get('error')}")
+                logger.warning("Using default configuration values.")
+                attention_config = {
+                    'num_heads': 4,
+                    'key_dim': 32,  # Per head dimension (total key_dim is 128)
+                    'dropout': 0.0,
+                    'use_layer_norm': True,
+                    'use_residual': True,
+                    'max_dim_mismatch_warnings': 10,
+                }
+            else:
+                logger.info("Retrieved configuration from Neural Memory.")
+                # Extract attention configuration from the response
+                attention_config = config_resp.get("attention_config", {})
+                
+                # If we have neural_memory_config, extract relevant dimensions
+                if "neural_memory_config" in config_resp:
+                    nm_config = config_resp["neural_memory_config"]
+                    if not attention_config:
+                        # Create attention config from neural memory config
+                        attention_config = {
+                            'num_heads': 4,
+                            'key_dim': nm_config.get('key_dim', 128) // 4,  # Per head dimension (typically 32)
+                            'dropout': 0.0,
+                            'use_layer_norm': True,
+                            'use_residual': True,
+                            'max_dim_mismatch_warnings': 10,
+                        }
+                    # Add dimensions info
+                    attention_config["embedding_dimensions"] = {
+                        "input_dim": nm_config.get('input_dim', 768),
+                        "key_dim": nm_config.get('key_dim', 128),
+                        "value_dim": nm_config.get('value_dim', 768),
+                        "query_dim": nm_config.get('query_dim', 128)
+                    }
+                
+                # Get variant support information directly from the response
+                supports_external_gates = config_resp.get("supports_external_gates", False)
+                supports_external_projections = config_resp.get("supports_external_projections", False)
+                current_variant = config_resp.get("titans_variant", "NONE")
+                
+                logger.info(f"Neural Memory active variant: {current_variant}")
+                logger.info(f"Neural Memory supports: external gates={supports_external_gates}, external projections={supports_external_projections}")
+                
+                # No need to check if our variant is supported - the Neural Memory API will handle this
+            
+            # Initialize the variant processor with the retrieved configuration
+            if self.active_variant_type != TitansVariantType.NONE:
+                self.variant_processor = create_titans_variant(
+                    variant_type=self.active_variant_type,
+                    config=attention_config
+                )
+                
+                # Initialize the variant processor with context manager and neural memory URL
+                self.variant_processor.set_sequence_context(self.sequence_context_manager)
+                self.variant_processor.set_neural_memory_url(self.neural_memory_url)
+                logger.info(f"Initialized {self.active_variant_type.value} variant processor")
+            else:
+                self.variant_processor = None
+                logger.info("No Titans Variant active. Using standard Neural Memory flow.")
+            
+            return attention_config
+                
+        except Exception as e:
+            logger.error(f"Error configuring attention and variant: {e}")
+            # Return default configuration
+            return {
+                'num_heads': 4,
+                'key_dim': 32,
+                'dropout': 0.0,
+                'use_layer_norm': True,
+                'use_residual': True,
+                'max_dim_mismatch_warnings': 10,
+            }
 
     async def process_new_input(self,
                                 content: str,
@@ -100,6 +224,16 @@ class ContextCascadeEngine:
         Returns:
             Processing results including memory_id, surprise metrics, etc.
         """
+        # Wait for configuration to be ready before processing
+        if not self._config_ready:
+            logger.info("Waiting for dynamic configuration to complete...")
+            try:
+                # Wait with a timeout to avoid blocking forever if configuration fails
+                await asyncio.wait_for(self._config_ready_event.wait(), 10.0)
+            except asyncio.TimeoutError:
+                logger.warning("Timed out waiting for configuration. Proceeding with defaults.")
+                self._config_ready = True  # Prevent further waiting
+            
         async with self.processing_lock:
             start_time = time.time()
             
@@ -124,6 +258,7 @@ class ContextCascadeEngine:
                 
             logger.info(f"Processing new input: {content[:50]}...")
 
+            # Step 1: Store memory in Memory Core
             mem_core_resp = await self._make_request(
                 self.memory_core_url,
                 "/process_memory",  
@@ -142,8 +277,11 @@ class ContextCascadeEngine:
                 "memory_id": memory_id,
                 "status": "processed" if memory_id and actual_embedding else "error_mem_core",
                 "quickrecal_initial": quickrecal_initial,
-                "timestamp": datetime.datetime.utcnow().isoformat(),
-                "intent_id": self._current_intent_id
+                "timestamp": datetime.utcnow().isoformat(),
+                "intent_id": self._current_intent_id,
+                "variant_output": {
+                    "variant_type": self.active_variant_type.value if hasattr(self, "active_variant_type") else "NONE"
+                }
             }
 
             if not actual_embedding or not memory_id:
@@ -159,14 +297,155 @@ class ContextCascadeEngine:
                         confidence=0.0
                     )
                 return response
-
-            # Send embedding to Neural Memory for learning
+            
+            # Step 2: Get projections from Neural Memory before updating
+            # This is needed for all Titans variants
+            key_projection = None
+            value_projection = None
+            query_projection = None
+            original_value_projection = None  # Store the original value for later context management
+            
+            projections_resp = await self._make_request(
+                self.neural_memory_url,
+                "/get_projections",
+                method="POST",
+                payload={"input_embedding": actual_embedding}
+            )
+            
+            # The response should contain direct projection fields, not nested under 'status'
+            if "error" not in projections_resp and "key_projection" in projections_resp and "value_projection" in projections_resp and "query_projection" in projections_resp:
+                key_projection = projections_resp.get("key_projection")
+                value_projection = projections_resp.get("value_projection")
+                original_value_projection = value_projection.copy() if isinstance(value_projection, list) else value_projection  # Store original for context
+                query_projection = projections_resp.get("query_projection")
+                logger.info(f"Got projections from Neural Memory: K:{len(key_projection) if key_projection else None}, "
+                            f"V:{len(value_projection) if value_projection else None}, "
+                            f"Q:{len(query_projection) if query_projection else None}")
+                
+                # Log dimensions for debugging
+                logger.debug(f"Projection dimensions: key_dim={len(key_projection) if key_projection else 'Unknown'}, "
+                            f"value_dim={len(value_projection) if value_projection else 'Unknown'}, "
+                            f"query_dim={len(query_projection) if query_projection else 'Unknown'}")
+            else:
+                error_msg = projections_resp.get("error", "Unknown error")
+                logger.warning(f"Failed to get projections from Neural Memory: {error_msg}")
+                if "warning" in projections_resp:
+                    logger.warning(f"Additional warnings: {projections_resp['warning']}")
+            
+            # Initialize variant-specific parameters
+            external_gates = None
+            modified_value_projection = None
+            
+            # Prepare context data if we have the projections
+            x_t = None
+            k_t = None
+            v_t = None
+            q_t = None
+            y_t = None
+            context_valid = False
+            
+            if actual_embedding and key_projection and value_projection and query_projection:
+                try:
+                    # Convert all projections to numpy arrays if they're not already
+                    x_t = np.array(actual_embedding, dtype=np.float32)
+                    k_t = np.array(key_projection, dtype=np.float32)
+                    v_t = np.array(value_projection, dtype=np.float32)
+                    q_t = np.array(query_projection, dtype=np.float32)
+                    
+                    # Validate all embeddings to ensure they don't contain NaN/Inf values
+                    valid_embeddings = True
+                    for embedding_name, embedding in [("x_t", x_t), ("k_t", k_t), ("v_t", v_t), ("q_t", q_t)]:
+                        if not self._validate_embedding(embedding):
+                            logger.warning(f"Invalid values detected in {embedding_name} projection. Skipping context processing.")
+                            valid_embeddings = False
+                            break
+                    
+                    if valid_embeddings:
+                        context_valid = True
+                        logger.debug("Projections validated for context processing")
+                except Exception as e:
+                    logger.error(f"Error preparing projections for context: {e}")
+            
+            # Step 3: Apply Titans variant logic BEFORE Neural Memory update if context is valid
+            # This allows MAG and MAL variants to influence the update process
+            if context_valid and self.variant_processor and self.active_variant_type != TitansVariantType.NONE:
+                try:
+                    logger.info(f"Applying {self.active_variant_type.value} variant logic before update...")
+                    
+                    # Process input with the variant processor
+                    variant_results = self.variant_processor.process_input(
+                        memory_id=memory_id,
+                        x_t=x_t,
+                        k_t=k_t,
+                        v_t=v_t,
+                        q_t=q_t,
+                        y_t=None  # Will be populated after retrieval
+                    )
+                    
+                    response["variant_output"] = {
+                        "variant_type": self.active_variant_type.value,
+                        "applied_before_update": True
+                    }
+                    
+                    # For MAG variant: Get calculated gates to influence Neural Memory update
+                    if self.active_variant_type == TitansVariantType.MAG and "alpha" in variant_results:
+                        external_gates = {
+                            "alpha": float(variant_results.get("alpha")),
+                            "theta": float(variant_results.get("theta")),
+                            "eta": float(variant_results.get("eta"))
+                        }
+                        response["variant_output"].update(external_gates)
+                        logger.info(f"MAG variant calculated gates: alpha={external_gates['alpha']}, "
+                                  f"theta={external_gates['theta']}, eta={external_gates['eta']}")
+                    
+                    # For MAL variant: Get modified value projection
+                    elif self.active_variant_type == TitansVariantType.MAL and "v_prime" in variant_results:
+                        modified_value_projection = variant_results.get("v_prime")
+                        if isinstance(modified_value_projection, np.ndarray):
+                            modified_value_projection = modified_value_projection.tolist()
+                        response["variant_output"]["v_prime_applied"] = True
+                        logger.info("MAL variant calculated augmented value projection.")
+                    
+                    logger.info(f"{self.active_variant_type.value} variant pre-processing applied successfully.")
+                    
+                except Exception as e:
+                    logger.error(f"Error applying {self.active_variant_type.value} variant before update: {e}")
+                    response["variant_output"]["pre_processing_error"] = str(e)
+            
+            # Step 4: Send embedding to Neural Memory for learning with MAG/MAL modifications if applicable
+            update_payload = {"input_embedding": actual_embedding}
+            
+            # Add MAG external gates if available - properly format for the API endpoint
+            if external_gates and self.active_variant_type == TitansVariantType.MAG:
+                if "alpha" in external_gates and external_gates["alpha"] is not None:
+                    update_payload["external_alpha_gate"] = external_gates["alpha"]
+                if "theta" in external_gates and external_gates["theta"] is not None:
+                    update_payload["external_theta_gate"] = external_gates["theta"]
+                if "eta" in external_gates and external_gates["eta"] is not None:
+                    update_payload["external_eta_gate"] = external_gates["eta"]
+                
+                logger.info(f"MAG: Sending external gates to /update_memory: alpha={update_payload.get('external_alpha_gate')}, "
+                           f"theta={update_payload.get('external_theta_gate')}, eta={update_payload.get('external_eta_gate')}")
+            
+            # Add MAL modified value projection if available
+            if modified_value_projection is not None and self.active_variant_type == TitansVariantType.MAL:
+                update_payload["key_projection"] = key_projection
+                update_payload["value_projection"] = modified_value_projection
+                # Store the modified value projection for proper context recording
+                v_t = np.array(modified_value_projection, dtype=np.float32)
+            
+            # If we have projections but no MAL-specific modifications, we can still use them
+            elif key_projection is not None and value_projection is not None:
+                update_payload["key_projection"] = key_projection
+                update_payload["value_projection"] = value_projection
+            
             update_resp = await self._make_request(
                 self.neural_memory_url,
                 "/update_memory",
                 method="POST",
-                payload={"input_embedding": actual_embedding}
+                payload=update_payload
             )
+            
             loss = update_resp.get("loss")
             grad_norm = update_resp.get("grad_norm")
             response["neural_memory_update"] = update_resp  
@@ -187,11 +466,12 @@ class ContextCascadeEngine:
                     metadata={
                         "memory_id": memory_id,
                         "content_preview": content[:50] if content else "",
-                        "quickrecal_initial": quickrecal_initial
+                        "quickrecal_initial": quickrecal_initial,
+                        "variant_type": self.active_variant_type.value if hasattr(self, "active_variant_type") else "NONE"
                     }
                 )
 
-            # Calculate QuickRecal boost based on surprise metrics
+            # Step 5: Calculate QuickRecal boost based on surprise metrics
             quickrecal_boost = 0.0
             if update_resp.get("status") == "success" or "error" not in update_resp:
                  surprise_metric = grad_norm if grad_norm is not None else (loss if loss is not None else 0.0)
@@ -235,20 +515,107 @@ class ContextCascadeEngine:
 
             response["surprise_metrics"] = {"loss": loss, "grad_norm": grad_norm, "boost_calculated": quickrecal_boost}
 
-            # Generate query for Neural Memory retrieval
-            # IMPORTANT: We send the raw embedding and let the Neural Memory module handle the projection
-            query_for_retrieve = actual_embedding  
-            logger.debug(f"Sending raw embedding to /retrieve (dim={len(query_for_retrieve)}). NeuralMemory will handle projection.")
-
-            # Retrieve associated embedding
+            # Step 6: Generate query and retrieve associated embedding from Neural Memory
+            # Ensure we're sending the correctly formatted request with debug logging
+            retrieve_payload = {"input_embedding": actual_embedding}  # API expects raw input, handles projection internally
+            
+            # Add debug logging for MAG variant
+            if self.active_variant_type and self.active_variant_type.value == "MAG":
+                logger.info(f"MAG variant: Using input_embedding for /retrieve payload, dim={len(actual_embedding) if actual_embedding else 'None'}")
+                logger.debug(f"MAG variant input details: input_dim={len(actual_embedding) if actual_embedding else 'Unknown'}, "
+                            f"query_dim={len(q_t) if isinstance(q_t, np.ndarray) else 'Unknown'}")
+            
             retrieve_resp = await self._make_request(
                 self.neural_memory_url,
                 "/retrieve",
                 method="POST",
-                payload={"query_embedding": query_for_retrieve}  
+                payload=retrieve_payload
             )
+            
             retrieved_embedding = retrieve_resp.get("retrieved_embedding")
+            query_projection_from_retrieve = retrieve_resp.get("query_projection")  # May override earlier q_t
+            
+            # Enhanced logging for the retrieve response
+            if retrieved_embedding:
+                logger.info(f"Successfully retrieved embedding from Neural Memory, dim={len(retrieved_embedding)}")
+                if query_projection_from_retrieve and query_projection_from_retrieve != query_projection:
+                    # Update our q_t if the retrieve endpoint returned a different projection
+                    logger.info(f"Using query projection from /retrieve endpoint. Dim={len(query_projection_from_retrieve)}")
+                    query_projection = query_projection_from_retrieve
+                    if context_valid:
+                        q_t = np.array(query_projection, dtype=np.float32)
+            else:
+                logger.warning(f"Failed to retrieve embedding from Neural Memory: {retrieve_resp.get('error', 'Unknown error')}")
+                
             response["neural_memory_retrieval"] = retrieve_resp  
+            
+            # Step 7: Process MAC variant or finalize context
+            if context_valid and retrieved_embedding:
+                try:
+                    # Convert retrieved embedding to numpy
+                    y_t_raw = np.array(retrieved_embedding, dtype=np.float32)
+                    
+                    # For MAC variant: Apply post-retrieval attention processing
+                    if self.variant_processor and self.active_variant_type == TitansVariantType.MAC:
+                        try:
+                            # Process with MAC variant to get attended output
+                            variant_results = self.variant_processor.process_input(
+                                memory_id=memory_id,
+                                x_t=x_t,
+                                k_t=k_t,
+                                v_t=v_t,
+                                q_t=q_t,
+                                y_t=y_t_raw
+                            )
+                            
+                            response["variant_output"] = {
+                                "variant_type": self.active_variant_type.value,
+                                "applied_after_retrieval": True
+                            }
+                            
+                            # Update the retrieved embedding with the attended output
+                            if "attended_output" in variant_results:
+                                y_t = variant_results["attended_output"]
+                                if isinstance(y_t, np.ndarray):
+                                    retrieved_embedding = y_t.tolist()
+                                else:
+                                    retrieved_embedding = y_t
+                                    y_t = np.array(y_t, dtype=np.float32)
+                                    
+                                # Update the response with the attended output
+                                response["neural_memory_retrieval"]["retrieved_embedding"] = retrieved_embedding
+                                response["variant_output"]["attended_output"] = "applied"
+                                logger.info("MAC variant updated retrieved_embedding with attended output.")
+                            else:
+                                # If no attended output, use the raw retrieved embedding
+                                y_t = y_t_raw
+                        except Exception as e:
+                            logger.error(f"Error applying MAC variant after retrieval: {e}")
+                            response["variant_output"]["post_processing_error"] = str(e)
+                            y_t = y_t_raw  # Fall back to raw retrieved embedding
+                    else:
+                        # For other variants, use the raw retrieved embedding
+                        y_t = y_t_raw
+                    
+                    # Now add the full context with all components to the sequence context manager
+                    # Use a SINGLE add with the properly prepared v_t (which might be modified by MAL)
+                    if self._validate_embedding(y_t):
+                        # Record the final projections (including any MAL modifications to v_t)
+                        self.sequence_context_manager.add_context(
+                            memory_id=memory_id,
+                            x_t=x_t,
+                            k_t=k_t,
+                            v_t=v_t,  # This is the v_t actually used in the update (possibly modified by MAL)
+                            q_t=q_t,
+                            y_t=y_t   # This is the final y_t (possibly modified by MAC)
+                        )
+                        logger.debug(f"Added complete context to SequenceContextManager. Current length: {len(self.sequence_context_manager)}")
+                        
+                        # Also store the original value projection for reference if it differs from what was used
+                        if original_value_projection is not None and self.active_variant_type == TitansVariantType.MAL:
+                            response["variant_output"]["original_v_preserved"] = True
+                except Exception as e:
+                    logger.error(f"Error finalizing context: {e}")
             
             # Log retrieval metrics if enabled
             if self.metrics_enabled and retrieved_embedding:
@@ -259,7 +626,7 @@ class ContextCascadeEngine:
                     "dominant_emotion": None  # We don't have this information yet
                 }
                 
-                safe_query = np.array(query_for_retrieve, dtype=np.float32).tolist()
+                safe_query = np.array(actual_embedding, dtype=np.float32).tolist()
                 safe_query = [0.0 if not np.isfinite(x) else x for x in safe_query]
                 
                 self.metrics_store.log_retrieval(
@@ -270,11 +637,12 @@ class ContextCascadeEngine:
                     metadata={
                         "original_memory_id": memory_id,
                         "embedding_dim": len(retrieved_embedding),
-                        "timestamp": datetime.datetime.utcnow().isoformat()
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "variant_type": self.active_variant_type.value if hasattr(self, "active_variant_type") else "NONE"
                     }
                 )
 
-            # Update sequence context
+            # Update sequence context for legacy compatibility
             self.last_retrieved_embedding = retrieved_embedding
             self.sequence_context.append({
                 "memory_id": memory_id,
@@ -322,14 +690,34 @@ class ContextCascadeEngine:
         log_payload = payload if payload is None or len(json.dumps(payload)) < 200 else {k: (v[:50] + '...' if isinstance(v, str) and len(v) > 50 else v) for k, v in payload.items()}  
         logger.debug(f"Making {method} request to {url}", extra={"payload": log_payload, "params": params})
 
+        # Special debug logging for important endpoints
+        debug_endpoints = ["/get_projections", "/update_memory", "/retrieve", "/config"]
+        if endpoint in debug_endpoints:
+            logger.info(f"DEBUG: Calling {endpoint} with payload: {log_payload if log_payload != payload else payload}")
+
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.request(method, url, json=payload, params=params, timeout=30.0) as response:
                     status_code = response.status
                     try:
                         resp_json = await response.json()
-                        logger.debug(f"Response from {url}: Status {status_code}")  
+                        
+                        # Enhanced logging for specific endpoints
+                        if endpoint in debug_endpoints:
+                            resp_sample = {k: (v[:100] + '...' if isinstance(v, str) and len(v) > 100 else v) 
+                                          for k, v in resp_json.items()} if isinstance(resp_json, dict) else resp_json
+                            logger.info(f"DEBUG: Response from {endpoint}: Status {status_code}, Content sample: {resp_sample}")
+                        else:
+                            logger.debug(f"Response from {url}: Status {status_code}")  
+                            
                         if 200 <= status_code < 300:
+                            # For specific endpoints, ensure key fields are present
+                            if endpoint == "/get_projections" and isinstance(resp_json, dict):
+                                expected_keys = ["key_projection", "value_projection", "query_projection"]
+                                missing_keys = [k for k in expected_keys if k not in resp_json]
+                                if missing_keys:
+                                    logger.warning(f"WARNING: Response from {endpoint} is missing expected keys: {missing_keys}")
+                                    resp_json["warning"] = f"Missing expected keys: {missing_keys}"
                             return resp_json
                         else:
                             error_detail = resp_json.get("detail", "Unknown error from server")

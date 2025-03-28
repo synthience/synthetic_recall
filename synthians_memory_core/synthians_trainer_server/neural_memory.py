@@ -136,6 +136,14 @@ class NeuralMemoryModule(tf.keras.Model):
         self.WK_layer = tf.keras.layers.Dense(key_dim, name="WK_proj", use_bias=False, kernel_initializer=initializer_outer)
         self.WV_layer = tf.keras.layers.Dense(value_dim, name="WV_proj", use_bias=False, kernel_initializer=initializer_outer)
         self.WQ_layer = tf.keras.layers.Dense(query_dim, name="WQ_proj", use_bias=False, kernel_initializer=initializer_outer)
+        
+        # Initialize gate projection layers for MAG variant (used by calculate_gates)
+        self.attention_to_alpha = tf.keras.layers.Dense(1, name="attention_to_alpha")
+        self.attention_to_theta = tf.keras.layers.Dense(1, name="attention_to_theta")
+        self.attention_to_eta = tf.keras.layers.Dense(1, name="attention_to_eta")
+        
+        # Storage for last computed gate values
+        self.last_applied_gates = {}
 
         if not self.config.get('use_complex_gates', False):
             self.alpha_logit = tf.Variable(tf.constant(self.config['alpha_init'], dtype=tf.float32), name="alpha_logit", trainable=True)
@@ -181,6 +189,11 @@ class NeuralMemoryModule(tf.keras.Model):
         self.WQ_layer.build(input_shape=(None, input_dim))
         logger.info("Projection layers built.")
 
+        # Build gate projection layers
+        self.attention_to_alpha.build(input_shape=(None, query_dim))
+        self.attention_to_theta.build(input_shape=(None, query_dim))
+        self.attention_to_eta.build(input_shape=(None, query_dim))
+        logger.info("Gate projection layers built.")
 
     @property
     def inner_trainable_variables(self):
@@ -191,125 +204,151 @@ class NeuralMemoryModule(tf.keras.Model):
          return self.WK_layer.trainable_variables + \
                 self.WV_layer.trainable_variables + \
                 self.WQ_layer.trainable_variables + \
+                self.attention_to_alpha.trainable_variables + \
+                self.attention_to_theta.trainable_variables + \
+                self.attention_to_eta.trainable_variables + \
                 self._gate_params
 
     def get_projections(self, x_t: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-        """Calculate key, value, query projections from input."""
-        # Convert to tensor and ensure correct dtype
-        x_t = tf.convert_to_tensor(x_t, dtype=tf.float32)
-        original_shape = tf.shape(x_t)
+        """Calculate key, value, query projections from input.
         
-        # Handle various input shapes
-        if len(original_shape) == 1:
-            # Single vector -> add batch dimension
-            x_t = tf.expand_dims(x_t, 0)
-            logger.debug(f"Reshaped input from {original_shape} to {tf.shape(x_t)}")
-        
-        # Verify input dimension
-        if tf.shape(x_t)[-1] != self.config['input_dim']:
-            logger.warning(f"Input dimension mismatch: expected {self.config['input_dim']}, got {tf.shape(x_t)[-1]}")
-            raise ValueError(f"Input dimension mismatch: expected {self.config['input_dim']}, got {tf.shape(x_t)[-1]}")
+        Args:
+            x_t: Input tensor with shape [batch_size, input_dim]
             
-        # Apply projections
-        k_t = self.WK_layer(x_t)
-        v_t = self.WV_layer(x_t)
-        q_t = self.WQ_layer(x_t)
+        Returns:
+            Tuple of (key_projection, value_projection, query_projection)
+        """
+        x_t = tf.convert_to_tensor(x_t, dtype=tf.float32)
+        
+        # Ensure input has right shape
+        if len(tf.shape(x_t)) == 1:
+            # Add batch dimension if missing
+            x_t = tf.expand_dims(x_t, 0)
+            
+        # Get projections
+        k_t = self.WK_layer(x_t)  # [batch_size, key_dim]
+        v_t = self.WV_layer(x_t)  # [batch_size, value_dim]
+        q_t = self.WQ_layer(x_t)  # [batch_size, query_dim]
+        
         return k_t, v_t, q_t
     
-    def get_projection_hash(self) -> str:
-        """Returns a hash representation of the current projection matrices.
+    def calculate_gates(self, attention_output) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+        """Calculate gate values from attention output for MAG variant.
         
-        This is used for introspection and cognitive tracing, allowing the system to
-        detect when projection matrices have changed between different runs or sessions.
-        
+        Args:
+            attention_output: Output tensor from attention mechanism
+            
         Returns:
-            str: A hash string representing the current state of WK, WV, WQ matrices
+            Tuple of (alpha_t, theta_t, eta_t) gate values
         """
-        # In a full implementation, this would calculate a hash based on the actual weight values
-        # For now, return a placeholder with timestamp to make it somewhat unique
-        timestamp = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
-        return f"proj_matrix_hash_{timestamp}"
+        # Default gates (fallback if computation fails)
+        alpha_logit = self.alpha_logit
+        theta_logit = self.theta_logit
+        eta_logit = self.eta_logit
+        
+        try:
+            # Ensure attention_output has the right shape
+            attention_output = tf.convert_to_tensor(attention_output, dtype=tf.float32)
+            if len(tf.shape(attention_output)) == 1:
+                attention_output = tf.expand_dims(attention_output, 0)
+            
+            # Project attention output to gate logits using dedicated layers
+            alpha_logit = self.attention_to_alpha(attention_output)
+            theta_logit = self.attention_to_theta(attention_output)
+            eta_logit = self.attention_to_eta(attention_output)
+            
+            # Remove the extra dimensions
+            alpha_logit = tf.squeeze(alpha_logit)
+            theta_logit = tf.squeeze(theta_logit)
+            eta_logit = tf.squeeze(eta_logit)
+            
+            logger.debug(f"Calculated gate logits from attention: alpha={alpha_logit.numpy()}, theta={theta_logit.numpy()}, eta={eta_logit.numpy()}")
+            
+        except Exception as e:
+            logger.warning(f"Error calculating gates from attention output: {e}. Using default gates.")
+        
+        # Apply sigmoid to get gate values in [0,1] range
+        alpha_t = tf.nn.sigmoid(alpha_logit)  # Forget rate
+        theta_t = tf.nn.sigmoid(theta_logit)  # Inner learning rate
+        eta_t = tf.nn.sigmoid(eta_logit)      # Momentum
+        
+        return alpha_t, theta_t, eta_t
 
-    def call(self, q_t: tf.Tensor, training=False) -> tf.Tensor:
+    def __call__(self, q_t: tf.Tensor, training=False):
         """Retrieve value from memory given query q_t (inference only)."""
-        # Dynamic shape handling - reshape input if needed
+        # Ensure q_t has correct shape with batch dimension
         q_t = tf.convert_to_tensor(q_t, dtype=tf.float32)
-        original_shape = tf.shape(q_t)
+        if len(tf.shape(q_t)) == 1:
+            q_t = tf.expand_dims(q_t, 0)  # Add batch dim
+            
+        return self.memory_mlp(q_t, training=training)
+
+    def update_step(self, x_t: tf.Tensor, 
+                   external_k_t: Optional[tf.Tensor] = None,
+                   external_v_t: Optional[tf.Tensor] = None,
+                   external_alpha_t: Optional[float] = None,
+                   external_theta_t: Optional[float] = None,
+                   external_eta_t: Optional[float] = None) -> Tuple[tf.Tensor, List[tf.Tensor]]:
+        """Update memory weights based on input x_t.
         
-        # Handle various input shapes
-        if len(original_shape) == 1:
-            # Single vector -> add batch dimension
-            q_t = tf.expand_dims(q_t, 0)
-            logger.debug(f"Reshaped input from {original_shape} to {tf.shape(q_t)}")
+        Args:
+            x_t: Input tensor with shape [batch_size, input_dim]
+            external_k_t: Optional external key projection (MAL variant)
+            external_v_t: Optional external value projection (MAL variant)
+            external_alpha_t: Optional external alpha gate (MAG variant - single value)
+            external_theta_t: Optional external theta gate (MAG variant - single value)
+            external_eta_t: Optional external eta gate (MAG variant - single value)
+            
+        Returns:
+            Tuple of (loss, gradients)
+        """
+        # Ensure x_t has correct shape with batch dimension
+        x_t = tf.convert_to_tensor(x_t, dtype=tf.float32)
+        if len(tf.shape(x_t)) == 1:
+            x_t = tf.expand_dims(x_t, 0)  # Add batch dim
         
-        # Config sanity check - key_dim and query_dim should match
-        if self.config['query_dim'] != self.config['key_dim']:
-            logger.error(f"CONFIG ERROR: query_dim ({self.config['query_dim']}) != key_dim ({self.config['key_dim']})")
-            # This is a configuration error that should be fixed
-            # For now, use key_dim as the source of truth for validation
-            expected_dim = self.config['key_dim']
-            logger.warning(f"Using key_dim={expected_dim} as expected dimension for memory_mlp input")
+        # Get projections if not provided externally
+        if external_k_t is None or external_v_t is None:
+            k_t, v_t, _ = self.get_projections(x_t)
+            k_t = external_k_t if external_k_t is not None else k_t
+            v_t = external_v_t if external_v_t is not None else v_t
         else:
-            expected_dim = self.config['key_dim']  # Either key_dim or query_dim (they should be equal)
-            
-        # Verify input dimensions match key_dim (what memory_mlp expects)
-        actual_dim = tf.shape(q_t)[-1]
-        if actual_dim != expected_dim:
-            logger.error(f"Input dimension mismatch: expected key_dim={expected_dim}, got {actual_dim}")
-            # This is a runtime error
-            raise ValueError(f"Input dimension mismatch: memory_mlp expects key_dim={expected_dim}, got {actual_dim}")
-            
-        retrieved_value = self.memory_mlp(q_t, training=training)
-        return retrieved_value
-
-    # Inner loop update step - NO @tf.function for now
-    def update_step(self, x_t: tf.Tensor) -> Tuple[tf.Tensor, List[tf.Tensor]]:
-        # Ensure proper input shape with batch dimension
-        if len(tf.shape(x_t)) == 1: x_t = tf.expand_dims(x_t, axis=0)
-        tf.debugging.assert_equal(tf.shape(x_t)[0], 1, message="update_step expects batch size 1")
-        tf.debugging.assert_equal(tf.shape(x_t)[-1], self.config['input_dim'], message="Input dimension mismatch")
-
-        # Get current gate values
-        alpha_t = tf.sigmoid(self.alpha_logit)
-        theta_t = tf.sigmoid(self.theta_logit)
-        eta_t = tf.sigmoid(self.eta_logit)
-
-        # Calculate projections
-        k_t, v_t, _ = self.get_projections(x_t)
-
-        # Access inner trainable variables directly from the memory_mlp
-        inner_vars = self.memory_mlp.trainable_variables
-        if not inner_vars:
-            logger.error("No inner trainable variables found in update_step!")
-            # Try force-building the MLP again to ensure variables are created
-            dummy_key = tf.zeros((1, self.config['key_dim']), dtype=tf.float32)
-            _ = self.memory_mlp(dummy_key)  # Force model execution
-            inner_vars = self.memory_mlp.trainable_variables
-            if not inner_vars:
-                return tf.constant(0.0), []
-            else:
-                logger.info(f"Successfully rebuilt memory MLP. Found {len(inner_vars)} trainable variables.")
-
-        # Ensure momentum state matches inner variables
-        if len(self.momentum_state) != len(inner_vars):
-            logger.warning("Rebuilding momentum state due to variable mismatch.")
-            self.momentum_state = [tf.Variable(tf.zeros_like(var), trainable=False, name=f"momentum_{i}") 
-                                 for i, var in enumerate(inner_vars)]
-
-        # Compute gradient with explicit watch on inner variables
+            # Both projections provided externally
+            k_t, v_t = external_k_t, external_v_t
+        
+        # Determine gate values - use externals if provided, otherwise use defaults
+        alpha_t = tf.convert_to_tensor(external_alpha_t, dtype=tf.float32) if external_alpha_t is not None else tf.nn.sigmoid(self.alpha_logit)  # Forget rate
+        theta_t = tf.convert_to_tensor(external_theta_t, dtype=tf.float32) if external_theta_t is not None else tf.nn.sigmoid(self.theta_logit)  # Inner learning rate
+        eta_t = tf.convert_to_tensor(external_eta_t, dtype=tf.float32) if external_eta_t is not None else tf.nn.sigmoid(self.eta_logit)      # Momentum
+        
+        # Log gate values for debugging
+        logger.debug(f"Applied gate values - alpha_t: {float(alpha_t.numpy()) if hasattr(alpha_t, 'numpy') else float(alpha_t)}, "
+                  f"theta_t: {float(theta_t.numpy()) if hasattr(theta_t, 'numpy') else float(theta_t)}, "
+                  f"eta_t: {float(eta_t.numpy()) if hasattr(eta_t, 'numpy') else float(eta_t)}")
+        
+        # Store the applied gates for downstream monitoring
+        self.last_applied_gates = {
+            "alpha_t": float(alpha_t.numpy()) if hasattr(alpha_t, 'numpy') else float(alpha_t),
+            "theta_t": float(theta_t.numpy()) if hasattr(theta_t, 'numpy') else float(theta_t),
+            "eta_t": float(eta_t.numpy()) if hasattr(eta_t, 'numpy') else float(eta_t)
+        }
+        
+        # --- Gradient Calculation using GradientTape ---
+        inner_vars = self.inner_trainable_variables
         with tf.GradientTape() as tape:
-            # Tape automatically watches trainable variables
-            predicted_v_t = self.memory_mlp(k_t, training=True)
-            loss = 0.5 * tf.reduce_sum(tf.square(predicted_v_t - v_t))
+            # Forward pass through memory MLP
+            predicted_v_t = self.memory_mlp(k_t, training=True) # Use k_t here
+            # Calculate loss using potentially modified v_t (from MAL or original)
+            loss = 0.5 * tf.reduce_mean(tf.square(predicted_v_t - v_t))
 
         grads = tape.gradient(loss, inner_vars)
+        # --- End Gradient Calculation ---
 
-        # Verify we have valid gradients
+        # --- Momentum and Weight Updates ---
         valid_grads_indices = [i for i, g in enumerate(grads) if g is not None]
-        if len(valid_grads_indices) != len(inner_vars): 
+        if len(valid_grads_indices) != len(inner_vars):
             logger.warning(f"Found {len(inner_vars) - len(valid_grads_indices)} None gradients in inner loop.")
 
-        # Compute momentum updates
         for i in valid_grads_indices:
             grad = grads[i]
             s_var = self.momentum_state[i]
@@ -317,18 +356,17 @@ class NeuralMemoryModule(tf.keras.Model):
             s_new = eta_t * s_var - theta_t * grad
             s_var.assign(s_new)
 
-        # Apply weight updates
         for i in valid_grads_indices:
             s_t = self.momentum_state[i]
             m_var = inner_vars[i]
             # Update memory weights
             m_new = (1.0 - alpha_t) * m_var + s_t
             m_var.assign(m_new)
+        # --- End Updates ---
 
-        # Return loss and gradients for tracking
-        return loss, grads
+        return loss, grads # Return original grads list (may contain None)
 
-
+    # Inner loop update step - NO @tf.function for now
     def train_step(self, data):
         input_sequence, target_sequence = data
         

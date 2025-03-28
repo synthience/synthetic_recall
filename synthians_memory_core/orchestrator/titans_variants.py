@@ -71,15 +71,23 @@ class TitansVariantConfig(dict):
 class TitansVariantBase:
     """Base class for all Titans architecture variants."""
     
-    def __init__(self, attention_config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[Union[TitansVariantConfig, Dict]] = None, **kwargs):
         """Initialize the base Titans variant.
         
         Args:
-            attention_config: Optional configuration dictionary for attention parameters.
+            config: Optional configuration dictionary for attention parameters.
         """
-        self.config = attention_config or {}
+        if isinstance(config, dict) or config is None: 
+            self.config = TitansVariantConfig(**(config or {}))
+        elif isinstance(config, TitansVariantConfig): 
+            self.config = config
+        else: 
+            raise TypeError("config must be a dict or TitansVariantConfig")
+            
         self.variant_type = TitansVariantType.NONE
         self.sequence_context = None
+        self.neural_memory_url = None
+        self.api_client = None
     
     def set_sequence_context(self, sequence_context) -> None:
         """Set the sequence context manager for historical attention context.
@@ -88,7 +96,19 @@ class TitansVariantBase:
             sequence_context: SequenceContextManager instance to use for context history.
         """
         self.sequence_context = sequence_context
+    
+    def set_neural_memory_url(self, neural_memory_url: str) -> None:
+        """Set the Neural Memory server URL and initialize API client.
         
+        Args:
+            neural_memory_url: URL to the Neural Memory server
+        """
+        self.neural_memory_url = neural_memory_url
+        # Initialize the API client for making requests to Neural Memory server
+        from ..api_client import NeuralMemoryClient
+        self.api_client = NeuralMemoryClient(base_url=neural_memory_url)
+        logger.info(f"Initialized API client for {self.name} variant with Neural Memory URL: {neural_memory_url}")
+    
     def process_input(self, memory_id: str, x_t: np.ndarray, k_t: np.ndarray, 
                       v_t: np.ndarray, q_t: np.ndarray, y_t: np.ndarray) -> Dict[str, Any]:
         """Process input through the variant's logic.
@@ -234,7 +254,7 @@ class MAGVariant(TitansVariantBase):
     
     Flow: 
     1. q_t -> Attend(q_t, K_hist, K_hist) -> attention_output
-    2. attention_output -> Gate Projections -> (alpha_t, theta_t, eta_t)
+    2. Call Neural Memory's /calculate_gates endpoint with attention output
     3. Update memory with calculated gates
     """
     
@@ -261,55 +281,7 @@ class MAGVariant(TitansVariantBase):
             name="MAG_Attention"
         )
         
-        # Gate projection layers (to be initialized when dimensions are known)
-        self.attention_to_gates = None
-        
-        logger.info(f"Initialized MAG variant with {attention_config['num_heads']} attention heads")
-    
-    def init_gate_projections(self, attention_dim: int):
-        """Initialize gate projection layers.
-        
-        These layers project the attention output to scalar gate values.
-        
-        Args:
-            attention_dim: Dimension of the attention output
-        """
-        self.attention_to_alpha = _get_tf().keras.layers.Dense(1, name="att_alpha_proj")
-        self.attention_to_theta = _get_tf().keras.layers.Dense(1, name="att_theta_proj")
-        self.attention_to_eta = _get_tf().keras.layers.Dense(1, name="att_eta_proj")
-        
-        # Build the layers with a dummy input to ensure variables are created
-        dummy_input = _get_tf().zeros([1, attention_dim], dtype='float32')
-        self.attention_to_alpha(dummy_input)
-        self.attention_to_theta(dummy_input)
-        self.attention_to_eta(dummy_input)
-        
-        logger.info(f"MAG: Initialized gate projection layers with attention_dim={attention_dim}")
-
-    def calculate_gates_from_attention(self, attention_output: 'tf.Tensor') -> Tuple[float, float, float]:
-        """Calculate gate values from attention output.
-        
-        Args:
-            attention_output: Output tensor from attention mechanism
-            
-        Returns:
-            Tuple of (alpha, theta, eta) gate values
-        """
-        if self.attention_to_alpha is None:
-            # Initialize gate projections if not already done
-            self.init_gate_projections(attention_output.shape[-1])
-        
-        # Project attention output to gate logits
-        alpha_logit = self.attention_to_alpha(attention_output)
-        theta_logit = self.attention_to_theta(attention_output)
-        eta_logit = self.attention_to_eta(attention_output)
-        
-        # Apply sigmoid activation and convert to scalar values
-        alpha = _get_tf().sigmoid(alpha_logit).numpy().item()
-        theta = _get_tf().sigmoid(theta_logit).numpy().item()
-        eta = _get_tf().sigmoid(eta_logit).numpy().item()
-        
-        return alpha, theta, eta
+        logger.info(f"MAG: Initialized attention module with config {attention_config}")
 
     def process_input(
         self,
@@ -325,7 +297,7 @@ class MAGVariant(TitansVariantBase):
         1. Store context tuple (timestamp, memory_id, x_t, k_t, v_t, q_t, y_t)
         2. Retrieve recent history keys from sequence_context
         3. Calculate attention output using K_hist
-        4. Project attention output to gate values (alpha, theta, eta)
+        4. Call Neural Memory's /calculate_gates endpoint with attention output
         5. Return calculated gates for use in neural memory update
         """
         # First store the context
@@ -365,19 +337,43 @@ class MAGVariant(TitansVariantBase):
                 training=False,
             )
             
-            # Calculate gates from attention output
-            alpha, theta, eta = self.calculate_gates_from_attention(attention_output)
-            
-            logger.info(f"MAG: Calculated gates from attention: alpha={alpha:.4f}, theta={theta:.4f}, eta={eta:.4f}")
-            
-            return {
-                "memory_id": memory_id,
-                "attended_output": y_t,  # No change to y_t
-                "alpha": alpha,
-                "theta": theta,
-                "eta": eta,
-                "metrics": self.attention_module.get_metrics(),
-            }
+            # Call the Neural Memory server's /calculate_gates endpoint
+            try:
+                # Prepare the request payload
+                attention_output_np = attention_output.numpy().squeeze()  # Remove batch dimension
+                
+                # Make the API request
+                response = self.api_client.calculate_gates(
+                    attention_output=attention_output_np.tolist()
+                )
+                
+                # Extract gate values from response
+                alpha = response.get("alpha")
+                theta = response.get("theta")
+                eta = response.get("eta")
+                
+                logger.info(f"MAG: Calculated gates from Neural Memory server: alpha={alpha:.4f}, theta={theta:.4f}, eta={eta:.4f}")
+                
+                return {
+                    "memory_id": memory_id,
+                    "attended_output": y_t,  # No change to y_t
+                    "alpha": alpha,
+                    "theta": theta,
+                    "eta": eta,
+                    "metrics": self.attention_module.get_metrics(),
+                }
+            except Exception as api_err:
+                logger.error(f"MAG: Failed to call /calculate_gates API: {api_err}")
+                # Fall back to default gates
+                return {
+                    "memory_id": memory_id,
+                    "attended_output": y_t,
+                    "alpha": None,
+                    "theta": None,
+                    "eta": None,
+                    "error": str(api_err),
+                    "metrics": self.attention_module.get_metrics(),
+                }
             
         except Exception as e:
             logger.error(f"MAG attention failed: {e}")

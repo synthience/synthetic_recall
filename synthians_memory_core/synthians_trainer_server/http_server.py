@@ -12,7 +12,7 @@ from typing import List, Dict, Any, Optional, Tuple, Literal
 import logging
 import traceback # Import traceback
 import datetime  # Add datetime module for timestamps
-
+import inspect
 # Import the new Neural Memory module and config
 from .neural_memory import NeuralMemoryModule, NeuralMemoryConfig
 
@@ -67,7 +67,7 @@ class InitResponse(BaseModel):
     config: dict # Return as dict for JSON
 
 class RetrieveRequest(BaseModel):
-    query_embedding: List[float]
+    input_embedding: List[float]
 
 class RetrieveResponse(BaseModel):
     retrieved_embedding: List[float]
@@ -75,6 +75,12 @@ class RetrieveResponse(BaseModel):
 
 class UpdateMemoryRequest(BaseModel):
     input_embedding: List[float]
+    # Add external projections and gates for MAG/MAL variants
+    external_key_projection: Optional[List[float]] = None
+    external_value_projection: Optional[List[float]] = None
+    external_alpha_gate: Optional[float] = None
+    external_theta_gate: Optional[float] = None
+    external_eta_gate: Optional[float] = None
 
 class UpdateMemoryResponse(BaseModel):
     status: str
@@ -82,6 +88,10 @@ class UpdateMemoryResponse(BaseModel):
     grad_norm: Optional[float] = None
     key_projection: Optional[List[float]] = None
     value_projection: Optional[List[float]] = None
+    # Add applied gates to response for debugging
+    applied_alpha: Optional[float] = None
+    applied_theta: Optional[float] = None
+    applied_eta: Optional[float] = None
 
 class TrainOuterRequest(BaseModel):
     input_sequence: List[List[float]]
@@ -113,6 +123,28 @@ class GetProjectionsResponse(BaseModel):
     value_projection: List[float]
     query_projection: List[float]
     projection_metadata: dict
+
+class CalculateGatesRequest(BaseModel):
+    attention_output: List[float] = Field(..., description="Output from the attention mechanism")
+    current_alpha: Optional[float] = None
+    current_theta: Optional[float] = None
+    current_eta: Optional[float] = None
+
+class CalculateGatesResponse(BaseModel):
+    alpha: float
+    theta: float
+    eta: float
+    metadata: dict = Field(default_factory=dict)
+
+class ConfigRequest(BaseModel):
+    variant: Optional[str] = Field(None, description="Titans variant to use (MAC, MAG, MAL)")
+
+class ConfigResponse(BaseModel):
+    neural_memory_config: dict
+    attention_config: Optional[dict] = None
+    titans_variant: str
+    supports_external_gates: bool
+    supports_external_projections: bool
 
 class ClusterHotspot(BaseModel):
     cluster_id: str
@@ -166,22 +198,19 @@ def _validate_vector(vec: Optional[List[float]], expected_dim: int, name: str, a
     if expected_dim != -1 and len(vec) != expected_dim:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid vector length for '{name}'. Expected {expected_dim}, got {len(vec)}."
-        )
+            detail=f"Invalid vector length for '{name}'. Expected {expected_dim}, got {len(vec)}.")
     # Add NaN/Inf check
     try:
          # Using np.isfinite is more efficient for checking both NaN and Inf
          if not np.all(np.isfinite(vec)):
              raise HTTPException(
                   status_code=400,
-                  detail=f"Invalid values (NaN/Inf) found in '{name}'."
-             )
+                  detail=f"Invalid values (NaN/Inf) found in '{name}'.")
     except TypeError:
           # This might happen if vec contains non-numeric types
           raise HTTPException(
                status_code=400,
-               detail=f"Invalid value types in '{name}', expected floats."
-          )
+               detail=f"Invalid value types in '{name}', expected floats.")
 
 
 # --- API Endpoints ---
@@ -253,16 +282,20 @@ async def init_neural_memory(req: InitRequest):
 async def retrieve(req: RetrieveRequest):
     nm = get_neural_memory()
     try:
-        _validate_vector(req.query_embedding, nm.config['input_dim'], "query_embedding")
+        _validate_vector(req.input_embedding, nm.config['input_dim'], "input_embedding")
         
         # Create tensor with proper batch dimension as expected by TensorFlow
-        query_tensor = tf.convert_to_tensor([req.query_embedding], dtype=tf.float32)
+        input_tensor = tf.convert_to_tensor([req.input_embedding], dtype=tf.float32)
         
         # Get the query projection
-        _, _, q_t = nm.get_projections(query_tensor)
+        k_t, v_t, q_t = nm.get_projections(input_tensor)
         
-        # Pass the query tensor to __call__ (equivalent to forward)
-        retrieved_embedding = nm(query_tensor)
+        # Log shapes for debugging
+        logger.debug(f"DEBUG /retrieve: Shape of input_tensor: {tf.shape(input_tensor).numpy()}, Shape of q_t: {tf.shape(q_t).numpy()}")
+        logger.debug(f"DEBUG /retrieve: Config - query_dim={nm.config['query_dim']}, key_dim={nm.config['key_dim']}")
+        
+        # Pass the QUERY projection to the model, not the raw input tensor
+        retrieved_embedding = nm(q_t)
         
         # Convert to Python list for JSON serialization
         retrieved_embedding_list = retrieved_embedding[0].numpy().tolist() if len(tf.shape(retrieved_embedding)) > 1 else retrieved_embedding.numpy().tolist()
@@ -285,14 +318,62 @@ async def update_memory(req: UpdateMemoryRequest):
     try:
         _validate_vector(req.input_embedding, nm.config['input_dim'], "input_embedding")
         
+        # Validate optional external projections if provided
+        if req.external_key_projection is not None:
+            _validate_vector(req.external_key_projection, nm.config['key_dim'], "external_key_projection")
+        if req.external_value_projection is not None:
+            _validate_vector(req.external_value_projection, nm.config['value_dim'], "external_value_projection")
+        
         # Create tensor with proper batch dimension as expected by TensorFlow
         input_tensor = tf.convert_to_tensor([req.input_embedding], dtype=tf.float32)
 
-        # Get the key and value projections
-        k_t, v_t, _ = nm.get_projections(input_tensor)
+        # Prepare external projections if provided (for MAL variant)
+        external_k_t = None
+        external_v_t = None
+        if req.external_key_projection is not None:
+            external_k_t = tf.convert_to_tensor([req.external_key_projection], dtype=tf.float32)
+        if req.external_value_projection is not None:
+            external_v_t = tf.convert_to_tensor([req.external_value_projection], dtype=tf.float32)
+
+        # Get the key and value projections if not provided externally
+        if external_k_t is None or external_v_t is None:
+            k_t, v_t, _ = nm.get_projections(input_tensor)
+            # Use externally provided projections if available
+            if external_k_t is not None:
+                k_t = external_k_t
+            if external_v_t is not None:
+                v_t = external_v_t
+        else:
+            # Both projections provided externally
+            k_t, v_t = external_k_t, external_v_t
+
+        # Prepare external gates if provided (for MAG variant)
+        external_gates = {}
+        if req.external_alpha_gate is not None:
+            external_gates["alpha_t"] = req.external_alpha_gate
+        if req.external_theta_gate is not None:
+            external_gates["theta_t"] = req.external_theta_gate
+        if req.external_eta_gate is not None:
+            external_gates["eta_t"] = req.external_eta_gate
         
-        # Pass to update_step which now expects a batched tensor with shape [1, input_dim]
-        loss_tensor, grads = nm.update_step(input_tensor)
+        # Log the gate values we're using
+        if any([req.external_alpha_gate, req.external_theta_gate, req.external_eta_gate]):
+            logger.info(f"MAG variant: Using external gates - alpha:{req.external_alpha_gate}, theta:{req.external_theta_gate}, eta:{req.external_eta_gate}")
+        
+        # Call update_step with the correct named parameters
+        loss_tensor, grads = nm.update_step(
+            x_t=input_tensor,
+            external_k_t=k_t,  # Pass the determined key projection
+            external_v_t=v_t,  # Pass the determined value projection
+            external_alpha_t=req.external_alpha_gate,  # Pass individual gate values
+            external_theta_t=req.external_theta_gate,
+            external_eta_t=req.external_eta_gate
+        )
+
+        # Get the actual gates used (if available from the method)
+        applied_gates = {}
+        if hasattr(nm, "last_applied_gates") and nm.last_applied_gates:
+            applied_gates = nm.last_applied_gates
 
         grad_norm = 0.0
         if grads:
@@ -317,7 +398,9 @@ async def update_memory(req: UpdateMemoryRequest):
             emotion=req.metadata.get("emotion") if hasattr(req, "metadata") and req.metadata else None,
             metadata={
                 "timestamp": timestamp,
-                "input_dim": len(req.input_embedding)
+                "input_dim": len(req.input_embedding),
+                "external_projections_used": external_k_t is not None or external_v_t is not None,
+                "external_gates_used": bool(external_gates)
             }
         )
 
@@ -330,7 +413,10 @@ async def update_memory(req: UpdateMemoryRequest):
             loss=loss_value,
             grad_norm=grad_norm,
             key_projection=key_projection_list,
-            value_projection=value_projection_list
+            value_projection=value_projection_list,
+            applied_alpha=applied_gates.get("alpha_t"),
+            applied_theta=applied_gates.get("theta_t"),
+            applied_eta=applied_gates.get("eta_t")
         )
     except HTTPException as http_exc: raise http_exc
     except Exception as e:
@@ -592,6 +678,108 @@ async def diagnose_emoloop(window: str = "last_100", emotion_filter: Optional[st
     
     return response
 
+@app.post("/calculate_gates", response_model=CalculateGatesResponse)
+async def calculate_gates(request: CalculateGatesRequest):
+    """Calculate gate values (alpha, theta, eta) from attention output for MAG variant.
+    
+    Args:
+        request: The request containing attention output and optional current gate values
+    
+    Returns:
+        CalculateGatesResponse containing the calculated gate values
+    """
+    nm = get_neural_memory()
+    try:
+        # Convert attention output to tensor
+        attention_output = tf.convert_to_tensor([request.attention_output], dtype=tf.float32)
+        
+        # Call the calculate_gates method of the Neural Memory Module
+        alpha_t, theta_t, eta_t = nm.calculate_gates(attention_output)
+        
+        # Convert to Python scalars for response
+        alpha_value = float(alpha_t.numpy()) if hasattr(alpha_t, 'numpy') else float(alpha_t)
+        theta_value = float(theta_t.numpy()) if hasattr(theta_t, 'numpy') else float(theta_t)
+        eta_value = float(eta_t.numpy()) if hasattr(eta_t, 'numpy') else float(eta_t)
+        
+        # Create response with metadata
+        return CalculateGatesResponse(
+            alpha=alpha_value,
+            theta=theta_value,
+            eta=eta_value,
+            metadata={
+                "timestamp": datetime.datetime.now().isoformat(),
+                "attention_output_dim": len(request.attention_output),
+                "current_alpha": request.current_alpha,
+                "current_theta": request.current_theta,
+                "current_eta": request.current_eta
+            }
+        )
+    except Exception as e:
+        logger.error(f"Calculate gates failed: {e}\n{traceback.format_exc()}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Calculate gates error: {str(e)}")
+
+@app.get("/config", response_model=ConfigResponse)
+@app.post("/config", response_model=ConfigResponse)
+async def get_config(request: Optional[ConfigRequest] = None):
+    """Get or update the Neural Memory configuration, including Titans variant support.
+    
+    Args:
+        request: Optional request to update the Titans variant
+    
+    Returns:
+        ConfigResponse containing the current configuration
+    """
+    nm = get_neural_memory()
+    try:
+        # Update variant if requested
+        if request and request.variant:
+            # Validate variant
+            valid_variants = ["MAC", "MAG", "MAL"]
+            if request.variant.upper() not in valid_variants:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Invalid Titans variant '{request.variant}'. Must be one of {valid_variants}"
+                )
+            
+            # Set environment variable for variant
+            os.environ["TITANS_VARIANT"] = request.variant.upper()
+            logger.info(f"Updated TITANS_VARIANT to {request.variant.upper()}")
+        
+        # Get current variant from environment or default to MAC
+        current_variant = os.environ.get("TITANS_VARIANT", "MAC").upper()
+        
+        # Dynamically determine capabilities based on implemented method signatures
+        # Check if update_step supports external gates and projections using inspect
+        update_step_sig = inspect.signature(nm.update_step)
+        supports_external_gates = any(param in update_step_sig.parameters 
+                                   for param in ["external_alpha_t", "external_theta_t", "external_eta_t"])
+        supports_external_projections = any(param in update_step_sig.parameters 
+                                        for param in ["external_k_t", "external_v_t"])
+        
+        logger.info(f"Detected capabilities: supports_external_gates={supports_external_gates}, "
+                   f"supports_external_projections={supports_external_projections}")
+        
+        # Get neural memory config
+        neural_memory_config = nm.get_config_dict()
+        
+        # Get attention config if available
+        attention_config = None
+        if hasattr(nm, "attention_config"):
+            attention_config = nm.attention_config
+        
+        return ConfigResponse(
+            neural_memory_config=neural_memory_config,
+            attention_config=attention_config,
+            titans_variant=current_variant,
+            supports_external_gates=supports_external_gates,
+            supports_external_projections=supports_external_projections
+        )
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        logger.error(f"Config endpoint failed: {e}\n{traceback.format_exc()}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Config error: {str(e)}")
+
 # --- App startup/shutdown ---
 @app.on_event("startup")
 async def startup_event():
@@ -607,12 +795,12 @@ async def startup_event():
             'input_dim': 768,
             # Key and query dimensions should match for proper attention computation
             'key_dim': 128,
-            'query_dim': 128,  # Match key_dim for proper dimension alignment
-            'value_dim': 768,  # Output dimension matches input_dim for consistency
-            'hidden_dim': 512   # Intermediate projection dimension
+            'query_dim': 128,  
+            'value_dim': 768,  
+            'hidden_dim': 512   
         }
         load_path = os.environ.get("NM_DEFAULT_STATE_PATH", None)
-        mc_url = os.environ.get("MEMORY_CORE_URL", "http://localhost:5010") # Get MC URL if needed
+        mc_url = os.environ.get("MEMORY_CORE_URL", "http://localhost:5010") 
 
         # Create default config
         config = NeuralMemoryConfig(**default_config_dict)
@@ -624,13 +812,14 @@ async def startup_event():
         geometry_manager = GeometryManager({'embedding_dim': neural_memory.config['input_dim']})
         # Reset surprise detector to use new geometry manager if re-initializing
         surprise_detector = None
-        get_surprise_detector() # Initialize if not already
+        get_surprise_detector() 
 
         # Attempt to load state if path specified
         if load_path:
             logger.info(f"Attempting to load default state from: {load_path}")
             # Build model before loading
             try:
+                logger.info("Building model before loading state...")
                 _ = neural_memory(tf.zeros((1, neural_memory.config['query_dim'])))
                 logger.info("Model built successfully for auto-load.")
             except Exception as build_err:
@@ -683,4 +872,4 @@ if __name__ == "__main__":
     if not np.__version__.startswith("1."):
         print("\n\n!!!! WARNING: Numpy version is not < 2.0.0. This may cause issues with TensorFlow/other libs. !!!!\n\n")
 
-    uvicorn.run(app, host=host, port=port, log_level=log_level) # Run using the app object directly
+    uvicorn.run(app, host=host, port=port, log_level=log_level) 
