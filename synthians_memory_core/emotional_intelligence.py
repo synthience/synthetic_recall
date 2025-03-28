@@ -5,10 +5,19 @@ import numpy as np
 from typing import Dict, List, Optional, Any
 
 from .custom_logger import logger # Use the shared custom logger
-from .emotion_analyzer import EmotionAnalyzer  # Import the proper implementation
+from .emotion_analyzer import EmotionAnalyzer as _EmotionAnalyzer  # Import with alias to avoid name conflicts
 
-# NOTE: The EmotionalAnalyzer class has been moved to emotion_analyzer.py
-# This file now only contains the EmotionalGatingService class
+# Maintain backward compatibility by re-exporting the class
+# This prevents import errors in existing code that imports from this module
+class EmotionalAnalyzer(_EmotionAnalyzer):
+    """Re-export of the EmotionAnalyzer class from emotion_analyzer.py for backward compatibility."""
+    pass
+
+# Export EmotionalAnalyzer for backward compatibility
+__all__ = ['EmotionalAnalyzer', 'EmotionalGatingService']
+
+# NOTE: The EmotionalAnalyzer class implementation has been moved to emotion_analyzer.py
+# This file now only contains the EmotionalGatingService class and a compatibility wrapper
 
 class EmotionalGatingService:
     """Applies emotional gating to memory retrieval."""

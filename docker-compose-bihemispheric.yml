@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  memory-core:
+    image: nemo_qr_v1:latest
+    container_name: memory-core
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+    environment:
+      - MODEL_ENDPOINT=all-mpnet-base-v2
+      - PORT=8000
+    command: bash -c "pip install -q fastapi uvicorn aiohttp pydantic tensorflow && python -m synthians_memory_core.api.server"
+    networks:
+      - lucidia-network
+
+  trainer-server:
+    image: nemo_qr_v1:latest
+    container_name: trainer-server
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./:/app
+    environment:
+      - MEMORY_CORE_URL=http://memory-core:8000
+      - PORT=8001
+    command: bash -c "pip install -q fastapi uvicorn aiohttp pydantic tensorflow && python -m synthians_memory_core.synthians_trainer_server.http_server"
+    depends_on:
+      - memory-core
+    networks:
+      - lucidia-network
+
+  context-cascade-orchestrator:
+    image: nemo_qr_v1:latest
+    container_name: context-cascade-orchestrator
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./:/app
+    environment:
+      - MEMORY_CORE_URL=http://memory-core:8000
+      - TRAINER_URL=http://trainer-server:8001
+    command: bash -c "pip install -q fastapi uvicorn aiohttp pydantic tensorflow && python -m uvicorn synthians_memory_core.orchestrator.server:app --host 0.0.0.0 --port 8000"
+    depends_on:
+      - memory-core
+      - trainer-server
+    networks:
+      - lucidia-network
+
+networks:
+  lucidia-network:
+    driver: bridge

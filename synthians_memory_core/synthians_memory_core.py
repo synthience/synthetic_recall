@@ -9,6 +9,7 @@ import random
 import uuid
 import json
 import os
+import datetime as dt
 
 # Import core components from this package
 from .custom_logger import logger
@@ -861,6 +862,18 @@ class SynthiansMemoryCore:
             logger.warning("SynthiansMemoryCore", "Using deterministic hash-based embedding generation")
             return self.geometry_manager._normalize(embedding)
 
+    async def get_memory_by_id(self, memory_id: str) -> Optional[MemoryEntry]:
+        """Retrieve a specific memory entry by its ID.
+        
+        Args:
+            memory_id: The unique identifier of the memory to retrieve
+            
+        Returns:
+            The MemoryEntry if found, None otherwise
+        """
+        async with self._lock:
+            return self._memories.get(memory_id, None)
+
     def get_stats(self) -> Dict[str, Any]:
         """Get current statistics."""
         persistence_stats = asyncio.run(self.persistence.get_stats()) # Run sync in this context
@@ -987,3 +1000,51 @@ Args:
         except Exception as e:
             logger.error("SynthiansMemoryCore", f"Error processing memory synchronously: {str(e)}")
             return None
+
+    async def update_memory(self, memory_id: str, updates: Dict[str, Any]) -> bool:
+        """Update a memory entry with provided updates.
+        
+        Args:
+            memory_id: ID of the memory to update
+            updates: Dictionary of fields to update and their new values
+            
+        Returns:
+            True if the update succeeded, False otherwise
+        """
+        try:
+            async with self._lock:
+                # Get the memory
+                memory = self._memories.get(memory_id)
+                if not memory:
+                    logger.warning("SynthiansMemoryCore", f"Cannot update memory {memory_id}: Not found")
+                    return False
+                
+                # Update the memory fields
+                for key, value in updates.items():
+                    if hasattr(memory, key):
+                        setattr(memory, key, value)
+                    elif key == "metadata" and isinstance(value, dict):
+                        # Special handling for metadata to merge rather than replace
+                        if memory.metadata is None:
+                            memory.metadata = {}
+                        memory.metadata.update(value)
+                    else:
+                        logger.warning("SynthiansMemoryCore", f"Unknown field '{key}' in memory update")
+                
+                # Update quickrecal timestamp if quickrecal score was changed
+                if "quickrecal_score" in updates:
+                    memory.quickrecal_updated = dt.datetime.utcnow()
+                
+                # If this memory is in the vector index, update it there as well
+                if memory.embedding is not None and memory_id in self.vector_index.id_to_index:
+                    self.vector_index.update_entry(memory_id, memory.embedding)
+                
+                # Schedule persistence update
+                await self.persistence.save_memory(memory)
+                
+                logger.info("SynthiansMemoryCore", f"Updated memory {memory_id} with {len(updates)} fields")
+                return True
+                
+        except Exception as e:
+            logger.error("SynthiansMemoryCore", f"Error updating memory {memory_id}: {str(e)}")
+            return False

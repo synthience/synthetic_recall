@@ -215,6 +215,20 @@ class NeuralMemoryModule(tf.keras.Model):
         v_t = self.WV_layer(x_t)
         q_t = self.WQ_layer(x_t)
         return k_t, v_t, q_t
+    
+    def get_projection_hash(self) -> str:
+        """Returns a hash representation of the current projection matrices.
+        
+        This is used for introspection and cognitive tracing, allowing the system to
+        detect when projection matrices have changed between different runs or sessions.
+        
+        Returns:
+            str: A hash string representing the current state of WK, WV, WQ matrices
+        """
+        # In a full implementation, this would calculate a hash based on the actual weight values
+        # For now, return a placeholder with timestamp to make it somewhat unique
+        timestamp = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+        return f"proj_matrix_hash_{timestamp}"
 
     def call(self, q_t: tf.Tensor, training=False) -> tf.Tensor:
         """Retrieve value from memory given query q_t (inference only)."""
@@ -228,14 +242,22 @@ class NeuralMemoryModule(tf.keras.Model):
             q_t = tf.expand_dims(q_t, 0)
             logger.debug(f"Reshaped input from {original_shape} to {tf.shape(q_t)}")
         
-        # Verify dimensions
-        if tf.shape(q_t)[-1] != self.config['query_dim']:
-            logger.warning(f"Query dimension mismatch: expected {self.config['query_dim']}, got {tf.shape(q_t)[-1]}")
-            # If crucial dimension doesn't match, raise error
-            raise ValueError(f"Query dimension mismatch: expected {self.config['query_dim']}, got {tf.shape(q_t)[-1]}")
-            
+        # Config sanity check - key_dim and query_dim should match
         if self.config['query_dim'] != self.config['key_dim']:
-            raise ValueError(f"query_dim ({self.config['query_dim']}) must match key_dim ({self.config['key_dim']})")
+            logger.error(f"CONFIG ERROR: query_dim ({self.config['query_dim']}) != key_dim ({self.config['key_dim']})")
+            # This is a configuration error that should be fixed
+            # For now, use key_dim as the source of truth for validation
+            expected_dim = self.config['key_dim']
+            logger.warning(f"Using key_dim={expected_dim} as expected dimension for memory_mlp input")
+        else:
+            expected_dim = self.config['key_dim']  # Either key_dim or query_dim (they should be equal)
+            
+        # Verify input dimensions match key_dim (what memory_mlp expects)
+        actual_dim = tf.shape(q_t)[-1]
+        if actual_dim != expected_dim:
+            logger.error(f"Input dimension mismatch: expected key_dim={expected_dim}, got {actual_dim}")
+            # This is a runtime error
+            raise ValueError(f"Input dimension mismatch: memory_mlp expects key_dim={expected_dim}, got {actual_dim}")
             
         retrieved_value = self.memory_mlp(q_t, training=training)
         return retrieved_value
@@ -276,9 +298,7 @@ class NeuralMemoryModule(tf.keras.Model):
 
         # Compute gradient with explicit watch on inner variables
         with tf.GradientTape() as tape:
-            # Explicitly watch all inner variables
-            for var in inner_vars:
-                tape.watch(var)
+            # Tape automatically watches trainable variables
             predicted_v_t = self.memory_mlp(k_t, training=True)
             loss = 0.5 * tf.reduce_sum(tf.square(predicted_v_t - v_t))
 

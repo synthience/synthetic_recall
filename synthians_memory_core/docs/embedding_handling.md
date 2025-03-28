@@ -7,6 +7,103 @@ The Synthians Memory Core implements robust handling for embeddings throughout t
 1. **Dimension Mismatches**: Safely handling vectors of different dimensions (e.g., 384 vs. 768)
 2. **Malformed Embeddings**: Detecting and handling NaN/Inf values in embedding vectors
 3. **Efficient Retrieval**: Using FAISS for fast similarity search with automatic GPU acceleration
+4. **Component Compatibility**: Ensuring consistent behavior across different components through backward compatibility
+
+## Recent Enhancements (March 2025)
+
+Several significant improvements have been made to the embedding handling system:
+
+### 1. Backward Compatibility Methods in GeometryManager
+
+To ensure consistent behavior across all components, backward compatibility methods were added to the GeometryManager class:
+
+```python
+def _align_vectors(self, v1: np.ndarray, v2: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Backward compatibility method that forwards to align_vectors."""
+    return self.align_vectors(v1, v2)
+
+def _normalize(self, vector: np.ndarray) -> np.ndarray:
+    """Backward compatibility method that forwards to normalize_embedding."""
+    # Ensure vector is numpy array before calling
+    validated_vector = self._validate_vector(vector, "Vector for _normalize")
+    if validated_vector is None:
+        # Return zero vector if validation fails
+        return np.zeros(self.config.get('embedding_dim', 768), dtype=np.float32)
+    return self.normalize_embedding(validated_vector)
+```
+
+These methods ensure that both naming conventions (`_align_vectors`/`align_vectors` and `_normalize`/`normalize_embedding`) work correctly across all components.
+
+### 2. Robust Vector Alignment
+
+The system now includes comprehensive support for handling dimension mismatches between different embedding models (particularly 384D vs 768D vectors):
+
+```python
+def _align_vectors_for_comparison(v1, v2):
+    """Safely align two vectors to the same dimension for comparison operations.
+    
+    If vectors have different dimensions, either pads the smaller one with zeros
+    or truncates the larger one to match dimensions.
+    
+    Args:
+        v1: First vector (numpy array)
+        v2: Second vector (numpy array)
+        
+    Returns:
+        Tuple of aligned vectors (v1_aligned, v2_aligned)
+    """
+    if v1.shape != v2.shape:
+        # Get dimensions
+        dim1 = v1.shape[0]
+        dim2 = v2.shape[0]
+        target_dim = max(dim1, dim2)
+        
+        # Align vectors to target dimension
+        if dim1 < target_dim:
+            v1 = np.pad(v1, (0, target_dim - dim1))
+        elif dim1 > target_dim:
+            v1 = v1[:target_dim]
+            
+        if dim2 < target_dim:
+            v2 = np.pad(v2, (0, target_dim - dim2))
+        elif dim2 > target_dim:
+            v2 = v2[:target_dim]
+    
+    return v1, v2
+```
+
+### 3. Enhanced Embedding Validation
+
+All embeddings are now validated more thoroughly with proper error handling:
+
+```python
+def _validate_embedding(embedding, allow_zero=True):
+    """Validate that an embedding vector contains only valid values.
+    
+    Args:
+        embedding: The embedding vector to validate
+        allow_zero: Whether to allow zero vectors
+        
+    Returns:
+        bool: True if the embedding is valid, False otherwise
+    """
+    if embedding is None:
+        return False
+        
+    # Convert to numpy array if needed
+    if not isinstance(embedding, np.ndarray):
+        embedding = np.array(embedding, dtype=np.float32)
+        
+    # Check for NaN or Inf values
+    if np.isnan(embedding).any() or np.isinf(embedding).any():
+        return False
+        
+    # Optionally check for zero vectors
+    if not allow_zero and np.all(embedding == 0):
+        return False
+        
+    return True
+```
 
 ## Embedding Validation
 

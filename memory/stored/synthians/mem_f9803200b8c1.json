@@ -830,7 +830,8 @@
     "embedding_sparsity": 0.21744791666666666,
     "embedding_dim": 768,
     "length": 88,
-    "uuid": "mem_f9803200b8c1"
+    "uuid": "mem_f9803200b8c1",
+    "effective_quickrecal": 0.6934840287331646
   },
   "access_count": 0,
   "last_access_time": 1743104895.1903808,

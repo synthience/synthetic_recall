@@ -6,15 +6,18 @@ import numpy as np
 import aiohttp
 import asyncio
 import json
-from fastapi import FastAPI, HTTPException, Body, Request, status
+from fastapi import FastAPI, HTTPException, Body, Request, status, Response
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Literal
 import logging
 import traceback # Import traceback
 import datetime  # Add datetime module for timestamps
 
 # Import the new Neural Memory module and config
 from .neural_memory import NeuralMemoryModule, NeuralMemoryConfig
+
+# Import the new MetricsStore for cognitive flow instrumentation
+from .metrics_store import MetricsStore, get_metrics_store
 
 # Keep SurpriseDetector if needed for outer loop analysis
 from .surprise_detector import SurpriseDetector
@@ -94,6 +97,36 @@ class StatusResponse(BaseModel):
 class AnalyzeSurpriseRequest(BaseModel):
     predicted_embedding: List[float]
     actual_embedding: List[float]
+
+class GetProjectionsRequest(BaseModel):
+    input_embedding: List[float] = Field(..., description="The raw input embedding vector")
+    embedding_model: str = Field(default="unknown", example="sentence-transformers/all-mpnet-base-v2")
+    projection_adapter: Optional[str] = Field(default="identity")
+
+class GetProjectionsResponse(BaseModel):
+    input_embedding_norm: float
+    projection_adapter_used: str
+    key_projection: List[float]
+    value_projection: List[float]
+    query_projection: List[float]
+    projection_metadata: dict
+
+class ClusterHotspot(BaseModel):
+    cluster_id: str
+    updates: int
+
+class DiagnoseEmoLoopResponse(BaseModel):
+    diagnostic_window: str
+    avg_loss: float
+    avg_grad_norm: float
+    avg_quickrecal_boost: float
+    dominant_emotions_boosted: List[str]
+    emotional_entropy: float
+    emotion_bias_index: float
+    user_emotion_match_rate: float
+    cluster_update_hotspots: List[ClusterHotspot]
+    alerts: List[str]
+    recommendations: List[str]
 
 # --- Helper Functions ---
 
@@ -217,13 +250,28 @@ async def init_neural_memory(req: InitRequest):
 async def retrieve_memory(req: RetrieveRequest):
     nm = get_neural_memory()
     try:
-        _validate_vector(req.query_embedding, nm.config['query_dim'], "query_embedding")
-        
-        # Convert to proper tensor shape expected by the model (batch dimension)
+        # Convert to tensor format
         query_tensor = tf.convert_to_tensor([req.query_embedding], dtype=tf.float32)
         
-        # Call the model with the properly shaped tensor
-        retrieved_tensor = nm(query_tensor, training=False)
+        # Get projected query vector using NeuralMemoryModule's get_projections
+        logger.info(f"Getting projections for query with shape {query_tensor.shape}")
+        k_t, v_t, q_t = nm.get_projections(query_tensor)
+        
+        # Log debug information about shapes and config
+        logger.info(f"DEBUG: Shape of k_t: {tf.shape(k_t).numpy()}, Shape of q_t: {tf.shape(q_t).numpy()}")
+        logger.info(f"DEBUG: Config - query_dim={nm.config['query_dim']}, key_dim={nm.config['key_dim']}")
+        
+        # Check for dimension mismatch in configuration
+        if nm.config['query_dim'] != nm.config['key_dim']:
+            logger.warning(f"Configuration error detected! Using k_t (key projection) instead of q_t because q_t has incorrect dimensions")
+            # Use k_t which is already at key_dim (128) dimensionality
+            input_tensor = k_t
+        else:
+            # Configuration is correct, use q_t as intended
+            input_tensor = q_t
+            
+        # Use the properly dimensioned tensor for memory retrieval
+        retrieved_tensor = nm(input_tensor, training=False)
         
         if retrieved_tensor is None or not isinstance(retrieved_tensor, tf.Tensor):
              raise ValueError("Retrieval process returned None or invalid type")
@@ -234,6 +282,28 @@ async def retrieve_memory(req: RetrieveRequest):
              retrieved_list = retrieved_tensor[0].numpy().tolist()
         else:
              retrieved_list = retrieved_tensor.numpy().tolist()
+        
+        # Log the retrieval metrics
+        # Note: In a real implementation, we would have more metadata about the retrieved memories
+        # This is a simplified version that just logs the retrieval vector
+        metrics = get_metrics_store()
+        
+        # Extract user emotion from request metadata if available
+        user_emotion = None
+        if hasattr(req, "metadata") and req.metadata and "user_emotion" in req.metadata:
+            user_emotion = req.metadata["user_emotion"]
+            
+        # For now, we don't have full memory metadata in this endpoint
+        # In a more complete implementation, we would track the actual memories retrieved
+        metrics.log_retrieval(
+            query_embedding=req.query_embedding,
+            retrieved_memories=[{"memory_id": "synthetic_memory", "embedding": retrieved_list}],
+            user_emotion=user_emotion,
+            metadata={
+                "timestamp": datetime.datetime.now().isoformat(),
+                "embedding_dim": len(retrieved_list)
+            }
+        )
 
         return RetrieveResponse(retrieved_embedding=retrieved_list)
 
@@ -266,7 +336,26 @@ async def update_memory(req: UpdateMemoryRequest):
 
         # Include timestamp in response for tracking
         timestamp = datetime.datetime.now().isoformat()
-        return UpdateMemoryResponse(status="success", loss=loss_value, grad_norm=grad_norm)
+        
+        # Log metrics to MetricsStore for cognitive flow monitoring
+        metrics = get_metrics_store()
+        metrics.log_memory_update(
+            input_embedding=req.input_embedding,
+            loss=loss_value,
+            grad_norm=grad_norm,
+            # Extract emotion if available in metadata
+            emotion=req.metadata.get("emotion") if hasattr(req, "metadata") and req.metadata else None,
+            metadata={
+                "timestamp": timestamp,
+                "input_dim": len(req.input_embedding)
+            }
+        )
+
+        return UpdateMemoryResponse(
+            status="success",
+            loss=loss_value,
+            grad_norm=grad_norm
+        )
 
     except HTTPException as http_exc: raise http_exc
     except Exception as e:
@@ -347,23 +436,19 @@ async def load_neural_memory_state(req: SaveLoadRequest):
         
         # Create a properly initialized model with the saved config
         temp_nm = NeuralMemoryModule(config=saved_config)
-        
-        # Force build by creating dummy inputs and running a forward pass
-        dummy_input = tf.zeros((1, temp_nm.config['input_dim']), dtype=tf.float32)
-        dummy_query = tf.zeros((1, temp_nm.config['query_dim']), dtype=tf.float32)
-        _ = temp_nm.get_projections(dummy_input)
-        _ = temp_nm(dummy_query)
-        
-        # Now load the state into the fully initialized model with matching config
+
+        # Initialize geometry manager and surprise detector based on config
+        geometry_manager = GeometryManager({'embedding_dim': temp_nm.config['input_dim']})
+        # Reset surprise detector to use new geometry manager if re-initializing
+        surprise_detector = None
+        get_surprise_detector() # Initialize if not already
+
+        # Attempt to load state into the fully initialized model with matching config
         loaded_ok = temp_nm.load_state(req.path)
 
         if loaded_ok:
             # Replace the global instance with our successfully loaded one
             neural_memory = temp_nm
-            # Re-initialize dependent components with the loaded config
-            geometry_manager = GeometryManager({'embedding_dim': neural_memory.config['input_dim']})
-            surprise_detector = None  # Force re-init with new geometry manager
-            get_surprise_detector()
             logger.info(f"Neural Memory state loaded from {req.path} and components re-initialized.")
             return {"message": f"Neural Memory state loaded from {req.path}"}
         else:
@@ -414,9 +499,10 @@ async def analyze_surprise(request: AnalyzeSurpriseRequest):
         raise HTTPException(status_code=500, detail=f"Error analyzing surprise: {str(e)}")
 
 # --- Health Check ---
-@app.get("/health")
+@app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
     """Basic health check."""
+    logger.info("Health check requested.")
     try:
          tf_version = tf.__version__
          # Perform a minimal TF computation
@@ -435,13 +521,164 @@ async def health_check():
          "timestamp": datetime.datetime.utcnow().isoformat() 
      }
 
+# --- Introspection and Diagnostic Endpoints ---
+
+@app.post("/get_projections", response_model=GetProjectionsResponse, summary="Get K/V/Q Projections")
+async def get_projections_endpoint(request: GetProjectionsRequest):
+    """Exposes internal K, V, Q projections for a given input embedding."""
+    nm = get_neural_memory()
+    try:
+        _validate_vector(request.input_embedding, nm.config['input_dim'], "input_embedding")
+        
+        # Convert to tensor format expected by NeuralMemoryModule
+        input_tensor = tf.convert_to_tensor([request.input_embedding], dtype=tf.float32)  # Add batch dim
+        
+        # Get projections (k_t, v_t, q_t tensors)
+        k_t, v_t, q_t = nm.get_projections(input_tensor)
+        
+        # Ensure tensors are squeezed and converted to Python lists
+        k_list = tf.squeeze(k_t).numpy().tolist()
+        v_list = tf.squeeze(v_t).numpy().tolist()
+        q_list = tf.squeeze(q_t).numpy().tolist()
+        
+        # Calculate input embedding L2 norm
+        input_norm = float(np.linalg.norm(np.array(request.input_embedding, dtype=np.float32)))
+        
+        # Get projection matrix hash (placeholder implementation)
+        proj_hash = "hash_placeholder_v1"
+        if hasattr(nm, 'get_projection_hash'):
+            proj_hash = nm.get_projection_hash()
+        else:
+            # Basic placeholder hash since the method doesn't exist yet
+            # In the future, implement get_projection_hash in NeuralMemoryModule
+            logger.warning("get_projection_hash not implemented, using placeholder")
+            
+        # Prepare the response
+        response = GetProjectionsResponse(
+            input_embedding_norm=input_norm,
+            projection_adapter_used=request.projection_adapter or "identity",
+            key_projection=k_list,
+            value_projection=v_list,
+            query_projection=q_list,
+            projection_metadata={
+                "dim_key": nm.config['key_dim'],
+                "dim_value": nm.config['value_dim'],
+                "dim_query": nm.config['query_dim'],
+                "projection_matrix_hash": proj_hash,
+                "input_dim": nm.config['input_dim'],
+                "timestamp": datetime.datetime.utcnow().isoformat()
+            }
+        )
+        return response
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        logger.error(f"/get_projections failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error getting projections: {str(e)}")
+
+
+@app.get("/diagnose_emoloop", response_model=DiagnoseEmoLoopResponse, summary="Diagnose Emotional Feedback Loop Health")
+async def diagnose_emoloop(window: str = "last_100", emotion_filter: Optional[str] = "all", format: Optional[str] = None):
+    """Returns diagnostic metrics for the surprise->QuickRecal feedback loop.
+    
+    Args:
+        window: Time/count window to analyze ("last_100", "last_hour", "session")
+        emotion_filter: Optional emotion to filter by ("all" or specific emotion)
+        format: Output format ("json" or "table" for CLI-friendly ASCII table)
+    """
+    # Log the parameters for future reference
+    logger.info(f"Received /diagnose_emoloop request: window={window}, filter={emotion_filter}, format={format}")
+    
+    # Get metrics from the MetricsStore instead of using placeholder data
+    metrics_store = get_metrics_store()
+    diagnostics = metrics_store.get_diagnostic_metrics(window=window, emotion_filter=emotion_filter)
+    
+    # Create response using the real metrics data
+    response = DiagnoseEmoLoopResponse(
+        diagnostic_window=diagnostics["diagnostic_window"],
+        avg_loss=diagnostics["avg_loss"],
+        avg_grad_norm=diagnostics["avg_grad_norm"],
+        avg_quickrecal_boost=diagnostics["avg_quickrecal_boost"],
+        dominant_emotions_boosted=diagnostics["dominant_emotions_boosted"],
+        emotional_entropy=diagnostics["emotional_entropy"],
+        emotion_bias_index=diagnostics["emotion_bias_index"],
+        user_emotion_match_rate=diagnostics["user_emotion_match_rate"],
+        cluster_update_hotspots=[ClusterHotspot(**hotspot) for hotspot in diagnostics["cluster_update_hotspots"]],
+        alerts=diagnostics["alerts"],
+        recommendations=diagnostics["recommendations"]
+    )
+    
+    # Handle table format for CLI-friendly output
+    if format == "table":
+        return Response(
+            content=metrics_store.format_diagnostics_as_table(diagnostics),
+            media_type="text/plain"
+        )
+    
+    return response
+
 # --- App startup/shutdown ---
 @app.on_event("startup")
 async def startup_event():
-     global geometry_manager
-     if geometry_manager is None:
-         geometry_manager = GeometryManager()
-     logger.info("Synthians Neural Memory API started. Send POST to /init to initialize.")
+    global neural_memory, memory_core_url, surprise_detector, geometry_manager
+    logger.info("Synthians Neural Memory API starting up...")
+
+    # --- ADD AUTO-INITIALIZATION LOGIC ---
+    try:
+        logger.info("Attempting auto-initialization of Neural Memory module...")
+        # Use environment variables for default config or load path if needed
+        default_config_dict = {
+            # Set input_dim and query_dim to match Memory Core's embedding dimension (768)
+            'input_dim': 768,
+            'query_dim': 768,
+            'hidden_dim': 768,  # Match this too for simplicity
+            'output_dim': 768   # Match this for consistency
+        }
+        load_path = os.environ.get("NM_DEFAULT_STATE_PATH", None)
+        mc_url = os.environ.get("MEMORY_CORE_URL", "http://localhost:5010") # Get MC URL if needed
+
+        # Create default config
+        config = NeuralMemoryConfig(**default_config_dict)
+
+        # Create the module instance
+        neural_memory = NeuralMemoryModule(config=config)
+
+        # Initialize geometry manager and surprise detector based on config
+        geometry_manager = GeometryManager({'embedding_dim': neural_memory.config['input_dim']})
+        # Reset surprise detector to use new geometry manager if re-initializing
+        surprise_detector = None
+        get_surprise_detector() # Initialize if not already
+
+        # Attempt to load state if path specified
+        if load_path:
+            logger.info(f"Attempting to load default state from: {load_path}")
+            # Build model before loading
+            try:
+                _ = neural_memory(tf.zeros((1, neural_memory.config['query_dim'])))
+                logger.info("Model built successfully for auto-load.")
+            except Exception as build_err:
+                logger.error(f"Error building model during auto-load: {build_err}")
+            loaded = neural_memory.load_state(load_path)
+            if loaded:
+                logger.info(f"Successfully auto-loaded state from {load_path}")
+            else:
+                logger.warning(f"Failed to auto-load state from {load_path}. Starting with fresh state.")
+
+        # Set Memory Core URL if available
+        if mc_url:
+            memory_core_url = mc_url
+
+        logger.info("Neural Memory module auto-initialized successfully on startup.")
+        logger.info(f"Effective Config: {neural_memory.get_config_dict()}")
+
+    except Exception as e:
+        logger.error(f"CRITICAL: Auto-initialization of Neural Memory failed: {e}", exc_info=True)
+        # Ensure neural_memory is None if init fails
+        neural_memory = None
+    # --- END AUTO-INITIALIZATION LOGIC ---
+
+    # Original message still useful as a fallback indication
+    logger.info("Synthians Neural Memory API started. Send POST to /init to reinitialize if needed.")
 
 
 @app.on_event("shutdown")

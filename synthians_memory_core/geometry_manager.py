@@ -71,8 +71,17 @@ class GeometryManager:
 
         return vector
 
-    def _align_vectors(self, vec_a: np.ndarray, vec_b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def align_vectors(self, vec_a: np.ndarray, vec_b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Align two vectors to the configured embedding dimension."""
+        # Validate inputs
+        vec_a = self._validate_vector(vec_a, "Vector A")
+        if vec_a is None:
+            vec_a = np.zeros(self.config['embedding_dim'], dtype=np.float32)
+            
+        vec_b = self._validate_vector(vec_b, "Vector B")
+        if vec_b is None:
+            vec_b = np.zeros(self.config['embedding_dim'], dtype=np.float32)
+            
         target_dim = self.config['embedding_dim']
         dim_a = vec_a.shape[0]
         dim_b = vec_b.shape[0]
@@ -123,15 +132,42 @@ class GeometryManager:
 
         return aligned_a, aligned_b
 
-    def _normalize(self, vector: np.ndarray) -> np.ndarray:
+    def _align_vectors(self, vec_a: np.ndarray, vec_b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Backward compatibility method that forwards to align_vectors.
+        
+        Several components are calling this method with underscore, but the implementation
+        is named 'align_vectors' (without underscore). This method ensures backward compatibility.
+        """
+        return self.align_vectors(vec_a, vec_b)
+
+    def normalize_embedding(self, vector: np.ndarray) -> np.ndarray:
         """L2 normalize a vector."""
+        # Ensure input is numpy array
+        vector = self._validate_vector(vector, "Vector to Normalize")
+        if vector is None:
+            # Return zero vector of appropriate dimension if validation failed
+            return np.zeros(self.config.get('embedding_dim', 768), dtype=np.float32)
+
         if not self.config['normalization_enabled']:
              return vector
         norm = np.linalg.norm(vector)
         if norm < 1e-9:
-            logger.debug("GeometryManager", "_normalize received zero vector, returning as is.")
+            logger.debug("GeometryManager", "normalize_embedding received zero vector, returning as is.")
             return vector
         return vector / norm
+
+    def _normalize(self, vector: np.ndarray) -> np.ndarray:
+        """Backward compatibility method that forwards to normalize_embedding.
+        
+        Several components are calling this method with underscore, but the implementation
+        is named 'normalize_embedding' (without underscore). This method ensures backward compatibility.
+        """
+        # Ensure vector is numpy array before calling
+        validated_vector = self._validate_vector(vector, "Vector for _normalize")
+        if validated_vector is None:
+            # Return zero vector if validation fails
+            return np.zeros(self.config.get('embedding_dim', 768), dtype=np.float32)
+        return self.normalize_embedding(validated_vector)
 
     def _to_hyperbolic(self, euclidean_vector: np.ndarray) -> np.ndarray:
         """Project Euclidean vector to Poincaré ball."""
@@ -163,12 +199,12 @@ class GeometryManager:
 
     def euclidean_distance(self, vec_a: np.ndarray, vec_b: np.ndarray) -> float:
         """Calculate Euclidean distance."""
-        aligned_a, aligned_b = self._align_vectors(vec_a, vec_b)
+        aligned_a, aligned_b = self.align_vectors(vec_a, vec_b)
         return np.linalg.norm(aligned_a - aligned_b)
 
     def hyperbolic_distance(self, vec_a: np.ndarray, vec_b: np.ndarray) -> float:
         """Calculate Hyperbolic (Poincaré) distance."""
-        aligned_a, aligned_b = self._align_vectors(vec_a, vec_b)
+        aligned_a, aligned_b = self.align_vectors(vec_a, vec_b)
         norm_a_sq = np.sum(aligned_a**2)
         norm_b_sq = np.sum(aligned_b**2)
 
@@ -198,7 +234,7 @@ class GeometryManager:
 
     def spherical_distance(self, vec_a: np.ndarray, vec_b: np.ndarray) -> float:
         """Calculate Spherical distance (angle)."""
-        aligned_a, aligned_b = self._align_vectors(vec_a, vec_b)
+        aligned_a, aligned_b = self.align_vectors(vec_a, vec_b)
         norm_a = np.linalg.norm(aligned_a)
         norm_b = np.linalg.norm(aligned_b)
         if norm_a < 1e-9 or norm_b < 1e-9: return np.pi # Max distance if one vector is zero
@@ -246,29 +282,38 @@ class GeometryManager:
             return self.euclidean_distance(vec_a, vec_b)
 
     def calculate_similarity(self, vec_a: np.ndarray, vec_b: np.ndarray) -> float:
-        """Calculate similarity based on configured geometry."""
-        vec_a = self._validate_vector(vec_a, "Vector A")
-        vec_b = self._validate_vector(vec_b, "Vector B")
-        if vec_a is None or vec_b is None: return 0.0
-
-        geom_type = self.config['geometry_type']
-
-        if geom_type == GeometryType.HYPERBOLIC:
-             hyp_a = self._to_hyperbolic(vec_a)
-             hyp_b = self._to_hyperbolic(vec_b)
-             distance = self.hyperbolic_distance(hyp_a, hyp_b)
-             # Convert distance to similarity: exp(-distance) is common
-             similarity = np.exp(-distance)
-             return float(np.clip(similarity, 0.0, 1.0))
-        else: # Euclidean, Spherical, Mixed (default to cosine similarity for simplicity)
-             aligned_a, aligned_b = self._align_vectors(vec_a, vec_b)
-             norm_a = np.linalg.norm(aligned_a)
-             norm_b = np.linalg.norm(aligned_b)
-             if norm_a < 1e-9 or norm_b < 1e-9: return 0.0
-             cos_sim = np.dot(aligned_a, aligned_b) / (norm_a * norm_b)
-             # Map cosine similarity [-1, 1] to [0, 1] range
-             similarity = (cos_sim + 1.0) / 2.0
-             return float(np.clip(similarity, 0.0, 1.0))
+        """Calculate similarity between two vectors based on the configured geometry type.
+        
+        Returns cosine similarity (1.0 = identical, 0.0 = orthogonal, -1.0 = opposite)
+        """
+        # Validate inputs
+        vec_a = self._validate_vector(vec_a, "Vector A for similarity")
+        if vec_a is None:
+            return 0.0
+            
+        vec_b = self._validate_vector(vec_b, "Vector B for similarity")
+        if vec_b is None:
+            return 0.0
+            
+        # Align vectors to same dimension
+        aligned_a, aligned_b = self.align_vectors(vec_a, vec_b)
+        
+        # Normalize both vectors
+        norm_a = np.linalg.norm(aligned_a)
+        norm_b = np.linalg.norm(aligned_b)
+        
+        # Handle zero vectors
+        if norm_a < 1e-9 or norm_b < 1e-9:
+            return 0.0
+        
+        # Calculate cosine similarity
+        norm_a_inv = 1.0 / norm_a
+        norm_b_inv = 1.0 / norm_b
+        dot_product = np.dot(aligned_a, aligned_b)
+        similarity = dot_product * norm_a_inv * norm_b_inv
+        
+        # Ensure result is in valid range [-1.0, 1.0]
+        return float(np.clip(similarity, -1.0, 1.0))
 
     def transform_to_geometry(self, vector: np.ndarray) -> np.ndarray:
         """Transform a vector into the configured geometry space (e.g., Poincaré ball)."""
@@ -280,7 +325,7 @@ class GeometryManager:
             return self._to_hyperbolic(vector)
         elif geom_type == GeometryType.SPHERICAL:
             # Project onto unit sphere (normalize)
-            return self._normalize(vector)
+            return self.normalize_embedding(vector)
         else: # Euclidean or Mixed (no specific projection needed for Euclidean part)
             return vector
 

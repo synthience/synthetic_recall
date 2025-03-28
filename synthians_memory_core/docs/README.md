@@ -1,5 +1,11 @@
 # Synthians Memory Core Documentation
 
+## Bi-Hemispheric Cognitive Architecture
+
+- [Bi-Hemispheric Architecture Overview](bihemispheric_architecture.md) - Complete design overview and neural pathway flow
+- [API Reference](api_reference.md) - Detailed API references for all components
+- [Implementation Guide](implementation_guide.md) - Technical implementation and integration guide
+
 ## Vector Index and FAISS Integration
 
 - [Memory Vector Index with FAISS](vector_index.md) - Core implementation details and usage

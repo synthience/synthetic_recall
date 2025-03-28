@@ -24,6 +24,7 @@ from synthians_memory_core.custom_logger import logger
 from synthians_memory_core.emotion_analyzer import EmotionAnalyzer
 from synthians_memory_core.utils.transcription_feature_extractor import TranscriptionFeatureExtractor
 from synthians_memory_core.interruption import InterruptionAwareMemoryHandler
+from synthians_memory_core.memory_core.trainer_integration import TrainerIntegrationManager, SequenceEmbeddingsResponse, UpdateQuickRecalScoreRequest
 
 # Optional: Import sentence_transformers for embedding generation if not moved to GeometryManager
 from sentence_transformers import SentenceTransformer
@@ -41,6 +42,7 @@ class ProcessMemoryResponse(BaseModel):
     success: bool
     memory_id: Optional[str] = None
     quickrecal_score: Optional[float] = None
+    embedding: Optional[List[float]] = None
     metadata: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
@@ -173,6 +175,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("API", f"Failed to initialize transcription feature extractor: {str(e)}")
         app.state.transcription_extractor = None
+        
+    # Initialize trainer integration manager
+    try:
+        logger.info("API", "Initializing trainer integration manager...")
+        app.state.trainer_integration = TrainerIntegrationManager(
+            memory_core=app.state.memory_core
+        )
+        logger.info("API", "Trainer integration manager initialized")
+    except Exception as e:
+        logger.error("API", f"Failed to initialize trainer integration manager: {str(e)}")
+        app.state.trainer_integration = None
     
     # Initialize embedding model
     try:
@@ -469,6 +482,7 @@ async def process_memory(request: ProcessMemoryRequest, background_tasks: Backgr
                 success=True,
                 memory_id=memory_id,
                 quickrecal_score=quickrecal_score,
+                embedding=embedding,
                 metadata=metadata
             )
             
@@ -907,92 +921,69 @@ async def get_assembly(assembly_id: str):
             "error": str(e)
         }
 
-@app.on_event("startup")
-async def startup_db_client():
-    """Initialize FastAPI app with required services."""
-    # Record startup time for stats
-    app.state.startup_time = time.time()
+# --- Trainer Integration Endpoints ---
+
+@app.post("/api/memories/get_sequence_embeddings", response_model=SequenceEmbeddingsResponse)
+async def get_sequence_embeddings(
+    topic: Optional[str] = None,
+    user: Optional[str] = None,
+    emotion: Optional[str] = None,
+    min_importance: Optional[float] = None,
+    limit: int = 100,
+    min_quickrecal_score: Optional[float] = None,
+    start_timestamp: Optional[str] = None,
+    end_timestamp: Optional[str] = None,
+    sort_by: str = "timestamp"
+):
+    """Retrieve a sequence of memory embeddings, ordered by timestamp or quickrecal score.
     
-    # Initialize embedding model
-    try:
-        from sentence_transformers import SentenceTransformer
-        # Use the model specified in environment or default to all-mpnet-base-v2
-        model_name = os.environ.get('EMBEDDING_MODEL', 'all-mpnet-base-v2')
-        logger.info("startup", f"Loading embedding model: {model_name}")
-        
-        # Try to load the model, download if not available
-        try:
-            app.state.embedding_model = SentenceTransformer(model_name)
-            logger.info("startup", f"Embedding model {model_name} loaded successfully")
-        except Exception as model_error:
-            # If the model doesn't exist, it might need to be downloaded
-            if "No such file or directory" in str(model_error) or "not found" in str(model_error).lower():
-                logger.warning("startup", f"Model {model_name} not found locally, attempting to download...")
-                from sentence_transformers import util as st_util
-                # Force download from Hugging Face
-                app.state.embedding_model = SentenceTransformer(model_name, use_auth_token=None)
-                logger.info("startup", f"Successfully downloaded and loaded model {model_name}")
-            else:
-                # Re-raise if it's not a file-not-found error
-                raise
-    except Exception as e:
-        logger.error("startup", f"Error loading embedding model: {str(e)}")
-        raise
+    This endpoint enables the Trainer to obtain sequential memory embeddings
+    for training its predictive models and building semantic time series.
+    """
+    logger.info("API", f"Retrieving sequence embeddings with topic={topic}, limit={limit}, sort_by={sort_by}")
     
-    # Initialize emotion model
-    try:
-        from transformers import pipeline
-        
-        # Check for models in both local and Docker environments
-        # For local development
-        local_model_path = "C:/Users/danny/OneDrive/Documents/AI_Conversations/lucid-recall-dist/lucid-recall-dist/models/roberta-base-go_emotions"
-        # For Docker environment
-        docker_model_path = "/app/models/roberta-base-go_emotions"
-        
-        # Try Docker path first, then local path
-        if os.path.exists(docker_model_path):
-            emotion_model_path = docker_model_path
-        elif os.path.exists(local_model_path):
-            emotion_model_path = local_model_path
-        else:
-            emotion_model_path = None
-            
-        if emotion_model_path:
-            logger.info("startup", f"Loading emotion model from: {emotion_model_path}")
-            app.state.emotion_model = pipeline("text-classification", model=emotion_model_path, return_all_scores=True)
-            logger.info("startup", "Emotion model loaded successfully")
-        else:
-            logger.warning("startup", f"Emotion model not found in expected locations, will use fallback")
-            app.state.emotion_model = None
-    except Exception as e:
-        logger.error("startup", f"Error loading emotion model: {str(e)}")
-        app.state.emotion_model = None
+    if app.state.trainer_integration is None:
+        logger.error("API", "Trainer integration manager not initialized")
+        raise HTTPException(status_code=500, detail="Trainer integration not available")
     
-    # Initialize SynthiansMemoryCore
     try:
-        # Load configuration from environment variables
-        storage_path = os.environ.get('MEMORY_STORAGE_PATH', '/app/memory/stored/synthians')
-        embedding_dim = int(os.environ.get('EMBEDDING_DIM', '768'))
-        geometry_type = os.environ.get('GEOMETRY_TYPE', 'hyperbolic')
-        
-        # Create memory core config
-        memory_core_config = {
-            'storage_path': storage_path,
-            'embedding_dim': embedding_dim,
-            'geometry': geometry_type,
-            'embedding_model': app.state.embedding_model,
-            'emotion_model': app.state.emotion_model  # Pass the emotion model to the memory core
-        }
-        
-        # Initialize memory core
-        logger.info("startup", "Initializing SynthiansMemoryCore", memory_core_config)
-        from synthians_memory_core import SynthiansMemoryCore
-        app.state.memory_core = SynthiansMemoryCore(memory_core_config)
-        await app.state.memory_core.initialize()
-        logger.info("startup", "SynthiansMemoryCore initialized successfully")
+        sequence = await app.state.trainer_integration.get_sequence_embeddings(
+            topic=topic,
+            user=user,
+            emotion=emotion,
+            min_importance=min_importance,
+            limit=limit,
+            min_quickrecal_score=min_quickrecal_score,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+            sort_by=sort_by
+        )
+        return sequence
     except Exception as e:
-        logger.error("startup", f"Error initializing SynthiansMemoryCore: {str(e)}")
-        raise
+        logger.error("API", f"Error retrieving sequence embeddings: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve sequence embeddings: {str(e)}")
+
+@app.post("/api/memories/update_quickrecal_score")
+async def update_quickrecal_score(request: UpdateQuickRecalScoreRequest):
+    """Update a memory's quickrecal score based on surprise feedback from the Trainer.
+    
+    This endpoint allows the Trainer to inform the Memory Core about surprising or
+    unexpected memories, which can boost their recall priority and track narrative surprise.
+    
+    Surprise is recorded in the memory's metadata for future reference and pattern analysis.
+    """
+    logger.info("API", f"Updating quickrecal score for memory {request.memory_id} with delta {request.delta}")
+    
+    if app.state.trainer_integration is None:
+        logger.error("API", "Trainer integration manager not initialized")
+        raise HTTPException(status_code=500, detail="Trainer integration not available")
+    
+    try:
+        result = await app.state.trainer_integration.update_quickrecal_score(request)
+        return result
+    except Exception as e:
+        logger.error("API", f"Error updating quickrecal score: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update quickrecal score: {str(e)}")
 
 # Run the server when the module is executed directly
 if __name__ == "__main__":

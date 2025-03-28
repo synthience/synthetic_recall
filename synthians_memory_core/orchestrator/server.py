@@ -42,8 +42,8 @@ def get_orchestrator():
     global orchestrator
     if orchestrator is None:
         # Get URLs from environment variables
-        memory_core_url = os.environ.get("MEMORY_CORE_URL", "http://localhost:8000")
-        trainer_url = os.environ.get("TRAINER_URL", "http://localhost:8001")
+        memory_core_url = os.environ.get("MEMORY_CORE_URL", "http://localhost:5010")
+        neural_memory_url = os.environ.get("NEURAL_MEMORY_URL", "http://localhost:8001")
         
         # Initialize shared geometry manager
         geometry_manager = GeometryManager()
@@ -51,10 +51,11 @@ def get_orchestrator():
         # Initialize orchestrator
         orchestrator = ContextCascadeEngine(
             memory_core_url=memory_core_url,
-            trainer_url=trainer_url,
-            geometry_manager=geometry_manager
+            neural_memory_url=neural_memory_url,
+            geometry_manager=geometry_manager,
+            metrics_enabled=True
         )
-        logger.info(f"Orchestrator initialized with Memory Core URL: {memory_core_url}, Trainer URL: {trainer_url}")
+        logger.info(f"Orchestrator initialized with Memory Core URL: {memory_core_url}, Neural Memory URL: {neural_memory_url}")
     
     return orchestrator
 

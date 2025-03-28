@@ -62,6 +62,98 @@ services:
       memlock: -1
       stack: 67108864
 
+  memory-core:
+    image: nemo_qr_v1:latest
+    container_name: memory-core
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONPATH=/workspace/project
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_API_KEY=devkey
+      - LIVEKIT_API_SECRET=secret
+      - MEMORY_STORAGE_PATH=/app/memory/stored/memory-core
+      - EMBEDDING_DIM=768
+      - GEOMETRY_TYPE=hyperbolic
+      - EMBEDDING_MODEL=sentence-transformers/all-mpnet-base-v2
+      - EMOTION_MODEL_PATH=/app/models/emotion
+      - LOG_LEVEL=INFO
+      - HOST=0.0.0.0
+      - PORT=5020
+      - PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu118
+    volumes:
+      - ./:/workspace/project
+      - ./memory:/app/memory
+      - ./models/emotion:/app/models/emotion
+      - ${MODELS_PATH}:/workspace/models
+      - ./docker-numpy-fix.sh:/app/docker-numpy-fix.sh
+      - emotion_model_cache:/root/.cache/huggingface
+    expose:
+      - 5020
+    ports:
+      - "5020:5020"
+    networks:
+      - lucid-net
+    command: ["bash", "-c", "cd /workspace/project && bash /app/docker-numpy-fix.sh python -m synthians_memory_core.api.server"]
+    tty: true
+    stdin_open: true
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+
+  # New service for trainer-server with NumPy compatibility fix
+  trainer-server:
+    image: nemo_qr_v1:latest
+    container_name: trainer-server
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONPATH=/workspace/project
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_API_KEY=devkey
+      - LIVEKIT_API_SECRET=secret
+      - MEMORY_CORE_URL=http://memory-core:5020
+      - EMBEDDING_DIM=768
+      - LOG_LEVEL=INFO
+      - HOST=0.0.0.0
+      - PORT=8001
+      - PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu118
+    volumes:
+      - ./:/workspace/project
+      - ./docker-numpy-fix.sh:/app/docker-numpy-fix.sh
+      - ${MODELS_PATH}:/workspace/models
+      - emotion_model_cache:/root/.cache/huggingface
+    expose:
+      - 8001
+    ports:
+      - "8001:8001"
+    networks:
+      - lucid-net
+    command: ["bash", "-c", "cd /workspace/project && bash /app/docker-numpy-fix.sh python -m synthians_memory_core.synthians_trainer_server.http_server"]
+    tty: true
+    stdin_open: true
+    depends_on:
+      - memory-core
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+
 # stt_transcription service has been removed to use Local STT only
 
 networks:

@@ -1,5 +1,6 @@
 import numpy as np
-import tensorflow as tf
+# Remove tensorflow dependency - use only numpy for vector operations
+# import tensorflow as tf
 from typing import List, Dict, Any, Optional, Union, Tuple
 import logging
 from synthians_memory_core.geometry_manager import GeometryManager, GeometryType
@@ -53,7 +54,7 @@ class SurpriseDetector:
         Returns:
             Normalized numpy array
         """
-        # Delegate to GeometryManager for consistent handling across the system
+        # Use the public method now
         return self.geometry_manager.normalize_embedding(embedding)
     
     def calculate_surprise(self, 
