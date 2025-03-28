@@ -448,6 +448,96 @@ class MALVariant(TitansVariantBase):
         
         logger.info(f"MAL: Initialized value projection layers with value_dim={value_dim}")
 
+    async def calculate_v_prime(self, q_t: np.ndarray, v_t: np.ndarray) -> Dict[str, Any]:
+        """Calculate modified value projection using attention over historical values.
+        
+        This method is specifically called by the ContextCascadeEngine._apply_variant_pre_update
+        method to get a modified value projection for use in the Neural Memory update.
+        
+        Args:
+            q_t: Query projection for the current input
+            v_t: Original value projection for the current input
+            
+        Returns:
+            Dict containing v_prime (modified value projection) and metrics
+        """
+        # Get historical contexts for attention
+        if not self.sequence_context or len(self.sequence_context) < 2:
+            # Not enough context for attention, return original values
+            logger.info("MAL: Not enough context for calculate_v_prime, using original value projection")
+            return {
+                "v_prime": v_t,  # No change
+                "metrics": {}
+            }
+        
+        # Get historical keys and values
+        k_hist, v_hist = self.sequence_context.get_recent_kv_pairs(count=len(self.sequence_context) - 1)  # Exclude current
+        
+        # Convert numpy arrays to tensors for TF operations
+        q_tensor = _get_tf().convert_to_tensor(q_t, dtype='float32')
+        if len(q_tensor.shape) == 1:
+            q_tensor = _get_tf().expand_dims(q_tensor, 0)  # Add batch dimension
+            
+        k_hist_tensor = _get_tf().convert_to_tensor(k_hist, dtype='float32')
+        if len(k_hist_tensor.shape) == 2:  # [seq_len, key_dim]
+            k_hist_tensor = _get_tf().expand_dims(k_hist_tensor, 0)  # Add batch dimension [1, seq_len, key_dim]
+            
+        v_hist_tensor = _get_tf().convert_to_tensor(v_hist, dtype='float32')
+        if len(v_hist_tensor.shape) == 2:  # [seq_len, value_dim]
+            v_hist_tensor = _get_tf().expand_dims(v_hist_tensor, 0)  # Add batch dimension [1, seq_len, value_dim]
+        
+        v_tensor = _get_tf().convert_to_tensor(v_t, dtype='float32')
+        if len(v_tensor.shape) == 1:
+            v_tensor = _get_tf().expand_dims(v_tensor, 0)  # Add batch dimension
+        
+        # Apply attention mechanism
+        try:
+            attended_v_tensor = self.attention_module(
+                query=q_tensor,
+                key=k_hist_tensor,
+                value=v_hist_tensor,
+                training=False,
+            )
+            
+            # Combine attended and current values
+            if self.v_prime_gate is None:
+                # Initialize projection layers if not already done
+                self.init_value_projection_layers(v_tensor.shape[-1])
+            
+            # Concatenate vectors for gating
+            concat_v = _get_tf().concat([v_tensor, attended_v_tensor], axis=-1)
+            
+            # Calculate gate value
+            gate = self.v_prime_gate(concat_v)
+            
+            # Combine original and attended values
+            v_prime_tensor = gate * v_tensor + (1 - gate) * attended_v_tensor
+            
+            # Final projection
+            v_prime_tensor = self.v_prime_projector(v_prime_tensor)
+            
+            # Convert back to numpy
+            v_prime = v_prime_tensor.numpy()
+            if len(v_prime.shape) > 1:
+                v_prime = v_prime[0]  # Remove batch dimension
+            
+            logger.info(f"MAL: Generated augmented value projection from {len(k_hist)} historical values")
+            
+            return {
+                "v_prime": v_prime,  # Augmented value projection
+                "original_v": v_t,  # Original for comparison
+                "metrics": self.attention_module.get_metrics(),
+            }
+            
+        except Exception as e:
+            logger.error(f"MAL calculate_v_prime failed: {e}")
+            # Fallback to original value projection
+            return {
+                "v_prime": v_t,  # Fallback to original
+                "error": str(e),
+                "metrics": {},
+            }
+
     def process_input(
         self,
         memory_id: str,
