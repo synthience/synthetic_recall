@@ -204,7 +204,34 @@ class ContextCascadeEngine:
                                 embedding: Optional[List[float]] = None,
                                 metadata: Optional[Dict[str, Any]] = None,
                                 intent_id: Optional[str] = None) -> Dict[str, Any]:
-        """Orchestrates the refactored cognitive cascade for a single input."""
+        """Orchestrates the cognitive cascade for a single input.
+        
+        This method implements the full cognitive flow with variant-specific processing:
+        1. Store input in Memory Core
+        2. Get projections from Neural Memory (k_t, v_t, q_t)
+        3. Apply variant-specific pre-update processing (MAG/MAL)
+        4. Update Neural Memory with appropriate modifications
+        5. Update QuickRecal score based on surprise metrics
+        6. Retrieve from Neural Memory
+        7. Apply variant-specific post-retrieval processing (MAC)
+        8. Update sequence history
+        9. Return final response
+        
+        The processing flow differs based on the active Titans variant:
+        - NONE: Standard processing without attention mechanisms
+        - MAC: Standard update with post-retrieval attention enhancement
+        - MAG: Pre-update calculation of gate values via attention
+        - MAL: Pre-update modification of value projection via attention
+        
+        Args:
+            content: Text content for the memory
+            embedding: Optional embedding for the content (will be generated if not provided)
+            metadata: Optional metadata to store with the memory
+            intent_id: Optional intent ID for the cognitive operation
+            
+        Returns:
+            Dict containing processing results and memory information
+        """
 
         if not self._config_ready:
             logger.info("Waiting for dynamic configuration...")
@@ -274,28 +301,29 @@ class ContextCascadeEngine:
             if not update_resp.get("success"):
                  # Log error but proceed if possible (e.g., maybe retrieval still works)
                  logger.error(f"Neural Memory update failed: {update_resp.get('error')}")
-                 # Store error in main response but don't necessarily exit yet
-                 response = {"error": update_resp.get("error"), **response}
+                 # Initialize an error response, but we'll still try to retrieve
+                 response_errors = {"update_error": update_resp.get("error")}
             else:
                  step_context["loss"] = update_resp.get("loss")
                  step_context["grad_norm"] = update_resp.get("grad_norm")
                  # Update projections if returned (they should match if not MAL)
                  if update_resp.get("key_projection"): step_context["k_t"] = np.array(update_resp["key_projection"], dtype=np.float32)
                  if update_resp.get("value_projection"): step_context["v_t"] = np.array(update_resp["value_projection"], dtype=np.float32)
+                 response_errors = {}
 
             # 6. Apply QuickRecal Boost (If update succeeded)
             feedback_resp = None
-            if step_context["loss"] is not None or step_context["grad_norm"] is not None:
-                feedback_resp = await self._apply_quickrecal_boost(step_context, quickrecal_initial)
+            if "loss" in step_context or "grad_norm" in step_context:
+                 feedback_resp = await self._apply_quickrecal_boost(step_context, quickrecal_initial)
 
             # 7. Retrieve from Neural Memory
             retrieve_resp = await self._retrieve_from_neural_memory(step_context["x_t"])
             if not retrieve_resp.get("success"):
-                # This is more critical than update failure for some use cases
-                 logger.error(f"Neural Memory retrieval failed: {retrieve_resp.get('error')}")
-                 # Update response with error and potentially finalize
-                 response = {"error": retrieve_resp.get("error"), **response}
-                 # Don't finalize yet, try to add context first
+                # Log error and exit - retrieval is critical
+                logger.error(f"Neural Memory retrieval failed: {retrieve_resp.get('error')}")
+                return self._finalize_error("Neural Memory retrieval failed", 
+                                           {"retrieve_error": retrieve_resp.get("error"), **response_errors}, 
+                                           intent_id)
             else:
                  step_context["y_t_raw"] = np.array(retrieve_resp["retrieved_embedding"], dtype=np.float32)
                  step_context["y_t_final"] = step_context["y_t_raw"] # Default final to raw
@@ -321,7 +349,7 @@ class ContextCascadeEngine:
             await self._update_history(step_context)
 
             # 10. Finalize Response
-            response = self._finalize_response(response, step_context, update_resp, retrieve_resp, feedback_resp)
+            response = self._finalize_response({}, step_context, update_resp, retrieve_resp, feedback_resp)
 
             processing_time = (time.time() - start_time) * 1000
             logger.info(f"Finished processing input for memory {step_context['memory_id']} in {processing_time:.2f} ms (Variant: {self.active_variant_type.value})")
@@ -504,16 +532,27 @@ class ContextCascadeEngine:
             return arr
         if isinstance(arr, np.ndarray):
             return arr.tolist()
-        # Try to handle other types (like tensorflow tensors)
+        
+        # Try to handle tensorflow tensors with lazy loading
         try:
-            return arr.numpy().tolist()
-        except:
-            # Last resort, try direct conversion
-            try:
-                return list(arr)
-            except:
-                logger.warning(f"Could not convert {type(arr)} to list")
-                return arr
+            # Check if this might be a TensorFlow tensor
+            if hasattr(arr, 'numpy'):
+                return arr.numpy().tolist()
+                
+            # Last attempt - import TF and try conversion
+            from synthians_memory_core.orchestrator.titans_variants import _get_tf
+            tf = _get_tf()
+            if tf is not None and tf.is_tensor(arr):
+                return tf.make_ndarray(tf.make_tensor_proto(arr)).tolist()
+        except Exception as e:
+            logger.debug(f"Failed to convert possible tensor to list: {e}")
+        
+        # Last resort, try direct conversion
+        try:
+            return list(arr)
+        except Exception as e:
+            logger.warning(f"Could not convert {type(arr)} to list: {e}")
+            return None
 
     async def _retrieve_from_neural_memory(self, actual_embedding: np.ndarray) -> Dict:
         """Retrieves associated embedding from Neural Memory."""
@@ -565,7 +604,22 @@ class ContextCascadeEngine:
              return {"success": True, **retrieve_resp}
 
     async def _apply_variant_post_retrieval(self, step_context: Dict) -> Dict:
-        """Applies MAC logic after retrieval."""
+        """Apply variant-specific post-retrieval processing for MAC variant.
+        
+        This method handles the variant-specific processing that occurs AFTER
+        Neural Memory retrieval:
+        
+        - MAC Variant: Enhances the retrieved embedding (y_t) by applying attention
+          between the current query and historical keys, and using this to create
+          a weighted combination of historical values with the retrieved embedding.
+          This produces a contextually enhanced memory representation.
+        
+        Args:
+            step_context: Current processing context containing embeddings and projections
+        
+        Returns:
+            Dict containing variant processing results
+        """
         if not self.variant_processor or self.active_variant_type != TitansVariantType.MAC:
             return {"success": True, "attended_output": step_context.get("y_t_raw")} # Return raw if not MAC
 
@@ -603,6 +657,12 @@ class ContextCascadeEngine:
     async def _update_history(self, step_context: Dict):
         """Adds the completed step context to the history manager."""
         logger.debug("Step 8: Updating sequence history...")
+        
+        # Early return if memory_id is missing (indicates something went wrong earlier)
+        if "memory_id" not in step_context:
+            logger.warning("History update skipped: Missing memory_id.")
+            return
+        
         # Ensure all components are valid numpy arrays before adding
         required_keys = ["x_t", "k_t", "v_t", "q_t", "y_t_final"]
         valid_context = True
@@ -611,19 +671,43 @@ class ContextCascadeEngine:
         # Extract and validate required components
         for key in required_keys:
             value = step_context.get(key)
-            if value is None or not isinstance(value, np.ndarray):
-                 logger.warning(f"History update skipped: Missing or invalid '{key}'.")
-                 valid_context = False
-                 break
+            if value is None:
+                logger.warning(f"History update skipped: Missing '{key}'")
+                valid_context = False
+                break
+            
+            # Convert to numpy array if it's a list
+            if isinstance(value, list):
+                try:
+                    value = np.array(value, dtype=np.float32)
+                    step_context[key] = value  # Update in context
+                except Exception as e:
+                    logger.warning(f"History update skipped: Could not convert '{key}' to numpy array: {e}")
+                    valid_context = False
+                    break
+            
+            # Validate numpy array
+            if not isinstance(value, np.ndarray):
+                logger.warning(f"History update skipped: '{key}' is not a numpy array but {type(value)}")
+                valid_context = False
+                break
+                
             # Further validation (NaN/Inf) - _validate_embedding does this
             if not self._validate_embedding(value):
-                 logger.warning(f"History update skipped: Invalid data in '{key}'.")
-                 valid_context = False
-                 break
+                logger.warning(f"History update skipped: Invalid data in '{key}'")
+                valid_context = False
+                break
+                
             context_tuple_args[key] = value
 
         if valid_context:
             try:
+                # Log detailed shapes for debugging
+                shapes_info = {
+                    k: f"{v.shape} ({v.dtype})" for k, v in context_tuple_args.items()
+                }
+                logger.debug(f"Adding context with shapes: {shapes_info}")
+                
                 self.sequence_context_manager.add_context(
                     timestamp=time.time(), # Use current time for history entry
                     memory_id=step_context["memory_id"],
@@ -633,7 +717,7 @@ class ContextCascadeEngine:
                     q_t=context_tuple_args["q_t"],
                     y_t=context_tuple_args["y_t_final"] # Use the final output y_t
                 )
-                logger.debug(f"Added context to SequenceContextManager. Length: {len(self.sequence_context_manager)}")
+                logger.info(f"Added context to SequenceContextManager. Length: {len(self.sequence_context_manager)}")
             except Exception as e:
                 logger.error(f"Failed to add context to history manager: {e}", exc_info=True)
         else:
@@ -724,7 +808,27 @@ class ContextCascadeEngine:
         return boost
 
     async def _apply_variant_pre_update(self, step_context: Dict) -> Dict:
-        """Applies MAG/MAL logic before the update step."""
+        """Apply variant-specific pre-update processing for MAG/MAL variants.
+        
+        This method handles the variant-specific processing that must occur BEFORE
+        the Neural Memory update:
+        
+        - MAG Variant: Calculates attention-based gate values (alpha_t, theta_t, eta_t)
+          that control the Neural Memory update process:
+          * alpha_t: Controls forgetting rate (higher = forget more)
+          * theta_t: Controls learning rate (higher = learn faster)
+          * eta_t: Controls momentum decay (higher = retain more momentum)
+        
+        - MAL Variant: Calculates a modified value projection (v_prime) by applying
+          attention between the current query and historical keys/values. This enhances
+          the value representation before it's stored in Neural Memory.
+        
+        Args:
+            step_context: Current processing context containing embeddings and projections
+        
+        Returns:
+            Dict containing variant processing results
+        """
         if not self.variant_processor or self.active_variant_type not in [TitansVariantType.MAG, TitansVariantType.MAL]:
             return {"success": True} # No pre-processing needed
 
@@ -807,7 +911,21 @@ class ContextCascadeEngine:
         return {"success": True, **variant_results} # Default success if no relevant variant
 
     async def _update_neural_memory(self, step_context: Dict) -> Dict:
-        """Updates Neural Memory, potentially using variant outputs."""
+        """Update Neural Memory with appropriate modifications based on active variant.
+        
+        This method handles the Neural Memory update process with variant-specific modifications:
+        
+        - NONE Variant: Standard update with the input embedding only
+        - MAC Variant: Standard update (variant processing occurs after retrieval)
+        - MAG Variant: Update with externally calculated gate values (alpha_t, theta_t, eta_t)
+        - MAL Variant: Update with modified value projection (v_prime)
+        
+        Args:
+            step_context: Current processing context containing embeddings and projections
+        
+        Returns:
+            Dict containing update response with loss and gradient norm
+        """
         logger.debug("Step 4: Updating Neural Memory...")
         update_payload = {"input_embedding": self._to_list(step_context["x_t"])} # Base payload
 

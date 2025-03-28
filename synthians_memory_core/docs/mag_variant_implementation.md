@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Memory-Attended Gates (MAG) variant is a specialized architecture in the Lucidia Cognitive System that modifies the gate values used in the Neural Memory update process through attention mechanisms. This document details the implementation, integration, and usage of the MAG variant.
+The Memory-Attended Gates (MAG) variant is a specialized architecture in the Lucidia Cognitive System that modifies the gate values used in the Neural Memory update process through attention mechanisms. This document details the implementation, integration, and usage of the MAG variant within the refactored Context Cascade Engine.
 
 ## Architecture
 
@@ -22,179 +22,213 @@ The MAG variant follows this processing flow:
    - Provides common infrastructure for all variants
    - Handles API client initialization and neural memory URL configuration
    - Manages sequence context and historical context tracking
+   - Implements lazy loading for TensorFlow to prevent NumPy version conflicts
 
 2. **MAGVariant Class**
    - Implements the Memory-Attended Gates logic
    - Initializes attention modules for gate calculation
    - Processes input embeddings and queries through attention mechanisms
+   - Calculates attention-based gate values to influence Neural Memory updates
 
 3. **NeuralMemoryModule**
    - Provides gate calculation capabilities via dedicated projection layers
    - Processes attention outputs to compute optimal gate values
    - Applies external gate values during memory updates
+   - Returns loss and gradient norm metrics for QuickRecal boosting
 
 4. **ContextCascadeEngine**
    - Orchestrates the variant selection and initialization
    - Routes memory operations through the appropriate variant
    - Manages the flow of data between components
+   - Ensures correct sequencing of operations to maximize variant effectiveness
 
 ### Key Methods
 
 #### MAGVariant
 
 ```python
-def process_input(self, memory_id: str, x_t: np.ndarray, k_t: np.ndarray, v_t: np.ndarray, q_t: np.ndarray, y_t: np.ndarray):
-    """Process input through MAG variant logic.
+async def process_input(self, q_t: np.ndarray):
+    """Process input through MAG variant logic to generate gate values.
     
     Args:
-        memory_id: ID of the current memory being processed
-        x_t: Original input embedding
-        k_t: Key projection
-        v_t: Value projection
-        q_t: Query projection
-        y_t: Retrieved embedding from Neural Memory
+        q_t: Query projection from Neural Memory
     
     Returns:
         Dict containing gate values and metrics
     """
     try:
+        # Get historical keys for attention calculation
+        k_hist = self.sequence_context.get_recent_keys()
+        
+        if not k_hist or len(k_hist) == 0:
+            logger.warning("No historical keys available for MAG attention")
+            return {"status": "error", "error": "No historical context available"}
+        
         # Use attention to determine gate values
-        attention_output = self.compute_attention(q_t, k_t)
+        attention_output = self.compute_attention(q_t, k_hist)
         
         # Call Neural Memory's /calculate_gates endpoint
-        response = self.api_client.calculate_gates(
-            attention_output=attention_output.numpy().tolist()
+        response = await self.api_client.calculate_gates(
+            attention_output=self._to_list(attention_output)
         )
         
         # Extract the calculated gates
         gates = response.get("gates", {})
         
         return {
-            "memory_id": memory_id,
+            "status": "success",
             "gates": gates,
-            "metrics": {...}
+            "metrics": {
+                "attention_magnitude": float(np.linalg.norm(attention_output))
+            }
         }
     except Exception as e:
         logger.error(f"Error in MAG variant processing: {str(e)}")
-        return {"error": str(e)}
+        return {"status": "error", "error": str(e)}
 ```
 
-#### NeuralMemoryModule
+#### Integration with ContextCascadeEngine
+
+The refactored ContextCascadeEngine handles the MAG variant by applying its processing *before* the Neural Memory update, ensuring gates can properly influence the memory update process:
 
 ```python
-def calculate_gates(self, attention_output):
-    """Calculate gate values from attention output.
+async def _apply_variant_pre_update(self, step_context):
+    """Apply variant-specific pre-update processing for MAG/MAL variants.
+    
+    For MAG: Calculates attention-based gates
+    For MAL: Calculates modified value projection
     
     Args:
-        attention_output: Output from attention mechanism
+        step_context: The current processing context
         
     Returns:
-        Dict containing alpha_t, theta_t, and eta_t values
+        Dict containing variant processing results
     """
-    # Convert to tensor if needed
-    if not isinstance(attention_output, tf.Tensor):
-        attention_output = tf.convert_to_tensor(attention_output, dtype=tf.float32)
-    
-    # Apply gate projections
-    alpha_t = self.attention_to_alpha(attention_output)
-    theta_t = self.attention_to_theta(attention_output)
-    eta_t = self.attention_to_eta(attention_output)
-    
-    # Apply activation functions
-    alpha_t = tf.nn.sigmoid(alpha_t) * self.alpha_scale
-    theta_t = tf.nn.sigmoid(theta_t) * self.theta_scale
-    eta_t = tf.nn.sigmoid(eta_t) * self.eta_scale
-    
-    # Return as dict
-    return {
-        "alpha_t": float(alpha_t.numpy()),
-        "theta_t": float(theta_t.numpy()),
-        "eta_t": float(eta_t.numpy())
-    }
+    try:
+        if self.active_variant_type == TitansVariantType.MAG:
+            # Process MAG variant
+            mag_result = await self.variant_processor.process_input(step_context["q_t"])
+            
+            if mag_result.get("status") == "success":
+                # Store gates for use in Neural Memory update
+                step_context["gates"] = mag_result.get("gates", {})
+                logger.info(f"MAG variant calculated gates: {step_context['gates']}")
+            else:
+                logger.warning(f"MAG variant processing failed: {mag_result.get('error')}")
+            
+            return mag_result
+            
+        elif self.active_variant_type == TitansVariantType.MAL:
+            # Process MAL variant
+            # ...
+            
+    except Exception as e:
+        logger.error(f"Error in _apply_variant_pre_update: {str(e)}")
+        return {"status": "error", "error": str(e)}
 ```
 
-### HTTP Server Integration
+### Neural Memory Update
 
-The HTTP server provides essential endpoints for MAG variant operation:
-
-1. `/calculate_gates`: Calculates gate values from attention output
-2. `/update_memory`: Accepts external gate values for memory updates
-3. `/config`: Reports current configuration and capabilities
-
-## Dynamic Capability Detection
-
-The system dynamically determines which capabilities are supported using runtime method signature inspection:
+The Neural Memory update process now accepts and applies the gates calculated by the MAG variant:
 
 ```python
-# Check if update_step supports external gates and projections using inspect
-update_step_sig = inspect.signature(nm.update_step)
-supports_external_gates = any(param in update_step_sig.parameters 
-                           for param in ["external_alpha_t", "external_theta_t", "external_eta_t"])
-supports_external_projections = any(param in update_step_sig.parameters 
-                                for param in ["external_k_t", "external_v_t"])
+async def _update_neural_memory(self, step_context):
+    """Update Neural Memory with appropriate modifications based on active variant.
+    
+    Args:
+        step_context: The current processing context
+        
+    Returns:
+        Dict containing update response
+    """
+    try:
+        # Prepare update parameters
+        update_params = {"input_embedding": self._to_list(step_context["x_t"])}
+        
+        # Add MAG gates if available
+        if "gates" in step_context and step_context["gates"]:
+            update_params.update({
+                "alpha_t": step_context["gates"].get("alpha_t"),
+                "theta_t": step_context["gates"].get("theta_t"),
+                "eta_t": step_context["gates"].get("eta_t")
+            })
+            
+        # Add MAL modified value if available
+        if "v_prime" in step_context and step_context["v_prime"] is not None:
+            update_params.update({
+                "key_projection": self._to_list(step_context["k_t"]),
+                "value_projection": self._to_list(step_context["v_prime"])
+            })
+            
+        # Call Neural Memory update endpoint
+        update_resp = await self.neural_memory_client.update_memory(**update_params)
+        
+        # Update step context with response data
+        step_context["loss"] = update_resp.get("loss")
+        step_context["grad_norm"] = update_resp.get("grad_norm")
+        
+        return update_resp
+        
+    except Exception as e:
+        logger.error(f"Error updating Neural Memory: {str(e)}")
+        return {"status": "error", "error": str(e)}
 ```
 
-This approach ensures that the system accurately reports its capabilities regardless of the current implementation details.
+## Testing the MAG Variant
 
-## Usage
+To test the MAG variant, you can use the `lucidia_think_trace` tool with the appropriate environment variable:
 
-### Activating the MAG Variant
+```bash
+# Run in Docker container
+docker exec -e TITANS_VARIANT=MAG trainer-server python -m synthians_memory_core.tools.lucidia_think_trace --query "Testing MAG variant" --memcore-url "http://host.docker.internal:5010"
+```
+
+The output should show:
+
+1. Successful calculation of attention-based gates
+2. Proper application of gates during Neural Memory update
+3. Expected loss and gradient norm metrics
+
+## Activation
 
 To activate the MAG variant, set the `TITANS_VARIANT` environment variable:
 
 ```bash
 export TITANS_VARIANT=MAG  # For Linux/macOS
 set TITANS_VARIANT=MAG      # For Windows CMD
-$env:TITANS_VARIANT="MAG"   # For Windows PowerShell
 ```
 
-Or when running a container:
+In the Docker setup, you can specify this when starting the container:
 
 ```bash
-docker exec -e TITANS_VARIANT=MAG trainer-server [command]
+docker run -e TITANS_VARIANT=MAG ...
 ```
 
-### Testing the MAG Variant
+## Common Issues and Troubleshooting
 
-Use the `lucidia_think_trace` tool to test the MAG variant:
+### Insufficient Historical Context
 
-```bash
-docker exec -e TITANS_VARIANT=MAG trainer-server python -m synthians_memory_core.tools.lucidia_think_trace --query "Your test query here" --memcore-url "http://host.docker.internal:5010"
+The MAG variant requires historical keys to calculate attention-based gates. If there isn't enough historical context, you might see warnings like:
+
+```
+No historical keys available for MAG attention
 ```
 
-## Performance Considerations
+Solution: Ensure that multiple inputs have been processed through the system before expecting MAG to influence the memory update process.
 
-### Advantages
+### TensorFlow Import Errors
 
-- **Adaptive Memory Update**: Gate values adapt based on input context
-- **Improved Relevance**: Attention mechanisms help focus on relevant historical context
-- **Efficient Learning**: Can reduce learning rate for already-familiar inputs
+If you encounter errors related to TensorFlow imports or NumPy version conflicts, verify that:
 
-### Limitations
+1. The lazy loading mechanism is correctly implemented
+2. The fix_numpy.py script has run before any TensorFlow imports
 
-- **Computational Overhead**: Adds additional computation for attention and gate calculation
-- **Requires History**: Performance depends on having sufficient historical context
-- **Configuration Sensitivity**: May require tuning of attention parameters
+## Conclusion
 
-## Troubleshooting
+The refactored MAG variant implementation enables more effective memory-based cognitive processing by:
 
-### Common Issues
+1. Using attention mechanisms to dynamically adjust Neural Memory update parameters
+2. Properly sequencing operations to ensure gates are calculated before the memory update
+3. Maintaining a clean and modular architecture with appropriate separation of concerns
 
-1. **AttributeError for debug_logging**
-   - Caused by references to undefined attributes in ContextCascadeEngine
-   - Solution: Use logger.debug directly instead of conditional checks
-
-2. **API Client Communication Failures**
-   - Caused by missing neural_memory_url in variant processor
-   - Solution: Ensure set_neural_memory_url is called during initialization
-
-3. **Incorrect Capabilities Reporting**
-   - Caused by hardcoded capability flags instead of dynamic detection
-   - Solution: Use inspect.signature to dynamically determine capabilities
-
-## Future Improvements
-
-1. **Performance Optimization**: Reduce computational overhead of attention calculation
-2. **Fine-Tuning Interface**: Add tools for tuning MAG variant parameters
-3. **Visualization Tools**: Create visualizations of gate value changes over time
-4. **Hybrid Approaches**: Explore combinations of MAG with other variants like MAC and MAL
+This implementation follows the general Lucidia principle: "Memory shapes how we think, and thinking shapes how we remember." By allowing attention over past experiences to modulate how new experiences are stored, the MAG variant enhances the cognitive system's ability to prioritize and integrate information.
