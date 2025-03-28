@@ -505,15 +505,19 @@ class MetricsStore:
         for key, default_value in defaults.items():
             if key not in diagnostics:
                 diagnostics[key] = default_value
-                logger.warning(f"Missing key '{key}' in diagnostics, using default value")
+                # Only log warning for non-standard missing keys
+                if key != 'data_points':  # data_points is commonly missing and handled with defaults
+                    logger.warning(f"Missing key '{key}' in diagnostics, using default value")
                 
         # Ensure data_points has all expected keys
+        if 'data_points' not in diagnostics:
+            diagnostics['data_points'] = {}
+            
         for key, default_value in defaults['data_points'].items():
-            if key not in diagnostics.get('data_points', {}):
-                if 'data_points' not in diagnostics:
-                    diagnostics['data_points'] = {}
+            if key not in diagnostics['data_points']:
                 diagnostics['data_points'][key] = default_value
-                logger.warning(f"Missing key '{key}' in data_points, using default value")
+                # Only log warning for non-standard missing keys at debug level
+                logger.debug(f"Missing key '{key}' in data_points, using default value")
         
         # Header
         output = []
