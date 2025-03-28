@@ -461,28 +461,59 @@ class ContextCascadeEngine:
             logger.error(f"Unexpected error during request to {url}: {e}", exc_info=True)
             return {"error": f"Unexpected client error: {str(e)}", "status_code": 500}
 
-    def _validate_embedding(self, embedding: Optional[Union[List[float], np.ndarray]]) -> bool:
-        """Basic validation for embeddings.
+    def _validate_embedding(self, embedding: Union[np.ndarray, List[float], None]) -> bool:
+        """Validate that the embedding is in a usable form (valid np.ndarray or list)."""
+        if embedding is None:
+            return False
         
-        This is a critical validation step referenced in memory #fbee9e47 to
-        ensure we don't pass malformed embeddings to downstream components.
-        
-        Args:
-            embedding: Embedding vector to validate
-            
-        Returns:
-            True if valid, False if contains NaN/Inf
-        """
-        if embedding is None: return False
-        try:
-            embedding_array = np.array(embedding, dtype=np.float32)
-            if np.isnan(embedding_array).any() or np.isinf(embedding_array).any():
-                logger.warning("Invalid embedding detected: contains NaN or Inf values")
+        # If it's already a list, validate its contents
+        if isinstance(embedding, list):
+            if not embedding or not all(isinstance(val, (int, float)) for val in embedding):
                 return False
+            try:
+                # Convert to numpy to do further validation
+                embedding = np.array(embedding, dtype=np.float32)
+            except:
+                return False
+        
+        try:
+            # Convert to numpy if not already
+            if not isinstance(embedding, np.ndarray):
+                embedding = np.array(embedding, dtype=np.float32)
+            
+            # Check for NaN and Inf
+            if np.isnan(embedding).any() or np.isinf(embedding).any():
+                logger.error("Embedding contains NaN or Inf values.")
+                return False
+                
+            # Check for zero vector
+            if np.all(embedding == 0):
+                logger.warning("Embedding is a zero vector.")
+                # We still return True as zero vectors are technically valid
+                
             return True
         except Exception as e:
             logger.error(f"Error validating embedding: {str(e)}")
             return False
+            
+    def _to_list(self, arr):
+        """Safely convert numpy arrays or tensors to list."""
+        if arr is None:
+            return None
+        if isinstance(arr, list):
+            return arr
+        if isinstance(arr, np.ndarray):
+            return arr.tolist()
+        # Try to handle other types (like tensorflow tensors)
+        try:
+            return arr.numpy().tolist()
+        except:
+            # Last resort, try direct conversion
+            try:
+                return list(arr)
+            except:
+                logger.warning(f"Could not convert {type(arr)} to list")
+                return arr
 
     async def _retrieve_from_neural_memory(self, actual_embedding: np.ndarray) -> Dict:
         """Retrieves associated embedding from Neural Memory."""
@@ -490,7 +521,7 @@ class ContextCascadeEngine:
         if not self._validate_embedding(actual_embedding):
              return {"success": False, "error": "Invalid embedding for retrieval"}
 
-        retrieve_payload = {"input_embedding": actual_embedding.tolist()}
+        retrieve_payload = {"input_embedding": self._to_list(actual_embedding)}
         retrieve_resp = await self._make_request(
             self.neural_memory_url, "/retrieve", method="POST", payload=retrieve_payload
         )
@@ -519,7 +550,7 @@ class ContextCascadeEngine:
                  }
                  
                  self.metrics_store.log_retrieval(
-                     query_embedding=actual_embedding.tolist(),
+                     query_embedding=self._to_list(actual_embedding),
                      retrieved_memories=[retrieved_memory],
                      user_emotion=None,
                      intent_id=self._current_intent_id,
@@ -620,8 +651,8 @@ class ContextCascadeEngine:
             "neural_memory_update": update_resp,
             "neural_memory_retrieval": { # Structure this more cleanly
                  "success": retrieve_resp.get("success", False),
-                 "retrieved_embedding": step_context.get("y_t_final").tolist() if step_context.get("y_t_final") is not None else None,
-                 "query_projection": step_context.get("q_t").tolist() if step_context.get("q_t") is not None else None,
+                 "retrieved_embedding": self._to_list(step_context.get("y_t_final")) if step_context.get("y_t_final") is not None else None,
+                 "query_projection": self._to_list(step_context.get("q_t")) if step_context.get("q_t") is not None else None,
                  "error": retrieve_resp.get("error")
             },
             "surprise_metrics": {
@@ -647,11 +678,11 @@ class ContextCascadeEngine:
 
         # Update CCE state
         if step_context.get("y_t_final") is not None:
-             self.last_retrieved_embedding = step_context["y_t_final"].tolist()
+             self.last_retrieved_embedding = self._to_list(step_context["y_t_final"])
         # Add to legacy sequence context (maybe remove later)
         self.sequence_context.append({
              "memory_id": step_context["memory_id"],
-             "actual_embedding": step_context["x_t"].tolist() if step_context["x_t"] is not None else None,
+             "actual_embedding": self._to_list(step_context["x_t"]) if step_context["x_t"] is not None else None,
              "retrieved_embedding": self.last_retrieved_embedding,
              "surprise_metrics": final_response["surprise_metrics"],
              "timestamp": final_response["timestamp"],
@@ -778,7 +809,7 @@ class ContextCascadeEngine:
     async def _update_neural_memory(self, step_context: Dict) -> Dict:
         """Updates Neural Memory, potentially using variant outputs."""
         logger.debug("Step 4: Updating Neural Memory...")
-        update_payload = {"input_embedding": step_context["x_t"].tolist()} # Base payload
+        update_payload = {"input_embedding": self._to_list(step_context["x_t"])} # Base payload
 
         # Add MAG gates if calculated
         if step_context["external_gates"]:
@@ -795,11 +826,11 @@ class ContextCascadeEngine:
                  logger.error("MAL Error: v_prime_t calculated but k_t is missing.")
                  return {"success": False, "error": "k_t missing for MAL update"}
              update_payload = { # Override payload for MAL
-                 "input_embedding": step_context["x_t"].tolist(),
-                 "key_projection": step_context["k_t"].tolist(),
-                 "value_projection": step_context["v_prime_t"].tolist()
+                 "input_embedding": self._to_list(step_context["x_t"]),
+                 "key_projection": self._to_list(step_context["k_t"]),
+                 "value_projection": self._to_list(step_context["v_prime_t"])
              }
-             logger.info("Using MAL external projections (k_t, v_prime_t) for update.")
+             logger.info("Using MAL explicit projections (k_t, v_prime_t) for update.")
 
         update_resp = await self._make_request(
             self.neural_memory_url, "/update_memory", method="POST", payload=update_payload
@@ -810,9 +841,9 @@ class ContextCascadeEngine:
         else:
             logger.info(f"Neural Memory updated: Loss={update_resp.get('loss'):.6f}, GradNorm={update_resp.get('grad_norm'):.6f}")
             # Log memory update metrics if enabled
-            if self.metrics_enabled and update_resp.get("loss") is not None:
+            if self.metrics_enabled:
                 self.metrics_store.log_memory_update(
-                    input_embedding=step_context["x_t"].tolist(),
+                    input_embedding=self._to_list(step_context["x_t"]),
                     loss=update_resp.get("loss"),
                     grad_norm=update_resp.get("grad_norm", 0.0),
                     emotion=step_context["user_emotion"],
@@ -823,7 +854,20 @@ class ContextCascadeEngine:
                         "variant_type": self.active_variant_type.value
                     }
                 )
-            return {"success": True, **update_resp}
+            
+        # Check for errors
+        if "error" in update_resp:
+             logger.error(f"Neural Memory update failed: {update_resp['error']}")
+             return {"success": False, **update_resp}
+             
+        # Extract metrics for subsequent processing
+        if "loss" in update_resp:
+            step_context["loss"] = update_resp["loss"]
+        if "grad_norm" in update_resp:
+            step_context["grad_norm"] = update_resp["grad_norm"]
+             
+        logger.info("Neural Memory update successful")
+        return {"success": True, **update_resp}
 
     async def _apply_quickrecal_boost(self, step_context: Dict, quickrecal_initial: Optional[float]) -> Optional[Dict]:
          """Calculates and applies QuickRecal boost if needed."""
