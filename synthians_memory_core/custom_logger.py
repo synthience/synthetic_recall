@@ -17,38 +17,53 @@ logging.basicConfig(
 )
 
 class Logger:
-    """A simplified logger compatible with the original interface"""
+    """
+    A simplified logger compatible with both the original interface
+    (context, message, data) and standard logging calls (message, *args, **kwargs).
+    """
 
     def __init__(self, name="SynthiansMemory"):
         self.logger = logging.getLogger(name)
 
-    def info(self, context: str, message: str, data: Optional[Dict[str, Any]] = None):
+    def _log(self, level: int, context_or_msg: str, msg: Optional[str] = None, data: Optional[Dict[str, Any]] = None, **kwargs):
+        """Internal log handler."""
+        exc_info = kwargs.pop('exc_info', None) # Extract standard exc_info kwarg
+
+        # Determine how the method was called
+        if msg is not None:
+            # Called likely with (context, message, data)
+            log_message = f"[{context_or_msg}] {msg}"
+            if data:
+                 log_message += f" | Data: {data}"
+        else:
+            # Called likely with standard (message, *args) or (message, data={})
+            # Treat the first argument as the main message
+            log_message = context_or_msg
+            if data: # If data was passed as the third positional arg (legacy)
+                 log_message += f" | Data: {data}"
+            elif kwargs: # Or if data was passed as kwargs (more standard)
+                 # Filter out standard logging kwargs if any snuck in
+                 log_kwargs = {k: v for k, v in kwargs.items() if k not in ['level', 'name', 'pathname', 'lineno', 'funcName', 'exc_text', 'stack_info']}
+                 if log_kwargs:
+                      log_message += f" | Data: {log_kwargs}"
+
+        self.logger.log(level, log_message, exc_info=exc_info)
+
+    def info(self, context_or_msg: str, msg: Optional[str] = None, data: Optional[Dict[str, Any]] = None, **kwargs):
         """Log info message"""
-        log_msg = f"[{context}] {message}"
-        if data:
-            log_msg += f" | Data: {data}"
-        self.logger.info(log_msg)
+        self._log(logging.INFO, context_or_msg, msg, data, **kwargs)
 
-    def warning(self, context: str, message: str, data: Optional[Dict[str, Any]] = None):
+    def warning(self, context_or_msg: str, msg: Optional[str] = None, data: Optional[Dict[str, Any]] = None, **kwargs):
         """Log warning message"""
-        log_msg = f"[{context}] {message}"
-        if data:
-            log_msg += f" | Data: {data}"
-        self.logger.warning(log_msg)
+        self._log(logging.WARNING, context_or_msg, msg, data, **kwargs)
 
-    def error(self, context: str, message: str, data: Optional[Dict[str, Any]] = None):
-        """Log error message"""
-        log_msg = f"[{context}] {message}"
-        if data:
-            log_msg += f" | Data: {data}"
-        self.logger.error(log_msg, exc_info=True if isinstance(data, Exception) else False)
+    def error(self, context_or_msg: str, msg: Optional[str] = None, data: Optional[Dict[str, Any]] = None, **kwargs):
+        """Log error message, accepting exc_info"""
+        self._log(logging.ERROR, context_or_msg, msg, data, **kwargs)
 
-    def debug(self, context: str, message: str, data: Optional[Dict[str, Any]] = None):
+    def debug(self, context_or_msg: str, msg: Optional[str] = None, data: Optional[Dict[str, Any]] = None, **kwargs):
         """Log debug message"""
-        log_msg = f"[{context}] {message}"
-        if data:
-            log_msg += f" | Data: {data}"
-        self.logger.debug(log_msg)
+        self._log(logging.DEBUG, context_or_msg, msg, data, **kwargs)
 
 # Create a singleton logger instance
 logger = Logger()

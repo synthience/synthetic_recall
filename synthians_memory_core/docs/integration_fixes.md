@@ -1,14 +1,75 @@
 # Integration Fixes - Lucidia Memory System
 
-*Last Updated: March 28, 2025*
+*Last Updated: March 29, 2025*
 
 ## Overview
 
 This document details critical integration fixes implemented to ensure seamless communication between the Memory Core, Neural Memory module, and Context Cascade Engine components of the Lucidia bi-hemispheric memory system.
 
-## Latest Critical Fixes (March 28, 2025)
+## Latest Critical Fixes (March 29, 2025)
 
-### 1. Memory ID Retrieval and Update
+### 1. Deep Metadata Merging in Memory Updates
+
+**Issues Fixed:**
+- Nested metadata dictionaries were being overwritten rather than merged during updates
+- Metadata fields like timestamps and source information were lost during updates
+- Test failures occurred in `test_update_metadata`, `test_update_persistence`, and `test_quickrecal_updated_timestamp`
+
+**Solution:**
+- Enhanced the `_deep_update_dict` method with improved dictionary merging:
+  ```python
+  def _deep_update_dict(self, d: Dict, u: Dict) -> Dict:
+      """
+      Recursively update a dictionary with another dictionary
+      This handles nested dictionaries properly
+      """
+      for k, v in u.items():
+          if isinstance(v, dict) and k in d and isinstance(d[k], dict):
+              # Only recursively merge if both the source and update have dict values
+              d[k] = self._deep_update_dict(d[k], v)
+          else:
+              d[k] = v
+      return d
+  ```
+
+- Restructured the `update_memory` method to handle metadata updates separately:
+  ```python
+  # Store metadata update separately to apply after all direct attributes
+  metadata_to_update = None
+  
+  # Update the memory fields
+  for key, value in updates.items():
+      if key == "metadata" and isinstance(value, dict):
+          # Store metadata updates to apply them after direct attribute updates
+          metadata_to_update = value
+          continue
+      
+      # Process other attributes...
+  
+  # Apply metadata updates after other fields have been processed
+  if metadata_to_update:
+      if memory.metadata is None:
+          memory.metadata = {}
+      # Use deep update to properly handle nested dictionaries
+      self._deep_update_dict(memory.metadata, metadata_to_update)
+  ```
+
+- Fixed Vector Index update method:
+  ```python
+  try:
+      self.vector_index.update_entry(memory_id, memory.embedding)
+  except AttributeError:
+      # Handle case where update_entry doesn't exist (use remove/add pattern)
+      self.vector_index.add(memory_id, memory.embedding)
+  ```
+
+**Benefits:**
+- Preserves existing metadata structures when updating nested dictionaries
+- Ensures timestamp and source information persist across updates
+- Improves robustness of the memory persistence system
+- See the detailed [metadata_handling.md](./metadata_handling.md) document for more information
+
+### 2. Memory ID Retrieval and Update
 
 **Issues Fixed:**
 - Missing `get_memory_by_id` method in SynthiansMemoryCore prevented updating quickrecal scores
@@ -54,7 +115,7 @@ This document details critical integration fixes implemented to ensure seamless 
           return True
   ```
 
-### 2. Neural Memory Dimension Mismatch
+### 3. Neural Memory Dimension Mismatch
 
 **Issues Fixed:**
 - Configuration error: `query_dim` (768) not matching `key_dim` (128) in Neural Memory module
@@ -88,7 +149,7 @@ This document details critical integration fixes implemented to ensure seamless 
   retrieved_tensor = nm(input_tensor, training=False)
   ```
 
-### 3. Cognitive Cascade Integration
+### 4. Cognitive Cascade Integration
 
 **Issues Fixed:**
 - Context Cascade Engine wasn't properly passing raw embeddings to Neural Memory module

@@ -6,7 +6,7 @@ import time
 import logging
 import numpy as np
 from typing import Dict, Any, List, Optional, Union
-from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Path, Depends, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -115,6 +115,12 @@ class TranscriptionResponse(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(None, description="Extracted metadata from the transcription")
     embedding: Optional[List[float]] = Field(None, description="Embedding generated for the transcription")
     error: Optional[str] = Field(None, description="Error message if operation failed")
+
+class GetMemoryResponse(BaseModel):
+    """Response model for memory retrieval."""
+    success: bool
+    memory: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
 
 # App lifespan for initialization/cleanup
 @asynccontextmanager
@@ -852,6 +858,27 @@ async def process_transcription(request: TranscriptionRequest, background_tasks:
             success=False,
             error=str(e)
         )
+
+# --- Additional Memory Management Endpoints ---
+
+@app.get("/api/memories/{memory_id}", response_model=GetMemoryResponse, tags=["Memory Management"])
+async def get_memory(memory_id: str = Path(..., title="Memory ID", description="The unique ID of the memory to retrieve")):
+    """Retrieve a specific memory entry by its ID."""
+    try:
+        memory = await app.state.memory_core.get_memory_by_id(memory_id)
+        
+        if memory is None:
+            logger.warning("API", f"Memory not found: {memory_id}")
+            return GetMemoryResponse(success=False, error=f"Memory with ID '{memory_id}' not found")
+        
+        # Use the MemoryEntry's to_dict method for proper serialization
+        memory_dict = memory.to_dict()
+        
+        logger.info("API", f"Retrieved memory: {memory_id}")
+        return GetMemoryResponse(success=True, memory=memory_dict)
+    except Exception as e:
+        logger.error("API", f"Error retrieving memory: {str(e)}")
+        return GetMemoryResponse(success=False, error=f"Internal error: {str(e)}")
 
 # --- Optional: Assembly Management Endpoints (Basic for MVP) ---
 

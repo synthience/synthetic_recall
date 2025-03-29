@@ -1,53 +1,43 @@
 version: '3.8'
 
 services:
-  memory-core:
-    image: nemo_qr_v1:latest
-    container_name: memory-core
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./:/app
-    environment:
-      - MODEL_ENDPOINT=all-mpnet-base-v2
-      - PORT=8000
-    command: bash -c "pip install -q fastapi uvicorn aiohttp pydantic tensorflow && python -m synthians_memory_core.api.server"
-    networks:
-      - lucidia-network
-
   trainer-server:
     image: nemo_qr_v1:latest
     container_name: trainer-server
-    ports:
-      - "8001:8001"
+    network_mode: host
     volumes:
       - ./:/app
     environment:
-      - MEMORY_CORE_URL=http://memory-core:8000
+      - MEMORY_CORE_URL=http://localhost:5010
       - PORT=8001
-    command: bash -c "pip install -q fastapi uvicorn aiohttp pydantic tensorflow && python -m synthians_memory_core.synthians_trainer_server.http_server"
-    depends_on:
-      - memory-core
-    networks:
-      - lucidia-network
+      - TF_CPP_MIN_LOG_LEVEL=2
+    command: bash -c "pip install -q fastapi uvicorn aiohttp pydantic tensorflow pandas && python fix_numpy.py python -m synthians_memory_core.synthians_trainer_server.http_server"
 
   context-cascade-orchestrator:
     image: nemo_qr_v1:latest
     container_name: context-cascade-orchestrator
-    ports:
-      - "8002:8000"
+    network_mode: host
     volumes:
       - ./:/app
     environment:
-      - MEMORY_CORE_URL=http://memory-core:8000
-      - TRAINER_URL=http://trainer-server:8001
-    command: bash -c "pip install -q fastapi uvicorn aiohttp pydantic tensorflow && python -m uvicorn synthians_memory_core.orchestrator.server:app --host 0.0.0.0 --port 8000"
+      - MEMORY_CORE_URL=http://localhost:5010
+      - TRAINER_URL=http://localhost:8001
+      - NEURAL_MEMORY_URL=http://localhost:8001
+    command: bash -c "pip install -q fastapi uvicorn aiohttp pydantic tensorflow && python -m uvicorn synthians_memory_core.orchestrator.server:app --host 0.0.0.0 --port 8002"
     depends_on:
-      - memory-core
       - trainer-server
-    networks:
-      - lucidia-network
 
-networks:
-  lucidia-network:
-    driver: bridge
+  livekit-server:
+    image: livekit/livekit-server
+    container_name: livekit-server
+    # Using ports mapping instead of host network to avoid conflicts
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+      - "3478:3478/udp"
+      - "5349:5349"
+      - "40000-40100:40000-40100/udp"
+    volumes:
+      - ./config/livekit.yaml:/livekit.yaml
+    command: --config /livekit.yaml

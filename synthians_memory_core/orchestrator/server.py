@@ -41,8 +41,8 @@ def get_orchestrator():
     """Get or initialize the context cascade orchestrator."""
     global orchestrator
     if orchestrator is None:
-        # Get URLs from environment variables
-        memory_core_url = os.environ.get("MEMORY_CORE_URL", "http://localhost:5010")
+        # Get URLs from environment variables with updated defaults
+        memory_core_url = os.environ.get("MEMORY_CORE_URL", "http://localhost:5010")  # Default to localhost:5010
         neural_memory_url = os.environ.get("NEURAL_MEMORY_URL", "http://localhost:8001")
         
         # Initialize shared geometry manager
@@ -79,14 +79,14 @@ async def process_memory(request: ProcessMemoryRequest):
     orchestrator = get_orchestrator()
     
     try:
-        result = await orchestrator.process_new_memory(
+        result = await orchestrator.process_new_input(
             content=request.content,
             embedding=request.embedding,
             metadata=request.metadata
         )
         return result
     except Exception as e:
-        logger.error(f"Error processing memory: {str(e)}")
+        logger.error(f"Error processing memory: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error processing memory: {str(e)}")
 
 @app.post("/get_sequence_embeddings")

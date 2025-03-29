@@ -841,7 +841,8 @@
         "reason": "NM Surprise (Loss:0.6245, GradNorm:2.9935)"
       }
     ],
-    "surprise_count": 1
+    "surprise_count": 1,
+    "effective_quickrecal": 0.7433542521174317
   },
   "access_count": 0,
   "last_access_time": 1743169397.4607608,

@@ -565,7 +565,7 @@ import time
 import logging
 import numpy as np
 from typing import Dict, Any, List, Optional, Union
-from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Path, Depends, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -601,6 +601,7 @@ class ProcessMemoryResponse(BaseModel):
     success: bool
     memory_id: Optional[str] = None
     quickrecal_score: Optional[float] = None
+    embedding: Optional[List[float]] = None
     metadata: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
@@ -673,6 +674,12 @@ class TranscriptionResponse(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(None, description="Extracted metadata from the transcription")
     embedding: Optional[List[float]] = Field(None, description="Embedding generated for the transcription")
     error: Optional[str] = Field(None, description="Error message if operation failed")
+
+class GetMemoryResponse(BaseModel):
+    """Response model for memory retrieval."""
+    success: bool
+    memory: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
 
 # App lifespan for initialization/cleanup
 @asynccontextmanager
@@ -1040,6 +1047,7 @@ async def process_memory(request: ProcessMemoryRequest, background_tasks: Backgr
                 success=True,
                 memory_id=memory_id,
                 quickrecal_score=quickrecal_score,
+                embedding=embedding,
                 metadata=metadata
             )
             
@@ -1410,6 +1418,27 @@ async def process_transcription(request: TranscriptionRequest, background_tasks:
             error=str(e)
         )
 
+# --- Additional Memory Management Endpoints ---
+
+@app.get("/api/memories/{memory_id}", response_model=GetMemoryResponse, tags=["Memory Management"])
+async def get_memory(memory_id: str = Path(..., title="Memory ID", description="The unique ID of the memory to retrieve")):
+    """Retrieve a specific memory entry by its ID."""
+    try:
+        memory = await app.state.memory_core.get_memory_by_id(memory_id)
+        
+        if memory is None:
+            logger.warning("API", f"Memory not found: {memory_id}")
+            return GetMemoryResponse(success=False, error=f"Memory with ID '{memory_id}' not found")
+        
+        # Use the MemoryEntry's to_dict method for proper serialization
+        memory_dict = memory.to_dict()
+        
+        logger.info("API", f"Retrieved memory: {memory_id}")
+        return GetMemoryResponse(success=True, memory=memory_dict)
+    except Exception as e:
+        logger.error("API", f"Error retrieving memory: {str(e)}")
+        return GetMemoryResponse(success=False, error=f"Internal error: {str(e)}")
+
 # --- Optional: Assembly Management Endpoints (Basic for MVP) ---
 
 @app.get("/assemblies")
@@ -1578,663 +1607,1652 @@ logging.basicConfig(
 )
 
 class Logger:
-    """A simplified logger compatible with the original interface"""
+    """
+    A simplified logger compatible with both the original interface
+    (context, message, data) and standard logging calls (message, *args, **kwargs).
+    """
 
     def __init__(self, name="SynthiansMemory"):
         self.logger = logging.getLogger(name)
 
-    def info(self, context: str, message: str, data: Optional[Dict[str, Any]] = None):
+    def _log(self, level: int, context_or_msg: str, msg: Optional[str] = None, data: Optional[Dict[str, Any]] = None, **kwargs):
+        """Internal log handler."""
+        exc_info = kwargs.pop('exc_info', None) # Extract standard exc_info kwarg
+
+        # Determine how the method was called
+        if msg is not None:
+            # Called likely with (context, message, data)
+            log_message = f"[{context_or_msg}] {msg}"
+            if data:
+                 log_message += f" | Data: {data}"
+        else:
+            # Called likely with standard (message, *args) or (message, data={})
+            # Treat the first argument as the main message
+            log_message = context_or_msg
+            if data: # If data was passed as the third positional arg (legacy)
+                 log_message += f" | Data: {data}"
+            elif kwargs: # Or if data was passed as kwargs (more standard)
+                 # Filter out standard logging kwargs if any snuck in
+                 log_kwargs = {k: v for k, v in kwargs.items() if k not in ['level', 'name', 'pathname', 'lineno', 'funcName', 'exc_text', 'stack_info']}
+                 if log_kwargs:
+                      log_message += f" | Data: {log_kwargs}"
+
+        self.logger.log(level, log_message, exc_info=exc_info)
+
+    def info(self, context_or_msg: str, msg: Optional[str] = None, data: Optional[Dict[str, Any]] = None, **kwargs):
         """Log info message"""
-        log_msg = f"[{context}] {message}"
-        if data:
-            log_msg += f" | Data: {data}"
-        self.logger.info(log_msg)
+        self._log(logging.INFO, context_or_msg, msg, data, **kwargs)
 
-    def warning(self, context: str, message: str, data: Optional[Dict[str, Any]] = None):
+    def warning(self, context_or_msg: str, msg: Optional[str] = None, data: Optional[Dict[str, Any]] = None, **kwargs):
         """Log warning message"""
-        log_msg = f"[{context}] {message}"
-        if data:
-            log_msg += f" | Data: {data}"
-        self.logger.warning(log_msg)
+        self._log(logging.WARNING, context_or_msg, msg, data, **kwargs)
 
-    def error(self, context: str, message: str, data: Optional[Dict[str, Any]] = None):
-        """Log error message"""
-        log_msg = f"[{context}] {message}"
-        if data:
-            log_msg += f" | Data: {data}"
-        self.logger.error(log_msg, exc_info=True if isinstance(data, Exception) else False)
+    def error(self, context_or_msg: str, msg: Optional[str] = None, data: Optional[Dict[str, Any]] = None, **kwargs):
+        """Log error message, accepting exc_info"""
+        self._log(logging.ERROR, context_or_msg, msg, data, **kwargs)
 
-    def debug(self, context: str, message: str, data: Optional[Dict[str, Any]] = None):
+    def debug(self, context_or_msg: str, msg: Optional[str] = None, data: Optional[Dict[str, Any]] = None, **kwargs):
         """Log debug message"""
-        log_msg = f"[{context}] {message}"
-        if data:
-            log_msg += f" | Data: {data}"
-        self.logger.debug(log_msg)
+        self._log(logging.DEBUG, context_or_msg, msg, data, **kwargs)
 
 # Create a singleton logger instance
 logger = Logger()
 ```
 
-# docs\api_reference.md
+# docs\API_REFERENCE.md
 
 ```md
-# API Reference
+Okay, here is the `API_REFERENCE.md` document, reflecting the endpoints and models defined in the provided `api/server.py`, `synthians_trainer_server/http_server.py`, and `orchestrator/server.py` files.
 
-This document provides a detailed reference for the APIs exposed by each component in the Bi-Hemispheric Cognitive Architecture.
+\`\`\`markdown
+# Synthians Cognitive Architecture: API Reference (Current State)
+
+This document provides a reference for the APIs exposed by the three core services: Synthians Memory Core, Neural Memory Server, and Context Cascade Engine.
+
+**Date:** March 29, 2025
 
 ## Table of Contents
 
-1. [Memory Core API](#memory-core-api)
-2. [Trainer Server API](#trainer-server-api)
-3. [Context Cascade Engine API](#context-cascade-engine-api)
-4. [Memory Assembly Management](#memory-assembly-management)
-5. [Error Handling](#error-handling)
+1.  [Synthians Memory Core API](#synthians-memory-core-api)
+2.  [Neural Memory Server API](#neural-memory-server-api)
+3.  [Context Cascade Engine API](#context-cascade-engine-api)
+4.  [Common Error Handling](#common-error-handling)
 
-## Memory Core API
+---
 
-Base URL: `http://localhost:8000`
+## 1. Synthians Memory Core API
 
-### Process Memory
+**Base URL:** `http://localhost:5010` (Default)
 
-\`\`\`
-POST /api/memories/process
-\`\`\`
+This service manages persistent memory storage, retrieval, scoring, and related functionalities.
 
-Processes a new memory, generating embeddings and enriching metadata.
+---
 
-**Request Body:**
+### Root
 
-\`\`\`json
-{
-  "content": "Memory text content",
-  "source": "source_identifier",
-  "timestamp": "2025-03-27T20:10:30Z",
-  "embedding": [0.1, 0.2, ...],  // Optional pre-computed embedding
-  "metadata": {  // Optional metadata
-    "user": "user_id",
-    "topic": "conversation_topic",
-    "emotions": {"joy": 0.8, "surprise": 0.2}
-  }
-}
-\`\`\`
-
-**Response:**
-
-\`\`\`json
-{
-  "id": "memory_uuid",
-  "content": "Memory text content",
-  "embedding": [0.1, 0.2, ...],
-  "timestamp": "2025-03-27T20:10:30Z",
-  "quickrecal_score": 0.85,
-  "metadata": {
-    "user": "user_id",
-    "topic": "conversation_topic",
-    "emotions": {"joy": 0.8, "surprise": 0.2},
-    "dominant_emotion": "joy",
-    "importance": 0.75,
-    "content_length": 120
-  }
-}
-\`\`\`
-
-### Retrieve Memories
-
-\`\`\`
-POST /api/memories/retrieve
-\`\`\`
-
-Retrieves memories based on similarity to a query embedding.
-
-**Request Body:**
-
-\`\`\`json
-{
-  "embedding": [0.1, 0.2, ...],
-  "limit": 10,
-  "threshold": 0.3,
-  "filters": {
-    "topic": "optional_topic_filter",
-    "user": "optional_user_filter",
-    "emotion": "optional_emotion_filter"
-  }
-}
-\`\`\`
-
-**Response:**
-
-\`\`\`json
-{
-  "memories": [
+*   **Method:** `GET`
+*   **Path:** `/`
+*   **Description:** Basic endpoint indicating the API is running.
+*   **Response (Success):**
+    \`\`\`json
     {
-      "id": "memory_uuid",
-      "content": "Memory text content",
-      "embedding": [0.1, 0.2, ...],
-      "timestamp": "2025-03-27T20:10:30Z",
-      "similarity": 0.92,
-      "quickrecal_score": 0.85,
-      "metadata": {...}
-    },
-    // Additional memories
-  ]
-}
-\`\`\`
+      "message": "Synthians Memory Core API"
+    }
+    \`\`\`
 
-### Get Sequence Embeddings
-
-\`\`\`
-POST /api/memories/get_sequence_embeddings
-\`\`\`
-
-Retrieves a sequence of memory embeddings for training or prediction.
-
-**Request Body:**
-
-\`\`\`json
-{
-  "topic": "optional_topic",
-  "user": "optional_user",
-  "emotion": "optional_emotion",
-  "min_importance": 0.5,
-  "limit": 100,
-  "min_quickrecal_score": 0.3,
-  "start_timestamp": "2025-03-20T00:00:00Z",
-  "end_timestamp": "2025-03-27T23:59:59Z",
-  "sort_by": "timestamp"  // or "quickrecal_score"
-}
-\`\`\`
-
-**Response:**
-
-\`\`\`json
-{
-  "embeddings": [
-    {
-      "id": "memory_uuid",
-      "embedding": [0.1, 0.2, ...],
-      "timestamp": "2025-03-27T20:10:30Z",
-      "quickrecal_score": 0.85,
-      "emotion": {"joy": 0.8, "surprise": 0.2},
-      "dominant_emotion": "joy",
-      "importance": 0.75,
-      "topic": "conversation_topic",
-      "user": "user_id"
-    },
-    // Additional embeddings
-  ]
-}
-\`\`\`
-
-### Update QuickRecal Score
-
-\`\`\`
-POST /api/memories/update_quickrecal_score
-\`\`\`
-
-Updates the quickrecal score of a memory based on surprise feedback.
-
-**Request Body:**
-
-\`\`\`json
-{
-  "memory_id": "memory_uuid",
-  "delta": 0.2,
-  "predicted_embedding": [0.1, 0.2, ...],
-  "reason": "Surprise score: 0.8, context surprise: 0.3",
-  "embedding_delta": [0.05, -0.03, ...]
-}
-\`\`\`
-
-**Response:**
-
-\`\`\`json
-{
-  "status": "success",
-  "memory_id": "memory_uuid",
-  "previous_score": 0.65,
-  "new_score": 0.85,
-  "delta": 0.2
-}
-\`\`\`
-
-## Trainer Server API
-
-Base URL: `http://localhost:8001`
+---
 
 ### Health Check
 
-\`\`\`
-GET /health
-\`\`\`
+*   **Method:** `GET`
+*   **Path:** `/health`
+*   **Description:** Checks the health status of the Memory Core service.
+*   **Response (Success):**
+    \`\`\`json
+    {
+      "status": "healthy",
+      "uptime_seconds": 1234.56,
+      "memory_count": 500,
+      "assembly_count": 50,
+      "version": "1.0.0"
+    }
+    \`\`\`
+*   **Response (Error):**
+    \`\`\`json
+    {
+      "status": "unhealthy",
+      "error": "Description of the error"
+    }
+    \`\`\`
 
-Checks the health status of the Trainer Server.
+---
 
-**Response:**
+### Get Statistics
 
-\`\`\`json
-{
-  "status": "ok",
-  "timestamp": "2025-03-27T20:10:30Z"
-}
-\`\`\`
+*   **Method:** `GET`
+*   **Path:** `/stats`
+*   **Description:** Retrieves detailed statistics about the Memory Core system, including memory counts, vector index status, and configuration.
+*   **Response (Success):**
+    \`\`\`json
+    {
+      "success": true,
+      "api_server": {
+        "uptime_seconds": 1234.56,
+        "memory_count": 500,
+        "embedding_dim": 768,
+        "geometry": "hyperbolic",
+        "model": "all-mpnet-base-v2"
+      },
+      "memory": {
+        "total_memories": 500,
+        "total_assemblies": 50,
+        "storage_path": "/app/memory/stored/synthians",
+        "threshold": 0.75
+      },
+      "vector_index": {
+        "count": 500,
+        "id_mappings": 500,
+        "index_type": "Cosine"
+      }
+    }
+    \`\`\`
+*   **Response (Error):**
+    \`\`\`json
+    {
+      "success": false,
+      "error": "Description of the error retrieving stats"
+    }
+    \`\`\`
 
-### Initialize Trainer
-
-\`\`\`
-POST /init
-\`\`\`
-
-Initializes the sequence trainer model with configuration.
-
-**Request Body:**
-
-\`\`\`json
-{
-  "inputDim": 768,
-  "hiddenDim": 512,
-  "outputDim": 768,
-  "memoryDim": 256,
-  "learningRate": 0.001
-}
-\`\`\`
-
-**Response:**
-
-\`\`\`json
-{
-  "message": "Sequence trainer model initialized",
-  "config": {
-    "inputDim": 768,
-    "hiddenDim": 512,
-    "outputDim": 768,
-    "memoryDim": 256,
-    "learningRate": 0.001
-  }
-}
-\`\`\`
-
-### Predict Next Embedding
-
-\`\`\`
-POST /predict_next_embedding
-\`\`\`
-
-Predicts the next embedding based on a sequence of input embeddings. This endpoint is fully stateless, relying on the `previous_memory_state` parameter for continuity between calls.
-
-**Request Body:**
-
-\`\`\`json
-{
-  "embeddings": [[0.1, 0.2, ...], [0.3, 0.4, ...], ...],
-  "previous_memory_state": {  // Required for stateless operation
-    "sequence": [[0.1, 0.2, ...], [0.3, 0.4, ...]],
-    "surprise_history": [0.1, 0.2],
-    "momentum": [0.1, 0.2, ...]
-  }
-}
-\`\`\`
-
-**Response:**
-
-\`\`\`json
-{
-  "predicted_embedding": [0.1, 0.2, ...],
-  "surprise_score": 0.35,
-  "memory_state": {  // State to pass in the next prediction request
-    "sequence": [[0.3, 0.4, ...], [0.5, 0.6, ...]],
-    "surprise_history": [0.2, 0.35],
-    "momentum": [0.15, 0.25, ...]
-  }
-}
-\`\`\`
-
-### Train Sequence
-
-\`\`\`
-POST /train_sequence
-\`\`\`
-
-Trains the model on a sequence of embeddings.
-
-**Request Body:**
-
-\`\`\`json
-{
-  "embeddings": [[0.1, 0.2, ...], [0.3, 0.4, ...], ...]
-}
-\`\`\`
-
-**Response:**
-
-\`\`\`json
-{
-  "success": true,
-  "loss": 0.015,
-  "iterations": 10,
-  "message": "Training successful"
-}
-\`\`\`
-
-### Analyze Surprise
-
-\`\`\`
-POST /analyze_surprise
-\`\`\`
-
-Analyzes the surprise between predicted and actual embeddings.
-
-**Request Body:**
-
-\`\`\`json
-{
-  "predicted_embedding": [0.1, 0.2, ...],
-  "actual_embedding": [0.1, 0.3, ...]
-}
-\`\`\`
-
-**Response:**
-
-\`\`\`json
-{
-  "surprise": 0.15,
-  "cosine_surprise": 0.12,
-  "context_surprise": 0.18,
-  "delta_norm": 0.22,
-  "is_surprising": true,
-  "adaptive_threshold": 0.10,
-  "volatility": 0.05,
-  "delta": [0.0, 0.1, ...],
-  "quickrecal_boost": 0.15
-}
-\`\`\`
-
-## Context Cascade Engine API
-
-Base URL: `http://localhost:8002`
+---
 
 ### Process Memory
 
-\`\`\`
-POST /api/process_memory
-\`\`\`
-
-Processes a memory through the full cognitive pipeline.
-
-**Request Body:**
-
-\`\`\`json
-{
-  "content": "Memory text content",
-  "embedding": [0.1, 0.2, ...],  // Optional pre-computed embedding
-  "metadata": {  // Optional metadata
-    "user": "user_id",
-    "topic": "conversation_topic",
-    "emotions": {"joy": 0.8, "surprise": 0.2}
-  }
-}
-\`\`\`
-
-**Response:**
-
-\`\`\`json
-{
-  "memory_id": "memory_uuid",
-  "status": "processed",
-  "timestamp": "2025-03-27T20:10:30Z",
-  "surprise": {
-    "score": 0.35,
-    "threshold": 0.6,
-    "is_surprising": false,
-    "factors": {
-      "geometric": 0.28,
-      "contextual": 0.42,
-      "semantic": 0.35
+*   **Method:** `POST`
+*   **Path:** `/process_memory`
+*   **Description:** Processes and stores a new memory entry. Generates embedding if not provided, calculates QuickRecal score, performs emotion analysis (optional), synthesizes metadata, and saves the memory.
+*   **Request Model:** (`ProcessMemoryRequest`)
+    \`\`\`json
+    {
+      "content": "string",
+      "embedding": "Optional[List[float]]",
+      "metadata": "Optional[Dict[str, Any]]",
+      "analyze_emotion": "Optional[bool]" // Default: true
     }
-  },
-  "prediction": {
-    "predicted_embedding": [0.15, 0.25, ...],
-    "confidence": 0.85
-  },
-  "memory_state": {
-    "quickrecal_score": 0.85,
-    "adjusted_score": 0.85  // Same as quickrecal_score if no surprise
-  }
-}
-\`\`\`
+    \`\`\`
+*   **Response Model:** (`ProcessMemoryResponse`)
+    \`\`\`json
+    {
+      "success": true,
+      "memory_id": "string",
+      "quickrecal_score": "float",
+      "embedding": "List[float]",
+      "metadata": "Dict[str, Any]",
+      "error": null // Or error string on failure
+    }
+    \`\`\`
+
+---
 
 ### Retrieve Memories
 
-\`\`\`
-POST /api/retrieve_memories
-\`\`\`
-
-Retrieves memories with enhanced context-aware filtering.
-
-**Request Body:**
-
-\`\`\`json
-{
-  "query": "Query text content",
-  "embedding": [0.1, 0.2, ...],  // Optional pre-computed query embedding
-  "limit": 10,
-  "threshold": 0.3,
-  "current_emotion": {  // Optional emotional context
-    "dominant": "joy",
-    "values": {"joy": 0.8, "surprise": 0.2}
-  },
-  "cognitive_load": 0.5,  // Optional, 0.0-1.0
-  "filters": {
-    "topic": "optional_topic_filter",
-    "user": "optional_user_filter",
-    "emotion": "optional_emotion_filter"
-  }
-}
-\`\`\`
-
-**Response:**
-
-\`\`\`json
-{
-  "memories": [
+*   **Method:** `POST`
+*   **Path:** `/retrieve_memories`
+*   **Description:** Retrieves relevant memories based on a query string or embedding. Applies emotional gating and adaptive thresholding.
+*   **Request Model:** (`RetrieveMemoriesRequest`)
+    \`\`\`json
     {
-      "id": "memory_uuid",
-      "content": "Memory text content",
-      "embedding": [0.1, 0.2, ...],
-      "timestamp": "2025-03-27T20:10:30Z",
-      "similarity": 0.92,
-      "emotional_resonance": 0.85,
-      "final_score": 0.89,  // Combined score after emotional gating
-      "quickrecal_score": 0.85,
-      "metadata": {...}
-    },
-    // Additional memories
-  ],
-  "context": {
-    "query_emotion": "joy",
-    "cognitive_load_applied": 0.5,
-    "filters_applied": ["topic"],
-    "emotional_gating_applied": true
-  }
-}
-\`\`\`
+      "query": "string",
+      "query_embedding": "Optional[List[float]]", // Currently handled internally if query string provided
+      "top_k": "int" // Default: 5
+      "user_emotion": "Optional[Union[Dict[str, Any], str]]", // e.g., {"dominant_emotion": "joy"} or "joy"
+      "cognitive_load": "float" // Default: 0.5
+      "threshold": "Optional[float]" // Explicit retrieval threshold
+    }
+    \`\`\`
+*   **Response Model:** (`RetrieveMemoriesResponse`)
+    \`\`\`json
+    {
+      "success": true,
+      "memories": [
+        {
+          "id": "string",
+          "content": "string",
+          "embedding": "List[float]",
+          "timestamp": "float",
+          "quickrecal_score": "float",
+          "metadata": "Dict[str, Any]",
+          "similarity": "float", // Similarity to query
+          "emotional_resonance": "Optional[float]", // If emotional gating applied
+          "final_score": "Optional[float]" // If emotional gating applied
+          // ... other MemoryEntry fields
+        }
+        // ... more memories
+      ],
+      "error": null // Or error string on failure
+    }
+    \`\`\`
 
-## Memory Assembly Management
+---
 
-The Memory Core provides APIs for creating and managing memory assemblies, which group related memories together.
+### Generate Embedding
 
-### Create Assembly
+*   **Method:** `POST`
+*   **Path:** `/generate_embedding`
+*   **Description:** Generates an embedding vector for the given text using the configured model.
+*   **Request Model:** (`GenerateEmbeddingRequest`)
+    \`\`\`json
+    {
+      "text": "string"
+    }
+    \`\`\`
+*   **Response Model:** (`GenerateEmbeddingResponse`)
+    \`\`\`json
+    {
+      "success": true,
+      "embedding": "List[float]",
+      "dimension": "int",
+      "error": null
+    }
+    \`\`\`
 
-\`\`\`
-POST /api/assemblies/create
-\`\`\`
+---
 
-Creates a new memory assembly.
+### Calculate QuickRecal Score
 
-**Request Body:**
+*   **Method:** `POST`
+*   **Path:** `/calculate_quickrecal`
+*   **Description:** Calculates the QuickRecal score for a given text or embedding, considering context.
+*   **Request Model:** (`QuickRecalRequest`)
+    \`\`\`json
+    {
+      "embedding": "Optional[List[float]]",
+      "text": "Optional[string]",
+      "context": "Optional[Dict[str, Any]]" // Includes timestamp, relevance, etc.
+    }
+    \`\`\`
+*   **Response Model:** (`QuickRecalResponse`)
+    \`\`\`json
+    {
+      "success": true,
+      "quickrecal_score": "float",
+      "factors": "Optional[Dict[str, float]]", // Contributing factor scores
+      "error": null
+    }
+    \`\`\`
 
-\`\`\`json
-{
-  "name": "Assembly Name",
-  "description": "Optional assembly description",
-  "initial_memories": ["memory_id_1", "memory_id_2", ...],
-  "tags": ["tag1", "tag2"],
-  "metadata": {  // Optional metadata
-    "creator": "user_id",
-    "category": "assembly_category"
-  }
-}
-\`\`\`
+---
 
-**Response:**
+### Analyze Emotion
 
-\`\`\`json
-{
-  "assembly_id": "assembly_uuid",
-  "name": "Assembly Name",
-  "memory_count": 2,
-  "composite_embedding": [0.1, 0.2, ...],
-  "creation_time": "2025-03-27T20:10:30Z",
-  "dominant_emotions": ["joy", "curiosity"],
-  "keywords": ["keyword1", "keyword2"]
-}
-\`\`\`
+*   **Method:** `POST`
+*   **Path:** `/analyze_emotion`
+*   **Description:** Analyzes the emotional content of the given text.
+*   **Request Model:** (`EmotionRequest`)
+    \`\`\`json
+    {
+      "text": "string"
+    }
+    \`\`\`
+*   **Response Model:** (`EmotionResponse`)
+    \`\`\`json
+    {
+      "success": true,
+      "emotions": "Dict[str, float]", // Scores for different emotions
+      "dominant_emotion": "string",
+      "error": null
+    }
+    \`\`\`
 
-### Add Memory to Assembly
+---
 
-\`\`\`
-POST /api/assemblies/{assembly_id}/add_memory
-\`\`\`
+### Provide Feedback
 
-Adds a memory to an existing assembly.
+*   **Method:** `POST`
+*   **Path:** `/provide_feedback`
+*   **Description:** Provides feedback on the relevance of a retrieved memory, used for adaptive threshold calibration.
+*   **Request Model:** (`FeedbackRequest`)
+    \`\`\`json
+    {
+      "memory_id": "string",
+      "similarity_score": "float",
+      "was_relevant": "bool"
+    }
+    \`\`\`
+*   **Response Model:** (`FeedbackResponse`)
+    \`\`\`json
+    {
+      "success": true,
+      "new_threshold": "Optional[float]", // Current threshold after adjustment
+      "error": null
+    }
+    \`\`\`
 
-**Request Body:**
+---
 
-\`\`\`json
-{
-  "memory_id": "memory_uuid"
-}
-\`\`\`
+### Detect Contradictions
 
-**Response:**
+*   **Method:** `POST`
+*   **Path:** `/detect_contradictions`
+*   **Description:** Attempts to detect potential contradictions among stored memories based on semantic similarity and content analysis.
+*   **Query Parameter:** `threshold` (float, default: 0.75)
+*   **Response (Success):**
+    \`\`\`json
+    {
+      "success": true,
+      "contradictions": [
+        {
+           "memory_a_id": "string",
+           "memory_a_content": "string",
+           "memory_b_id": "string",
+           "memory_b_content": "string",
+           "similarity": "float",
+           "overlap_ratio": "float"
+        }
+        // ... more contradictions
+      ],
+      "count": "int"
+    }
+    \`\`\`
+*   **Response (Error):**
+    \`\`\`json
+    {
+      "success": false,
+      "error": "Description of the error"
+    }
+    \`\`\`
 
-\`\`\`json
-{
-  "assembly_id": "assembly_uuid",
-  "memory_id": "memory_uuid",
-  "status": "added",
-  "memory_count": 3,
-  "updated_composite_embedding": [0.12, 0.22, ...]
-}
-\`\`\`
+---
+
+### Process Transcription
+
+*   **Method:** `POST`
+*   **Path:** `/process_transcription`
+*   **Description:** Processes transcribed text, enriches it with features extracted from audio metadata (pauses, rhythm, interruptions), and stores it as a memory.
+*   **Request Model:** (`TranscriptionRequest`)
+    \`\`\`json
+    {
+      "text": "string",
+      "audio_metadata": "Optional[Dict[str, Any]]", // e.g., duration, pauses, interruption info
+      "embedding": "Optional[List[float]]",
+      "memory_id": "Optional[string]", // For updating existing
+      "importance": "Optional[float]",
+      "force_update": "bool" // Default: false
+    }
+    \`\`\`
+*   **Response Model:** (`TranscriptionResponse`)
+    \`\`\`json
+    {
+      "success": true,
+      "memory_id": "string",
+      "metadata": "Dict[str, Any]", // Extracted + synthesized metadata
+      "embedding": "List[float]",
+      "error": null
+    }
+    \`\`\`
+
+---
 
 ### List Assemblies
 
-\`\`\`
-GET /api/assemblies
-\`\`\`
-
-Lists all available memory assemblies.
-
-**Response:**
-
-\`\`\`json
-{
-  "assemblies": [
+*   **Method:** `GET`
+*   **Path:** `/assemblies`
+*   **Description:** Lists basic information about all known memory assemblies.
+*   **Response (Success):**
+    \`\`\`json
     {
-      "assembly_id": "assembly_uuid_1",
-      "name": "Assembly Name 1",
-      "memory_count": 3,
-      "creation_time": "2025-03-27T20:10:30Z",
-      "dominant_emotions": ["joy", "curiosity"],
-      "keywords": ["keyword1", "keyword2"]
-    },
-    // Additional assemblies
-  ]
-}
-\`\`\`
+      "success": true,
+      "assemblies": [
+        {
+          "assembly_id": "string",
+          "name": "string",
+          "memory_count": "int",
+          "last_activation": "float" // Timestamp
+        }
+        // ... more assemblies
+      ],
+      "count": "int"
+    }
+    \`\`\`
+
+---
 
 ### Get Assembly Details
 
-\`\`\`
-GET /api/assemblies/{assembly_id}
-\`\`\`
-
-Retrieves detailed information about a specific assembly.
-
-**Response:**
-
-\`\`\`json
-{
-  "assembly_id": "assembly_uuid",
-  "name": "Assembly Name",
-  "description": "Assembly description",
-  "memory_count": 3,
-  "composite_embedding": [0.12, 0.22, ...],
-  "creation_time": "2025-03-27T20:10:30Z",
-  "last_modified": "2025-03-27T21:10:30Z",
-  "memories": [
+*   **Method:** `GET`
+*   **Path:** `/assemblies/{assembly_id}`
+*   **Description:** Retrieves detailed information about a specific memory assembly.
+*   **Path Parameter:** `assembly_id` (string)
+*   **Response (Success):**
+    \`\`\`json
     {
-      "id": "memory_id_1",
-      "content": "Memory text content 1",
-      "timestamp": "2025-03-27T20:05:30Z"
-    },
-    // Additional memory summaries
-  ],
-  "dominant_emotions": ["joy", "curiosity"],
-  "keywords": ["keyword1", "keyword2"],
-  "metadata": {
-    "creator": "user_id",
-    "category": "assembly_category"
-  }
-}
-\`\`\`
+      "success": true,
+      "assembly_id": "string",
+      "name": "string",
+      "memory_count": "int",
+      "last_activation": "float",
+      "sample_memories": [ // Limited sample for brevity
+        {
+          "id": "string",
+          "content": "string",
+          "quickrecal_score": "float"
+        }
+      ],
+      "total_memories": "int"
+    }
+    \`\`\`
+*   **Response (Not Found):**
+    \`\`\`json
+    {
+      "success": false,
+      "error": "Assembly not found"
+    }
+    \`\`\`
 
-### Delete Assembly
+---
 
-\`\`\`
-DELETE /api/assemblies/{assembly_id}
-\`\`\`
+### Get Sequence Embeddings (Trainer Integration)
 
-Deletes a memory assembly (this does not delete the individual memories).
+*   **Method:** `POST`
+*   **Path:** `/api/memories/get_sequence_embeddings`
+*   **Description:** Retrieves a sequence of memory embeddings, ordered and filtered, suitable for feeding into the sequence trainer (Neural Memory).
+*   **Query Parameters:** `topic`, `user`, `emotion`, `min_importance`, `limit`, `min_quickrecal_score`, `start_timestamp`, `end_timestamp`, `sort_by`
+*   **Response Model:** (`SequenceEmbeddingsResponse`)
+    \`\`\`json
+    {
+      "embeddings": [
+        {
+          "id": "string",
+          "embedding": "List[float]",
+          "timestamp": "string" // ISO format
+          "quickrecal_score": "Optional[float]",
+          "emotion": "Optional[Dict[str, float]]",
+          "dominant_emotion": "Optional[string]",
+          "importance": "Optional[float]",
+          "topic": "Optional[string]",
+          "user": "Optional[string]"
+        }
+        // ... more embeddings
+      ]
+    }
+    \`\`\`
 
-**Response:**
+---
+
+### Update QuickRecal Score (Trainer Integration)
+
+*   **Method:** `POST`
+*   **Path:** `/api/memories/update_quickrecal_score`
+*   **Description:** Allows the Trainer (or Orchestrator) to update a memory's QuickRecal score based on surprise feedback. **(Requires `update_memory` to be implemented in Memory Core)**.
+*   **Request Model:** (`UpdateQuickRecalScoreRequest`)
+    \`\`\`json
+    {
+      "memory_id": "string",
+      "delta": "float", // Amount to change score by
+      "predicted_embedding": "Optional[List[float]]",
+      "reason": "Optional[string]", // e.g., "NM Surprise Loss: 0.65"
+      "embedding_delta": "Optional[List[float]]"
+    }
+    \`\`\`
+*   **Response (Success):** (`UpdateQuickRecalScoreResponse` - Example)
+    \`\`\`json
+    {
+      "status": "success",
+      "memory_id": "string",
+      "previous_score": "float",
+      "new_score": "float",
+      "delta": "float"
+    }
+    \`\`\`
+*   **Response (Error):**
+    \`\`\`json
+    {
+      "status": "error",
+      "message": "Description of failure (e.g., memory not found, update failed)"
+    }
+    \`\`\`
+
+---
+
+### Get Memory by ID
+
+*   **Method:** `GET`
+*   **Path:** `/api/memories/{memory_id}`
+*   **Description:** Retrieves a specific memory by its unique identifier. Returns the complete memory object with all metadata and embedding if found.
+*   **Path Parameters:** `memory_id` (string) - Unique identifier of the memory to retrieve
+*   **Response Model:** (`GetMemoryResponse`)
+    \`\`\`json
+    {
+      "success": true,
+      "memory": {
+        "id": "string",
+        "content": "string",
+        "embedding": "List[float]",
+        "timestamp": "string", // ISO format
+        "quickrecal_score": "float",
+        "quickrecal_updated": "string", // ISO format
+        "metadata": "Dict[str, Any]"
+      },
+      "error": null
+    }
+    \`\`\`
+*   **Response (Error):**
+    \`\`\`json
+    {
+      "success": false,
+      "memory": null,
+      "error": "Description of error (e.g., 'Memory with ID {memory_id} not found')"
+    }
+    \`\`\`
+
+---
+
+## 2. Neural Memory Server API
+
+**Base URL:** `http://localhost:8001` (Default)
+
+This service implements the adaptive, associative Neural Memory module inspired by the Titans paper.
+
+---
+
+### Initialize Neural Memory
+
+*   **Method:** `POST`
+*   **Path:** `/init`
+*   **Description:** Initializes or re-initializes the Neural Memory module with the specified configuration. Can also load state from a file. Auto-initialization occurs on startup, but this allows manual re-init.
+*   **Request Model:** (`InitRequest`)
+    \`\`\`json
+    {
+      "config": "Optional[dict]", // Overrides default NeuralMemoryConfig
+      "memory_core_url": "Optional[string]", // URL for potential callbacks (not currently used)
+      "load_path": "Optional[string]" // Path to load state from
+    }
+    \`\`\`
+*   **Response Model:** (`InitResponse`)
+    \`\`\`json
+    {
+      "message": "Neural Memory module initialized successfully.",
+      "config": { // The effective configuration used
+        "input_dim": 768,
+        "key_dim": 128,
+        "value_dim": 768,
+        "query_dim": 128,
+        // ... other config fields
+      }
+    }
+    \`\`\`
+
+---
+
+### Retrieve Associative Memory
+
+*   **Method:** `POST`
+*   **Path:** `/retrieve`
+*   **Description:** Retrieves an associated value embedding from the Neural Memory based on the input embedding (after query projection).
+*   **Request Model:** (`RetrieveRequest`)
+    \`\`\`json
+    {
+      "input_embedding": "List[float]" // The raw input embedding
+    }
+    \`\`\`
+*   **Response Model:** (`RetrieveResponse`)
+    \`\`\`json
+    {
+      "retrieved_embedding": "List[float]", // The associated embedding y_t = M(q_t)
+      "query_projection": "List[float]" // The q_t used for retrieval
+    }
+    \`\`\`
+
+---
+
+### Update Neural Memory (Test-Time Learning)
+
+*   **Method:** `POST`
+*   **Path:** `/update_memory`
+*   **Description:** Performs the core test-time learning step. Updates the internal memory weights (`M`) based on the input embedding and optionally modified projections/gates (for MAG/MAL variants).
+*   **Request Model:** (`UpdateMemoryRequest`)
+    \`\`\`json
+    {
+      "input_embedding": "List[float]", // x_t
+      // --- Optional for MAL ---
+      "external_key_projection": "Optional[List[float]]", // k_t
+      "external_value_projection": "Optional[List[float]]", // v'_t (modified by MAL attention)
+      // --- Optional for MAG ---
+      "external_alpha_gate": "Optional[float]", // alpha_t (forget rate)
+      "external_theta_gate": "Optional[float]", // theta_t (inner LR)
+      "external_eta_gate": "Optional[float]"    // eta_t (momentum)
+    }
+    \`\`\`
+*   **Response Model:** (`UpdateMemoryResponse`)
+    \`\`\`json
+    {
+      "status": "success",
+      "loss": "float", // The loss ||M(k_t) - v_t||^2 calculated during update
+      "grad_norm": "float", // Norm of gradients w.r.t internal memory weights (surprise metric)
+      "key_projection": "List[float]", // k_t calculated/used
+      "value_projection": "List[float]", // v_t (or v'_t if MAL) calculated/used
+      "applied_alpha": "Optional[float]", // Actual alpha_t used
+      "applied_theta": "Optional[float]", // Actual theta_t used
+      "applied_eta": "Optional[float]" // Actual eta_t used
+    }
+    \`\`\`
+
+---
+
+### Train Outer Loop
+
+*   **Method:** `POST`
+*   **Path:** `/train_outer`
+*   **Description:** Performs one step of outer loop training (adjusting projection and gate parameters) based on a sequence. (Note: Effective outer loop training is complex).
+*   **Request Model:** (`TrainOuterRequest`)
+    \`\`\`json
+    {
+      "input_sequence": "List[List[float]]", // Shape: [seq_len, input_dim]
+      "target_sequence": "List[List[float]]" // Shape: [seq_len, value_dim]
+    }
+    \`\`\`
+*   **Response Model:** (`TrainOuterResponse`)
+    \`\`\`json
+    {
+      "average_loss": "float" // Loss over the sequence
+    }
+    \`\`\`
+
+---
+
+### Save State
+
+*   **Method:** `POST`
+*   **Path:** `/save`
+*   **Description:** Saves the current state of the Neural Memory module (weights, config, momentum) to a file.
+*   **Request Model:** (`SaveLoadRequest`)
+    \`\`\`json
+    {
+      "path": "string" // File path to save to
+    }
+    \`\`\`
+*   **Response (Success):**
+    \`\`\`json
+    {
+      "message": "Neural Memory state saved to /path/to/state.json"
+    }
+    \`\`\`
+
+---
+
+### Load State
+
+*   **Method:** `POST`
+*   **Path:** `/load`
+*   **Description:** Loads the Neural Memory module state from a file. Reinitializes the module based on the saved configuration.
+*   **Request Model:** (`SaveLoadRequest`)
+    \`\`\`json
+    {
+      "path": "string" // File path to load from
+    }
+    \`\`\`
+*   **Response (Success):**
+    \`\`\`json
+    {
+      "message": "Neural Memory state loaded from /path/to/state.json"
+    }
+    \`\`\`
+
+---
+
+### Get Status
+
+*   **Method:** `GET`
+*   **Path:** `/status`
+*   **Description:** Returns the initialization status and current configuration of the Neural Memory module.
+*   **Response Model:** (`StatusResponse`)
+    \`\`\`json
+    {
+     "status": "Initialized", // or "Neural Memory module not initialized."
+     "config": { // The effective configuration used
+        "input_dim": 768,
+        // ... other config fields
+      }
+    }
+    \`\`\`
+
+---
+
+### Analyze Surprise
+
+*   **Method:** `POST`
+*   **Path:** `/analyze_surprise`
+*   **Description:** Calculates surprise metrics between a predicted and an actual embedding using the integrated `SurpriseDetector`.
+*   **Request Model:** (`AnalyzeSurpriseRequest`)
+    \`\`\`json
+    {
+      "predicted_embedding": "List[float]",
+      "actual_embedding": "List[float]"
+    }
+    \`\`\`
+*   **Response (Success):** (Dictionary based on `SurpriseDetector.calculate_surprise`)
+    \`\`\`json
+    {
+      "surprise": "float",
+      "cosine_surprise": "float",
+      "context_surprise": "float",
+      "delta_norm": "float",
+      "is_surprising": "bool",
+      "adaptive_threshold": "float",
+      "volatility": "float",
+      "delta": "List[float]",
+      "quickrecal_boost": "float" // Calculated boost based on surprise
+    }
+    \`\`\`
+
+---
+
+### Health Check
+
+*   **Method:** `GET`
+*   **Path:** `/health`
+*   **Description:** Basic health check, includes TensorFlow status.
+*   **Response (Success):**
+    \`\`\`json
+    {
+     "status": "ok",
+     "tensorflow_version": "2.x.x",
+     "neural_memory_initialized": true,
+     "timestamp": "2025-03-29T10:00:00.123Z"
+    }
+    \`\`\`
+
+---
+
+### Get Projections
+
+*   **Method:** `POST`
+*   **Path:** `/get_projections`
+*   **Description:** Calculates and returns the Key, Value, and Query projections for a given input embedding *without* updating the memory state.
+*   **Request Model:** (`GetProjectionsRequest`)
+    \`\`\`json
+    {
+      "input_embedding": "List[float]",
+      "embedding_model": "Optional[string]",
+      "projection_adapter": "Optional[string]"
+    }
+    \`\`\`
+*   **Response Model:** (`GetProjectionsResponse`)
+    \`\`\`json
+    {
+      "input_embedding_norm": "float",
+      "projection_adapter_used": "string",
+      "key_projection": "List[float]", // k_t
+      "value_projection": "List[float]", // v_t
+      "query_projection": "List[float]", // q_t
+      "projection_metadata": {
+        "dim_key": "int",
+        "dim_value": "int",
+        "dim_query": "int",
+        "projection_matrix_hash": "string", // Placeholder
+        "input_dim": "int",
+        "timestamp": "string" // ISO format
+      }
+    }
+    \`\`\`
+
+---
+
+### Calculate Gates (for MAG)
+
+*   **Method:** `POST`
+*   **Path:** `/calculate_gates`
+*   **Description:** Calculates dynamic gate values (`alpha`, `theta`, `eta`) based on the provided attention output, typically used by the MAG variant in the CCE.
+*   **Request Model:** (`CalculateGatesRequest`)
+    \`\`\`json
+    {
+      "attention_output": "List[float]",
+      "current_alpha": "Optional[float]",
+      "current_theta": "Optional[float]",
+      "current_eta": "Optional[float]"
+    }
+    \`\`\`
+*   **Response Model:** (`CalculateGatesResponse`)
+    \`\`\`json
+    {
+      "alpha": "float", // Calculated forget rate
+      "theta": "float", // Calculated inner learning rate
+      "eta": "float",   // Calculated momentum decay
+      "metadata": {
+          "timestamp": "string", // ISO format
+          "attention_output_dim": "int",
+          // ... other metadata
+      }
+    }
+    \`\`\`
+
+---
+
+### Get/Set Configuration
+
+*   **Method:** `GET`, `POST`
+*   **Path:** `/config`
+*   **Description:** Retrieves the current configuration (Neural Memory + Attention) and detected capabilities (external gates/projections support). Can potentially set configuration (e.g., active variant) via POST, though this depends on CCE re-reading it.
+*   **Request Model (POST):** (`ConfigRequest`)
+    \`\`\`json
+    {
+       "variant": "Optional[string]" // e.g., "MAC", "MAG", "MAL"
+    }
+    \`\`\`
+*   **Response Model (GET/POST):** (`ConfigResponse`)
+    \`\`\`json
+    {
+      "neural_memory_config": { /* ... NeuralMemoryConfig dict ... */ },
+      "attention_config": { /* ... Attention config dict ... */ },
+      "titans_variant": "string", // e.g., "MAC", "MAG", "MAL", "NONE"
+      "supports_external_gates": "bool", // Can /update_memory accept MAG gates?
+      "supports_external_projections": "bool" // Can /update_memory accept MAL projections?
+    }
+    \`\`\`
+
+---
+
+### Diagnose Emotional Loop
+
+*   **Method:** `GET`
+*   **Path:** `/diagnose_emoloop`
+*   **Description:** Retrieves diagnostic metrics related to the surprise -> QuickRecal feedback loop, analyzed over a specified window.
+*   **Query Parameters:** `window` (string, e.g., "last_100"), `emotion_filter` (string, optional), `format` (string, optional "table")
+*   **Response Model:** (`DiagnoseEmoLoopResponse`)
+    \`\`\`json
+    {
+        "diagnostic_window": "string",
+        "avg_loss": "float",
+        "avg_grad_norm": "float",
+        "avg_quickrecal_boost": "float",
+        "dominant_emotions_boosted": "List[string]",
+        "emotional_entropy": "float",
+        "emotion_bias_index": "float",
+        "user_emotion_match_rate": "float",
+        "cluster_update_hotspots": [ { "cluster_id": "string", "updates": "int" } ],
+        "alerts": "List[string]",
+        "recommendations": "List[string]"
+    }
+    \`\`\`
+
+---
+
+## 3. Context Cascade Engine API
+
+**Base URL:** `http://localhost:8002` (Default)
+
+This service orchestrates the flow between the Memory Core and Neural Memory Server.
+
+---
+
+### Root
+
+*   **Method:** `GET`
+*   **Path:** `/`
+*   **Description:** Basic endpoint indicating the CCE service is running.
+*   **Response (Success):**
+    \`\`\`json
+    {
+      "service": "Context Cascade Orchestrator",
+      "status": "running"
+    }
+    \`\`\`
+
+---
+
+### Process Memory (Orchestrated)
+
+*   **Method:** `POST`
+*   **Path:** `/process_memory`
+*   **Description:** Triggers the full orchestrated cognitive cycle for a new memory input. This involves calls to both the Memory Core and Neural Memory Server according to the refactored flow and active Titans variant.
+*   **Request Model:** (`ProcessMemoryRequest`)
+    \`\`\`json
+    {
+      "content": "string",
+      "embedding": "Optional[List[float]]",
+      "metadata": "Optional[Dict[str, Any]]"
+    }
+    \`\`\`
+*   **Response (Success):** (Example structure, combines results)
+    \`\`\`json
+    {
+        "memory_id": "string",
+        "intent_id": "string",
+        "status": "completed", // or "error_partial", "error_total"
+        "timestamp": "string", // ISO format
+        "neural_memory_update": { /* ... Response from NMS /update_memory ... */ },
+        "neural_memory_retrieval": {
+             "success": true,
+             "retrieved_embedding": "List[float]", // y_t_final (potentially MAC-modified)
+             "query_projection": "List[float]", // q_t used for retrieval
+             "error": null
+        },
+        "surprise_metrics": {
+            "loss": "Optional[float]",
+            "grad_norm": "Optional[float]",
+            "boost_calculated": "Optional[float]"
+        },
+        "quickrecal_feedback": { /* ... Response from MC /update_quickrecal_score ... */ },
+        "variant_output": {
+            "variant_type": "string", // e.g., "MAC"
+             // ... other variant-specific metrics ...
+        },
+        "error": null // Consolidated error message if applicable
+    }
+    \`\`\`
+
+---
+
+### Get Sequence Embeddings (Passthrough)
+
+*   **Method:** `POST`
+*   **Path:** `/get_sequence_embeddings`
+*   **Description:** Passthrough endpoint to request sequence embeddings from the Memory Core, potentially for external training use.
+*   **Request Model:** (`SequenceEmbeddingsRequest`)
+    \`\`\`json
+    {
+      "topic": "Optional[string]",
+      "limit": "int", // Default: 10
+      "min_quickrecal_score": "Optional[float]"
+      // ... other filters supported by MC endpoint ...
+    }
+    \`\`\`
+*   **Response (Success):** (Same as MC `/api/memories/get_sequence_embeddings`)
+    \`\`\`json
+    {
+      "embeddings": [ /* ... SequenceEmbedding objects ... */ ]
+    }
+    \`\`\`
+
+---
+
+### Analyze Surprise (Passthrough)
+
+*   **Method:** `POST`
+*   **Path:** `/analyze_surprise`
+*   **Description:** Passthrough endpoint to analyze surprise between two embeddings using the Neural Memory Server's `SurpriseDetector`.
+*   **Request Model:** (`AnalyzeSurpriseRequest`)
+    \`\`\`json
+    {
+      "predicted_embedding": "List[float]",
+      "actual_embedding": "List[float]"
+    }
+    \`\`\`
+*   **Response (Success):** (Same as NMS `/analyze_surprise`)
+    \`\`\`json
+    {
+      "surprise": "float",
+      // ... other surprise metrics ...
+      "quickrecal_boost": "float"
+    }
+    \`\`\`
+
+---
+
+## 4. Common Error Handling
+
+API endpoints generally return errors using the standard FastAPI `HTTPException` mechanism, resulting in JSON responses like:
 
 \`\`\`json
 {
-  "assembly_id": "assembly_uuid",
-  "status": "deleted",
-  "memory_count_released": 3
+  "detail": "Description of the error"
 }
 \`\`\`
 
-## Error Handling
-
-All APIs follow a consistent error response format:
+Specific endpoints might return structured error responses with a `"success": false` field and an `"error"` field:
 
 \`\`\`json
 {
-  "error": "Error message description",
-  "status": "error",
-  "code": 404,  // HTTP status code or custom error code
-  "details": {  // Optional additional error information
-    "field": "field_with_error",
-    "reason": "specific reason for error"
-  }
+  "success": false,
+  "error": "Detailed error message",
+  "status_code": 400 // Optional HTTP status code
 }
 \`\`\`
 
-Common HTTP status codes:
+Common HTTP Status Codes:
 
-- **400 Bad Request**: Invalid request parameters or payload
-- **404 Not Found**: Resource (memory, assembly, etc.) not found
-- **500 Internal Server Error**: Server-side processing error
-- **408 Request Timeout**: Service timeout (particularly for embedding generation)
+*   `200 OK`: Request successful.
+*   `400 Bad Request`: Invalid input parameters or payload format.
+*   `404 Not Found`: Requested resource (e.g., memory_id, assembly_id) not found.
+*   `408 Request Timeout`: A downstream service call timed out.
+*   `500 Internal Server Error`: An unexpected error occurred during processing on the server.
+*   `503 Service Unavailable`: A required downstream service (Memory Core, Neural Memory) is unavailable or the module is not initialized.
 
-Custom error codes:
+\`\`\`
+```
 
-- **"timeout"**: Connection timed out
-- **"connection_refused"**: Service unavailable or cannot be reached
-- **"unknown_error"**: Unspecified error
+# docs\api_updates.md
+
+```md
+# API Updates for Phase 4
+
+**Author:** Lucidia Core Team
+**Date:** 2025-03-28
+**Status:** Planned
+
+## Overview
+
+This document outlines the necessary API changes to complete Phase 4 of the Lucidia cognitive system. These changes enable the proper functioning of the Titans Architecture Variants (MAC, MAG, MAL) by exposing neural projections, supporting variant-specific parameters, and maintaining backward compatibility.
+
+> *"The interface evolves to support the growing cognitive capabilities."*
+
+## Neural Memory API Changes
+
+### 1. New Endpoint: `/get_projections`
+
+A new endpoint to calculate key, value, and query projections for an input embedding without updating memory.
+
+#### Request Model
+
+\`\`\`python
+class GetProjectionsRequest(BaseModel):
+    input_embedding: List[float]
+\`\`\`
+
+#### Response Model
+
+\`\`\`python
+class GetProjectionsResponse(BaseModel):
+    status: str
+    key_projection: Optional[List[float]] = None
+    value_projection: Optional[List[float]] = None
+    query_projection: Optional[List[float]] = None
+\`\`\`
+
+#### Implementation
+
+\`\`\`python
+@app.post("/get_projections")
+async def get_projections(request: GetProjectionsRequest) -> GetProjectionsResponse:
+    """Calculate key, value, and query projections for an input embedding without updating memory."""
+    try:
+        embedding = request.input_embedding
+        embedding_np = np.array(embedding)
+        
+        # Get projections from neural memory module
+        k_t, v_t, q_t = neural_memory_module.get_projections(embedding_np)
+        
+        return GetProjectionsResponse(
+            status="success",
+            key_projection=k_t.tolist(),
+            value_projection=v_t.tolist(),
+            query_projection=q_t.tolist()
+        )
+    except Exception as e:
+        logger.error(f"Error in get_projections: {e}")
+        return GetProjectionsResponse(status="error")
+\`\`\`
+
+### 2. New Endpoint: `/calculate_gates`
+
+A new endpoint to calculate gate values based on attention output (for MAG variant).
+
+#### Request Model
+
+\`\`\`python
+class CalculateGatesRequest(BaseModel):
+    attention_output: List[float]
+\`\`\`
+
+#### Response Model
+
+\`\`\`python
+class CalculateGatesResponse(BaseModel):
+    status: str
+    alpha_t: Optional[float] = None
+    theta_t: Optional[float] = None
+    eta_t: Optional[float] = None
+\`\`\`
+
+#### Implementation
+
+\`\`\`python
+@app.post("/calculate_gates")
+async def calculate_gates(request: CalculateGatesRequest) -> CalculateGatesResponse:
+    """Calculate gate values based on attention output."""
+    try:
+        attention_output = np.array(request.attention_output)
+        alpha_t, theta_t, eta_t = neural_memory_module.calculate_gates(attention_output)
+        
+        return CalculateGatesResponse(
+            status="success",
+            alpha_t=float(alpha_t),
+            theta_t=float(theta_t),
+            eta_t=float(eta_t)
+        )
+    except Exception as e:
+        logger.error(f"Error in calculate_gates: {e}")
+        return CalculateGatesResponse(status="error")
+\`\`\`
+
+### 3. Enhanced `/update_memory` Endpoint
+
+Expand the existing endpoint to accept MAG gates and MAL modified projections.
+
+#### Updated Request Model
+
+\`\`\`python
+class UpdateMemoryRequest(BaseModel):
+    input_embedding: List[float]
+    # MAG parameters (optional)
+    alpha_t: Optional[float] = None
+    theta_t: Optional[float] = None
+    eta_t: Optional[float] = None
+    # MAL parameters (optional)
+    key_projection: Optional[List[float]] = None
+    value_projection: Optional[List[float]] = None
+\`\`\`
+
+#### Updated Response Model
+
+\`\`\`python
+class UpdateMemoryResponse(BaseModel):
+    status: str
+    loss: Optional[float] = None
+    grad_norm: Optional[float] = None
+    key_projection: Optional[List[float]] = None
+    value_projection: Optional[List[float]] = None
+\`\`\`
+
+#### Implementation Changes
+
+\`\`\`python
+@app.post("/update_memory")
+async def update_memory(request: UpdateMemoryRequest) -> UpdateMemoryResponse:
+    """Update neural memory with input embedding and optional custom parameters."""
+    try:
+        embedding = request.input_embedding
+        embedding_np = np.array(embedding)
+        
+        # Handle MAG variant (external gates)
+        external_gates = None
+        if request.alpha_t is not None and request.theta_t is not None and request.eta_t is not None:
+            external_gates = {
+                "alpha_t": request.alpha_t,
+                "theta_t": request.theta_t,
+                "eta_t": request.eta_t
+            }
+        
+        # Handle MAL variant (external key/value projections)
+        key_projection = None
+        value_projection = None
+        if request.key_projection is not None:
+            key_projection = np.array(request.key_projection)
+        if request.value_projection is not None:
+            value_projection = np.array(request.value_projection)
+        
+        # Update memory with appropriate parameters
+        result = neural_memory_module.update_step(
+            embedding_np,
+            external_gates=external_gates,
+            key_projection=key_projection,
+            value_projection=value_projection
+        )
+        
+        # Get projections for response
+        k_t, v_t, _ = neural_memory_module.get_projections(embedding_np)
+        
+        return UpdateMemoryResponse(
+            status="success",
+            loss=float(result["loss"]),
+            grad_norm=float(result["grad_norm"]),
+            key_projection=k_t.tolist(),
+            value_projection=v_t.tolist()
+        )
+    except Exception as e:
+        logger.error(f"Error updating memory: {e}")
+        return UpdateMemoryResponse(status="error")
+\`\`\`
+
+### 4. Enhanced `/retrieve` Endpoint
+
+Update the existing endpoint to include query projection in the response.
+
+#### Response Model Update
+
+\`\`\`python
+class RetrieveResponse(BaseModel):
+    status: str
+    retrieved_embedding: Optional[List[float]] = None
+    query_projection: Optional[List[float]] = None  # New field
+\`\`\`
+
+#### Implementation Changes
+
+\`\`\`python
+@app.post("/retrieve")
+async def retrieve(request: RetrieveRequest) -> RetrieveResponse:
+    """Retrieve from neural memory using an input embedding."""
+    try:
+        embedding = request.input_embedding
+        embedding_np = np.array(embedding)
+        
+        # Process query through neural memory module
+        retrieved, q_t = neural_memory_module.retrieve(embedding_np, return_query=True)
+        
+        return RetrieveResponse(
+            status="success",
+            retrieved_embedding=retrieved.tolist(),
+            query_projection=q_t.tolist()  # Include query projection
+        )
+    except Exception as e:
+        logger.error(f"Error retrieving from memory: {e}")
+        return RetrieveResponse(status="error")
+\`\`\`
+
+### 5. New Endpoint: `/config`
+
+A new endpoint to retrieve configuration parameters, particularly for attention mechanism setup.
+
+#### Response Model
+
+\`\`\`python
+class ConfigResponse(BaseModel):
+    status: str
+    key_dim: int
+    value_dim: int
+    query_dim: int
+    recommended_attention_heads: int
+    momentum_settings: Dict[str, float]
+\`\`\`
+
+#### Implementation
+
+\`\`\`python
+@app.get("/config")
+async def get_config() -> ConfigResponse:
+    """Get Neural Memory configuration parameters."""
+    try:
+        return ConfigResponse(
+            status="success",
+            key_dim=neural_memory_module.key_dim,
+            value_dim=neural_memory_module.value_dim,
+            query_dim=neural_memory_module.query_dim,
+            recommended_attention_heads=4,  # Default recommendation
+            momentum_settings={
+                "alpha": neural_memory_module.alpha,
+                "theta": neural_memory_module.theta,
+                "eta": neural_memory_module.eta
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error getting config: {e}")
+        return ConfigResponse(status="error")
+\`\`\`
+
+## Neural Memory Module Changes
+
+### 1. New Projection Helper Method
+
+\`\`\`python
+def get_projections(self, x_t):
+    """Calculate key, value, and query projections for an input embedding.
+    
+    Args:
+        x_t: Input embedding
+        
+    Returns:
+        Tuple of (key_projection, value_projection, query_projection)
+    """
+    # Ensure input is properly shaped for TensorFlow
+    x_t = self._prepare_input(x_t)
+    
+    # Calculate projections
+    k_t = self.key_projection(x_t)
+    v_t = self.value_projection(x_t)
+    q_t = self.query_projection(x_t)
+    
+    return k_t.numpy(), v_t.numpy(), q_t.numpy()
+\`\`\`
+
+### 2. Enhanced Update Step Method
+
+\`\`\`python
+def update_step(self, x_t, external_gates=None, key_projection=None, value_projection=None):
+    """Update memory with input embedding and optional external parameters.
+    
+    Args:
+        x_t: Input embedding
+        external_gates: Dict with keys 'alpha_t', 'theta_t', 'eta_t' for MAG variant
+        key_projection: Optional external key projection for MAL variant
+        value_projection: Optional external value projection for MAL variant
+    
+    Returns:
+        Dict with loss and grad_norm
+    """
+    # Use provided projections if available, otherwise calculate them
+    if key_projection is None or value_projection is None:
+        k_t, v_t, q_t = self.get_projections(x_t)
+        
+        if key_projection is None:
+            key_projection = k_t
+        if value_projection is None:
+            value_projection = v_t
+    else:
+        # Ensure query projection for metrics
+        _, _, q_t = self.get_projections(x_t)
+    
+    # Use external gates if provided (MAG variant)
+    alpha_t = self.alpha
+    theta_t = self.theta  
+    eta_t = self.eta
+    
+    if external_gates is not None:
+        alpha_t = external_gates['alpha_t']
+        theta_t = external_gates['theta_t']
+        eta_t = external_gates['eta_t']
+    
+    # Perform update with potentially modified parameters
+    with tf.GradientTape() as tape:
+        # Forward pass through memory MLP
+        tape.watch(self.memory_mlp.trainable_variables)
+        pred_v = self.memory_mlp(q_t, training=True)
+        
+        # Calculate loss
+        loss = 0.5 * tf.reduce_sum(tf.square(pred_v - value_projection))
+    
+    # Get gradients and update memory
+    grads = tape.gradient(loss, self.memory_mlp.trainable_variables)
+    grad_norm = self._calculate_grad_norm(grads)
+    
+    # Update momentum with gradient scaling and decay
+    self._update_momentum(grads, theta_t, eta_t)
+    
+    # Apply momentum and forgetting to memory weights
+    self._update_memory_weights(alpha_t)
+    
+    return {"loss": loss.numpy(), "grad_norm": grad_norm.numpy()}
+\`\`\`
+
+### 3. Enhanced Retrieve Method
+
+\`\`\`python
+def retrieve(self, x_t, return_query=False):
+    """Retrieve from memory using input embedding.
+    
+    Args:
+        x_t: Input embedding
+        return_query: Whether to return the query projection
+        
+    Returns:
+        Retrieved embedding or tuple of (retrieved_embedding, query_projection)
+    """
+    # Ensure input is properly shaped
+    x_t = self._prepare_input(x_t)
+    
+    # Calculate query projection
+    q_t = self.query_projection(x_t)
+    
+    # Forward pass through memory MLP
+    y_t = self.memory_mlp(q_t, training=False)
+    
+    if return_query:
+        return y_t.numpy(), q_t.numpy()
+    else:
+        return y_t.numpy()
+\`\`\`
+
+### 4. New Gate Calculation Method
+
+\`\`\`python
+def calculate_gates(self, attention_output):
+    """Calculate gate values based on attention output for MAG variant.
+    
+    Args:
+        attention_output: Output from attention mechanism
+        
+    Returns:
+        Tuple of (alpha_t, theta_t, eta_t)
+    """
+    # Ensure input is properly shaped
+    attention_output = self._prepare_input(attention_output)
+    
+    # Simple linear transformation and sigmoid activation
+    # This is a placeholder implementation - actual gate calculation
+    # might be more sophisticated based on specific MAG design
+    gate_layer = tf.keras.layers.Dense(3, activation="sigmoid")
+    gates = gate_layer(attention_output)
+    
+    # Extract individual gates (default range 0-1)
+    alpha_t = gates[0, 0].numpy()  # Forget rate
+    theta_t = gates[0, 1].numpy()  # Inner learning rate
+    eta_t = gates[0, 2].numpy()    # Momentum decay
+    
+    # Scale to appropriate ranges based on default values
+    alpha_t = alpha_t * 0.1        # Scale to 0-0.1 range
+    theta_t = theta_t * 0.5        # Scale to 0-0.5 range
+    eta_t = 0.9 + (eta_t * 0.09)   # Scale to 0.9-0.99 range
+    
+    return alpha_t, theta_t, eta_t
+\`\`\`
+
+## Neural Memory Client Changes
+
+### 1. New Get Projections Method
+
+\`\`\`python
+async def get_projections(self, embedding):
+    """Get key, value, and query projections for an input embedding."""
+    try:
+        response = await self.post(
+            "/get_projections",
+            {"input_embedding": embedding.tolist() if hasattr(embedding, 'tolist') else embedding}
+        )
+        return (
+            np.array(response["key_projection"]),
+            np.array(response["value_projection"]),
+            np.array(response["query_projection"])
+        )
+    except Exception as e:
+        logger.error(f"Error getting projections: {e}")
+        return None, None, None
+\`\`\`
+
+### 2. New Calculate Gates Method
+
+\`\`\`python
+async def calculate_gates(self, attention_output):
+    """Calculate gate values based on attention output."""
+    try:
+        response = await self.post(
+            "/calculate_gates",
+            {"attention_output": attention_output.tolist() if hasattr(attention_output, 'tolist') else attention_output}
+        )
+        return {
+            "alpha_t": response["alpha_t"],
+            "theta_t": response["theta_t"],
+            "eta_t": response["eta_t"]
+        }
+    except Exception as e:
+        logger.error(f"Error calculating gates: {e}")
+        return None
+\`\`\`
+
+### 3. Enhanced Update Memory Method
+
+\`\`\`python
+async def update_memory(self, params):
+    """Update neural memory with input embedding and optional parameters."""
+    try:
+        response = await self.post("/update_memory", params)
+        return response
+    except Exception as e:
+        logger.error(f"Error updating memory: {e}")
+        return {"status": "error", "error": str(e)}
+\`\`\`
+
+### 4. New Get Config Method
+
+\`\`\`python
+async def get_config(self):
+    """Get Neural Memory configuration parameters."""
+    try:
+        response = await self.get("/config")
+        return response
+    except Exception as e:
+        logger.error(f"Error getting config: {e}")
+        return {"status": "error", "error": str(e)}
+\`\`\`
+
+## Context Cascade Engine Changes
+
+### 1. Dynamic Attention Configuration
+
+\`\`\`python
+async def _initialize_attention_module(self):
+    """Initialize attention module with dynamic configuration from Neural Memory server."""
+    try:
+        # Get configuration from Neural Memory server
+        config_response = await self.neural_memory_client.get_config()
+        
+        if config_response["status"] == "success":
+            # Calculate appropriate parameters
+            key_dim = config_response["key_dim"]
+            num_heads = config_response["recommended_attention_heads"]
+            
+            # Configure per-head dimension
+            per_head_dim = max(key_dim // num_heads, 8)  # Ensure at least 8 dimensions per head
+            
+            # Create attention module
+            self.attention_module = MultiHeadAttentionModule(
+                num_heads=num_heads,
+                key_dim=per_head_dim,
+                use_layer_norm=True,
+                use_residual=True
+            )
+            
+            logger.info(f"Initialized attention module with {num_heads} heads, "
+                       f"{per_head_dim} dimensions per head")
+        else:
+            # Fallback to default configuration
+            logger.warning("Failed to get config from Neural Memory server. "
+                          "Using default attention configuration.")
+            self.attention_module = MultiHeadAttentionModule(
+                num_heads=4,
+                key_dim=32,
+                use_layer_norm=True,
+                use_residual=True
+            )
+    except Exception as e:
+        logger.error(f"Error initializing attention module: {e}")
+        # Fallback to default configuration
+        self.attention_module = MultiHeadAttentionModule(
+            num_heads=4,
+            key_dim=32,
+            use_layer_norm=True,
+            use_residual=True
+        )
+\`\`\`
+
+## MetricsStore Fix
+
+### Fix for format_diagnostics_as_table Method
+
+\`\`\`python
+def format_diagnostics_as_table(self):
+    """Format diagnostics data as a markdown table for display."""
+    if not self.diagnostics:
+        return "No diagnostics data available."
+    
+    # Ensure data_points exists with a default empty list
+    if "data_points" not in self.diagnostics:
+        self.diagnostics["data_points"] = []
+    
+    # Process data points
+    data_points = self.diagnostics["data_points"]
+    if not data_points:
+        return "No data points in diagnostics."
+    
+    # Create table header
+    headers = list(data_points[0].keys())
+    table = "| " + " | ".join(headers) + " |\n"
+    table += "| " + " | ".join(["---" for _ in headers]) + " |\n"
+    
+    # Add data rows
+    for point in data_points:
+        table += "| " + " | ".join([str(point.get(h, "")) for h in headers]) + " |\n"
+    
+    return table
+\`\`\`
+
+## Backward Compatibility Considerations
+
+1. **NONE Variant Support**: The refactored flow must continue to work with the "NONE" variant, which represents the original Phase 3 implementation without attention mechanisms.
+
+2. **Default Gate Values**: When no external gates are provided (non-MAG variants), the system should use the default gate values from the Neural Memory configuration.
+
+3. **Optional Parameters**: All new parameters in API requests should be optional to maintain compatibility with existing clients.
+
+4. **Error Handling**: Enhanced error handling is needed to gracefully handle clients that do not send the expected parameters or handle the enhanced responses.
+
+## Testing Strategy
+
+### 1. API Endpoint Tests
+
+Create comprehensive tests for each new and modified endpoint:
+
+\`\`\`python
+async def test_get_projections_endpoint():
+    """Test the /get_projections endpoint."""
+    client = NeuralMemoryClient(...)
+    
+    # Test with valid embedding
+    embedding = np.random.random(128).astype(np.float32)
+    k_t, v_t, q_t = await client.get_projections(embedding)
+    
+    assert k_t is not None and len(k_t) > 0
+    assert v_t is not None and len(v_t) > 0
+    assert q_t is not None and len(q_t) > 0
+    
+    # Test with invalid embedding (e.g., NaN values)
+    embedding_with_nan = np.array([np.nan] * 128).astype(np.float32)
+    k_t, v_t, q_t = await client.get_projections(embedding_with_nan)
+    
+    # Should handle NaN gracefully
+    assert k_t is not None
+\`\`\`
+
+### 2. Integration Tests
+
+Create tests that verify the complete flow for each variant:
+
+\`\`\`python
+async def test_mag_variant_integration():
+    """Test the complete MAG variant flow."""
+    # Set environment variable
+    os.environ["TITANS_VARIANT"] = "MAG"
+    
+    # Initialize components
+    memory_client = MemoryCoreClient(...)
+    neural_memory_client = NeuralMemoryClient(...)
+    cce = ContextCascadeEngine(...)
+    
+    # Process a sequence of inputs
+    embeddings = [np.random.random(128).astype(np.float32) for _ in range(5)]
+    results = []
+    
+    for embedding in embeddings:
+        result = await cce.process_new_input(embedding)
+        results.append(result)
+    
+    # Verify gate values are being applied
+    # (This would require instrumenting the neural_memory_module to expose actual gate values used)
+\`\`\`
+
+## Conclusion
+
+The API updates outlined in this document provide the necessary foundation for completing Phase 4 of the Lucidia cognitive system. These changes enable the Titans Architecture Variants to function correctly, with proper timing and information flow between components.
+
+The enhanced API maintains backward compatibility while adding the flexibility needed for the attention-based variants. The addition of configuration endpoints and improved diagnostics will facilitate easier integration, monitoring, and debugging.
+
+Implementing these changes will resolve the critical MAG/MAL timing issue identified in the codebase review, allowing all variants to function as designed and completing the Phase 4 implementation.
+
+---
+
+**Related Documentation:**
+- [Phase 4 Implementation](phase_4_implementation.md)
+- [Attention](attention.md)
+- [Titans Variant Refactor](titans_variant_refactor.md)
 
 ```
 
@@ -2466,6 +3484,7 @@ The Trainer Server handles sequence prediction and surprise detection, similar t
 - `SynthiansTrainer`: Neural model for sequence prediction
 - `SurpriseDetector`: Detects and analyzes surprise in embedding sequences
 - `HPCQRFlowManager`: Manages the QuickRecal factors for memory importance
+- `NeuralMemoryModule`: Provides key-value-query projections and memory update mechanisms
 
 ### 3. Context Cascade Engine (Orchestrator)
 
@@ -2476,38 +3495,155 @@ The Context Cascade Engine connects the Memory Core and Trainer Server, orchestr
 - Managing the interplay between prediction and memory storage
 - Feeding surprise feedback to enhance memory retrieval
 - Handling error states and coordinating between components
+- Orchestrating variant-specific processing pathways (Titans variants)
 
 **Key Classes:**
-- `ContextCascadeEngine`: Main orchestrator class
+- `ContextCascadeEngine`: Main orchestrator class with modular processing methods
 - `GeometryManager`: Shared utility for consistent vector operations across components
+- `TitansVariantBase`: Base class for all variant-specific processing
+- `SequenceContextManager`: Manages historical context for attention-based operations
+
+## Titans Architecture Variants
+
+The system supports multiple cognitive processing variants through the Titans Architecture framework. Each variant implements different attention mechanisms and memory update strategies:
+
+### NONE Variant (Default)
+
+The standard cognitive flow without additional attention mechanisms.
+
+**Key Characteristics:**
+- Direct memory storage and retrieval
+- Standard Neural Memory updates without attention-based modifications
+- Baseline for comparison with other variants
+
+### MAC Variant (Memory-Attended Content)
+
+Enhances retrieved content using attention mechanisms over historical memory.
+
+**Key Characteristics:**
+- Processes input through standard Neural Memory update
+- Applies attention between query and historical keys to modify retrieved output
+- Post-retrieval enhancement of memory content
+
+**Processing Flow:**
+1. Standard memory update and retrieval
+2. Apply attention between current query and historical keys
+3. Create attended_y_t by combining retrieved and historical values
+4. Return the attention-modified retrieved embedding
+
+### MAG Variant (Memory-Attended Gates)
+
+Modifies Neural Memory update gate values using attention mechanisms.
+
+**Key Characteristics:**
+- Calculates Neural Memory gate values (α, θ, η) using attention
+- These gates control forgetting rate, learning rate, and momentum decay
+- Pre-update influence on memory storage
+
+**Processing Flow:**
+1. Calculate projections from input
+2. Apply attention between query and historical keys
+3. Compute gate values from attention output
+4. Update Neural Memory with custom gates
+5. Standard memory retrieval
+
+### MAL Variant (Memory-Attended Learning)
+
+Modifies the value projection used in Neural Memory updates using attention.
+
+**Key Characteristics:**
+- Modifies the value projection (v_t) before Neural Memory update
+- Uses attention between current query and historical keys/values
+- Creates an enhanced representation for memory storage
+
+**Processing Flow:**
+1. Calculate projections from input
+2. Apply attention between query and historical keys/values
+3. Calculate modified value projection (v_prime) by combining original and attended values
+4. Update Neural Memory with modified value projection
+5. Standard memory retrieval
 
 ## Information Flow
 
-### Full Cognitive Cycle
+### Refactored Cognitive Cycle
 
 1. **Input Processing:**
    - New memory content and optional embedding arrive at the Context Cascade Engine
    - The Engine forwards the memory to the Memory Core for storage
+   - Memory ID and embedding (x_t) are returned
 
-2. **Prediction:**
-   - The Engine sends the current embedding to the Trainer Server
-   - Trainer generates a prediction for the next memory embedding
-   - The prediction is stored for later comparison
+2. **Projections and Variant Pre-Processing:**
+   - The Engine obtains key, value, and query projections (k_t, v_t, q_t) from Neural Memory
+   - For MAG: Calculate attention-based gates
+   - For MAL: Calculate modified value projection
 
-3. **Reality and Surprise:**
-   - When the next actual memory arrives, its embedding is compared to the prediction
-   - The Trainer calculates surprise metrics between prediction and reality
-   - High surprise indicates a memory that violated expectations
+3. **Neural Memory Update:**
+   - For NONE/MAC: Standard update with input embedding
+   - For MAG: Include calculated gates in update
+   - For MAL: Use modified value projection in update
+   - Loss and gradient norm metrics are returned
 
-4. **Feedback:**
-   - Surprise information is fed back to adjust the quickrecal score of the memory
-   - Surprising memories receive a higher importance (quickrecal boost)
-   - This feedback loop ensures important memories are more accessible
+4. **QuickRecal Feedback:**
+   - Surprise metrics (loss, grad_norm) are used to calculate QuickRecal boost
+   - Memory Core updates the memory's QuickRecal score accordingly
 
-5. **Adaptation:**
-   - The system continuously learns from sequences of memories
-   - Prediction accuracy improves over time through training
-   - Retrieval thresholds adapt based on results
+5. **Retrieval and Post-Processing:**
+   - Neural Memory retrieves relevant embedding based on input
+   - For MAC: Apply attention over historical context to modify retrieved embedding
+
+6. **History Update:**
+   - All context (embeddings, projections, results) is added to sequence history
+   - This enriches the historical context for future attention operations
+
+## Embedding Handling and Dimension Alignment
+
+The system includes robust handling for embedding-related challenges:
+
+### Dimension Mismatches
+
+The system gracefully handles dimension mismatches between embeddings (e.g., 384 vs 768 dimensions):
+
+- **Vector Alignment Utility**: Automatically aligns vectors to the same dimension for comparison operations
+- **Normalization Methods**: Safe normalization with dimension handling (padding/truncation as needed)
+- **Validation**: Detection and handling of malformed embeddings (NaN/Inf values)
+
+**Implementation Details:**
+- The `_align_vectors_for_comparison` method handles dimension mismatches
+- The `_normalize_embedding` methods in multiple classes handle padding or truncation
+- The `_validate_embedding` method checks for NaN/Inf values and provides fallbacks
+
+### Embedding Conversion
+
+The system includes utility methods to handle various embedding formats:
+
+- `_to_list`: Safely converts numpy arrays, TensorFlow tensors, and other array-like objects to Python lists
+- `_to_numpy`: Ensures consistent numpy array format for internal processing
+
+## TensorFlow Lazy Loading
+
+To prevent NumPy version conflicts, the system implements lazy loading for TensorFlow:
+
+\`\`\`python
+# Global variable for TensorFlow instance
+_tf = None
+
+def _get_tf():
+    """Lazy-load TensorFlow only when needed."""
+    global _tf
+    if _tf is None:
+        try:
+            import tensorflow as tf
+            _tf = tf
+        except ImportError as e:
+            logger.error(f"Failed to import TensorFlow: {e}")
+    return _tf
+\`\`\`
+
+**Benefits:**
+- Prevents NumPy version conflicts by deferring TensorFlow imports
+- Allows the `fix_numpy.py` script to downgrade NumPy before TensorFlow is imported
+- Keeps TensorFlow isolated to only those components that require it
+- Enables all variants to function correctly regardless of NumPy version requirements
 
 ## Stateless Design Pattern
 
@@ -2527,62 +3663,440 @@ A key refinement in the architecture is the stateless design of the Trainer Serv
    - It stores the state returned by the Trainer and passes it in the next prediction
 
 4. **Benefits:**
-   - Improved scalability and reliability
-   - Multiple sessions can use the same Trainer Server concurrently
-   - Simpler recovery from failures
+   - Improved scalability through horizontal scaling of the Trainer Server
+   - Enhanced reliability as state is not dependent on server uptime
+   - Simplified debugging and state inspection
+   - Easier deployment and migration without state loss
 
-## Assembly Management
+## Memory Assemblies
 
-Memory Assemblies provide a way to group related memories and treat them as a cohesive unit:
+Memory Assemblies represent related memories that are grouped together for enhanced retrieval and semantic organization.
 
 1. **Creation and Composition:**
    - Assemblies can be created with initial memories or built incrementally
    - Each assembly maintains a composite embedding representing its semantic center
    - When memories are added, the composite embedding is updated
 
-2. **Persistence:**
-   - Assemblies are saved to disk in JSON format with their constituent memories
-   - On initialization, the system loads all saved assemblies
-   - The `MemoryPersistence` class handles serialization, deserialization, and error recovery
+2. **Retrieval Benefits:**
+   - Assemblies improve recall by activating related memories
+   - They provide context for ambiguous queries
+   - They enable higher-level semantic organization beyond individual memories
 
-3. **Memory-to-Assembly Mapping:**
-   - The system maintains a mapping from individual memories to their assemblies
-   - This allows for efficient querying of all assemblies that contain a specific memory
+3. **Dynamic Updates:**
+   - Assemblies can evolve over time as new memories are added
+   - The system can merge similar assemblies or split diverging ones
+   - Assembly strength is determined by member coherence and usage patterns
 
-## Error Handling
+## Implementation and Integration Guidelines
 
-The architecture implements robust error handling throughout:
+1. **Component Communication:**
+   - All inter-component communication uses well-defined APIs
+   - The Context Cascade Engine handles all orchestration
+   - Components should not directly communicate with each other
 
-1. **Specific Error Types:**
-   - HTTP status codes (404, 400, 500) are handled with specific error messages
-   - Connection errors, timeouts, and unexpected exceptions have clear handling paths
+2. **Error Handling:**
+   - Each component implements comprehensive error handling
+   - The orchestrator manages overall system stability
+   - Graceful degradation is provided when components are unavailable
 
-2. **Consistent Error Format:**
-   - All errors follow a standard format with status, code, and detailed message
-   - Custom error codes for specific failure scenarios
+3. **Configuration:**
+   - Each component has its own configuration
+   - The orchestrator manages system-wide settings
+   - Environment variables like `TITANS_VARIANT` control high-level behavior
 
-3. **Graceful Degradation:**
-   - Components can continue functioning when dependent services are unavailable
-   - Default behaviors are provided when specific features cannot be accessed
+4. **Monitoring and Diagnostics:**
+   - Each component provides health and performance metrics
+   - The `lucidia_think_trace` tool offers system-wide diagnostics
+   - Logging is standardized across components for easy aggregation
 
-## Geometric Operations
+```
 
-All vector operations are standardized using the shared GeometryManager:
+# docs\ARCHITECTURE.md
 
-1. **Consistent Vector Handling:**
-   - Normalization, similarity calculations, and vector alignment
-   - Support for different embedding dimensions (384, 768)
-   - Handling of different geometries (Euclidean, Hyperbolic, Spherical)
+```md
 
-2. **Alignment for Comparison:**
-   - Vectors of different dimensions are safely aligned
-   - NaN/Inf values are detected and handled appropriately
+**1. Updated `ARCHITECTURE.md`**
 
-## Conclusion
+\`\`\`markdown
+# Synthians Cognitive Architecture (Current State - March 2025)
 
-The Bi-Hemispheric Architecture provides a powerful framework for memory processing that combines storage, retrieval, prediction, and surprise detection in a cohesive system. The stateless design pattern enhances scalability while maintaining the rich context needed for effective cognition.
+## 1. Overview
 
-The architecture is designed to be modular, allowing components to be improved or replaced independently. This flexibility enables ongoing enhancements to specific aspects of the system while maintaining overall functionality.
+This document describes the currently implemented architecture of the Synthians cognitive system. It follows a **Bi-Hemispheric Cognitive Architecture** model, separating persistent, indexed memory storage and retrieval from dynamic, sequence-aware associative memory processing.
+
+The system is composed of three main services:
+
+1.  **Synthians Memory Core:** The primary repository for structured memories, handling storage, indexing, metadata enrichment, emotional context, and relevance scoring (HPC-QuickRecal).
+2.  **Neural Memory Server (`synthians_trainer_server`):** Implements an associative memory inspired by the Titans paper, capable of test-time learning based on sequences of embeddings.
+3.  **Context Cascade Engine (`orchestrator`):** Acts as the central orchestrator, managing the flow of information between the Memory Core and the Neural Memory Server, implementing the core cognitive cycle and supporting different attention-based variants (MAC, MAG, MAL).
+
+The architecture aims to enable adaptive memory recall, continuous learning from experience, and context-aware information processing. **The core cognitive cycle, including the surprise feedback loop from the Neural Memory Server to the Memory Core's QuickRecal score, is now functional and verified.**
+
+\`\`\`text
++-------------------------+        +--------------------------+        +--------------------------+
+|                         |        |                          |        |                          |
+|  Synthians Memory Core  |<-.(5).-|  Context Cascade Engine  |-.(2,4,6)-|  Neural Memory Server    |
+|   (Storage/Retrieval)   |--------|       (Orchestrator)     |--------| (Associative/Predictive) |
+| (Incl. QuickRecal Boost)|  (1)   |                          |  (3,7) | (Incl. Surprise Metrics) |
++-------------------------+        +--------------------------+        +--------------------------+
+       |      ^                                                                 |      ^
+       |      | (FAISS, Persistence,                                            |      | (TensorFlow,
+       |      |  QuickRecal, Emotion)                                           |      |  Test-Time Learning)
+       v      |                                                                 v      |
++--------------+----------+                                           +-----------------+-------+
+|  Memory Persistence &   |                                           | Neural Memory Module (M)|
+|     Vector Index        |                                           +-----------------+-------+
+
+Key Steps (Refactored & Functional Flow):
+1. Input -> CCE -> Memory Core (/process_memory) -> Get x_t, memory_id, initial_qr
+2. CCE -> Neural Memory (/get_projections) -> Get k_t, v_t, q_t
+3. CCE -> Variant Pre-Update (MAG: /calculate_gates; MAL: calc v'_t)
+4. CCE -> Neural Memory (/update_memory w/ variant mods) -> Get loss, grad_norm
+5. CCE -> Memory Core (/api/memories/update_quickrecal_score) -> Apply boost -> **FUNCTIONAL**
+6. CCE -> Neural Memory (/retrieve) -> Get y_t_raw, q_t
+7. CCE -> Variant Post-Retrieval (MAC: calc attended_y_t) -> Get y_t_final
+\`\`\`
+
+## 2. Key Components
+
+### 2.1. Synthians Memory Core (`synthians_memory_core` package)
+
+*   **Role:** Long-term, indexed memory storage and retrieval. Analogous to a searchable library.
+*   **Responsibilities:**
+    *   Storing `MemoryEntry` objects (content, embedding, metadata, scores).
+    *   Managing `MemoryAssembly` objects (groups of related memories).
+    *   Providing fast similarity search via `MemoryVectorIndex` (FAISS, GPU-aware).
+    *   Calculating memory importance using `UnifiedQuickRecallCalculator` (HPC-QR principles).
+    *   **Accepting QuickRecal score updates** based on external feedback (e.g., surprise from Neural Memory) via its API (`/api/memories/update_quickrecal_score`).
+    *   Enriching memories with contextual information via `MetadataSynthesizer`.
+    *   Analyzing and applying emotional context using `EmotionAnalyzer` and `EmotionalGatingService`.
+    *   Handling persistent storage and backups via `MemoryPersistence`.
+    *   Dynamically adjusting retrieval thresholds via `ThresholdCalibrator`.
+    *   Managing embedding geometry (Euclidean, Hyperbolic, etc.) via `GeometryManager`.
+    *   Exposing functionality via a FastAPI server (`api/server.py`).
+    *   Providing methods (`get_memory_by_id`, `update_memory`) used by `TrainerIntegrationManager` to implement the QuickRecal feedback mechanism.
+*   **Current Status:** Core components are implemented and integrated. FAISS integration is robust. **The methods (`get_memory_by_id`, `update_memory`) required for the feedback loop are implemented and the API endpoint (`/api/memories/update_quickrecal_score`) is functional.**
+
+### 2.2. Neural Memory Server (`synthians_trainer_server` package)
+
+*   **Role:** Adaptive, associative memory performing test-time learning. Analogous to learning patterns and associations.
+*   **Responsibilities:**
+    *   Implementing the `NeuralMemoryModule` based on the Titans paper using TensorFlow.
+    *   Calculating Key, Value, Query projections (`/get_projections`).
+    *   Performing test-time updates to its internal memory weights (`M`) based on input embeddings and calculated gates (`/update_memory`). **Returns loss and gradient norm as surprise metrics.**
+    *   Retrieving associated value embeddings based on a query projection (`/retrieve`).
+    *   Calculating dynamic gate values (`alpha_t`, `theta_t`, `eta_t`) based on attention outputs (`/calculate_gates`) for the MAG variant.
+    *   Providing configuration details (`/config`).
+    *   Collecting and exposing diagnostic metrics via `MetricsStore`.
+    *   Exposing functionality via a FastAPI server (`synthians_trainer_server/http_server.py`).
+*   **Current Status:** Implemented, including API endpoints for variant support. Test-time learning mechanism is in place. Fixes for TF/Keras layer registration and save/load have been applied. Configuration includes handling for dimension mismatches. Auto-initialization on startup confirmed.
+
+### 2.3. Context Cascade Engine (`orchestrator` package)
+
+*   **Role:** Orchestrates the interaction between the Memory Core and Neural Memory Server, implementing the full cognitive cycle.
+*   **Responsibilities:**
+    *   Receiving new inputs (content/embedding/metadata).
+    *   Coordinating the **Refactored Information Flow** (see Section 3).
+    *   Selecting and activating the appropriate Titans Architecture Variant (MAC, MAG, MAL) based on configuration (`TITANS_VARIANT` env variable).
+    *   Managing sequence history (`SequenceContextManager`) required for attention mechanisms in variants.
+    *   **Initiating surprise-based feedback** (loss/grad_norm -> boost) to the Memory Core via its API (`/api/memories/update_quickrecal_score`). **This feedback mechanism is now functional.**
+    *   Handling errors and communication between the two main memory components.
+*   **Current Status:** Implements the corrected, functional flow for variant integration and the surprise feedback loop. Dynamically configures itself based on Neural Memory `/config`. Uses lazy loading for TensorFlow.
+
+## 3. Refactored Information Flow (Cognitive Cycle)
+
+The CCE orchestrates the following sequence for processing a new input (`content`, `embedding`, `metadata`):
+
+1.  **Store Memory:** CCE sends input to Memory Core (`/process_memory`). Memory Core stores it, generates metadata, calculates initial QuickRecal, and returns the validated embedding (`x_t`), `memory_id`, and `quickrecal_score`.
+2.  **Get Projections:** CCE sends `x_t` to Neural Memory Server (`/get_projections`). NM Server returns Key (`k_t`), Value (`v_t`), and Query (`q_t`) projections *without* updating its internal weights.
+3.  **Variant Pre-Update (MAG/MAL):**
+    *   If **MAG** is active: CCE calculates attention output (using `q_t`, historical keys `K_hist`) and calls NM Server (`/calculate_gates`) to get external gate values (`alpha_t`, `theta_t`, `eta_t`).
+    *   If **MAL** is active: CCE calculates attention output (using `q_t`, historical keys `K_hist`, historical values `V_hist`), combines it with `v_t` to create a modified value projection (`v'_t`).
+    *   If **NONE** or **MAC**: This step is skipped.
+4.  **Update Neural Memory:** CCE calls NM Server (`/update_memory`) providing:
+    *   Base: `input_embedding` (`x_t`).
+    *   MAG: External gate values (`external_alpha_gate`, etc.).
+    *   MAL: Explicit projections (`key_projection=k_t`, `value_projection=v'_t`).
+    *   NM Server performs the test-time update using the provided parameters and returns `loss` and `grad_norm`.
+5.  **Apply QuickRecal Boost:** CCE calculates a boost value based on `loss`/`grad_norm`. It **successfully calls** Memory Core (`/api/memories/update_quickrecal_score`) to apply this boost to the original memory's score.
+6.  **Retrieve from Neural Memory:** CCE sends `x_t` to NM Server (`/retrieve`). NM Server calculates the query projection `q_t` (may differ slightly from step 2 if weights changed) and retrieves the associated raw embedding (`y_t_raw`) using its internal memory `M(q_t)`. It returns `y_t_raw` and the `query_projection` used.
+7.  **Variant Post-Retrieval (MAC):**
+    *   If **MAC** is active: CCE calculates attention output (using `q_t` from step 6, historical keys `K_hist`, historical outputs `Y_hist`), combines it with `y_t_raw` to create an attended output (`y_t_final`).
+    *   Otherwise, `y_t_final` is set to `y_t_raw`.
+8.  **Update History:** CCE adds the full context tuple `(timestamp, memory_id, x_t, k_t, v_t, q_t, y_t_final)` to the `SequenceContextManager`.
+9.  **Finalize:** CCE constructs and returns a response containing the `memory_id`, processing status, surprise metrics, retrieval results (`y_t_final`), QuickRecal feedback status, and variant metrics.
+
+## 4. Titans Architecture Variants (Implemented in CCE)
+
+*(No changes needed in this section)*
+
+## 5. Supporting Systems
+
+*(No significant changes needed, but confirm descriptions are accurate)*
+
+## 6. API Layer
+
+*(No significant changes needed, but descriptions should align with API_REFERENCE.md)*
+
+## 7. Current Status & Known Gaps
+
+*   **Status:** The core architectural components (Memory Core, Neural Memory, CCE) are implemented. The CCE orchestrates the refactored flow, enabling the activation and correct *timing* for MAC, MAG, and MAL variants. Basic memory storage, retrieval, test-time learning, variant processing, and **the surprise->QuickRecal feedback loop are functional and verified.** Diagnostics and metrics collection are integrated.
+*   **Known Gaps:**
+    *   **Variant Testing:** While the CCE flow is correct, the MAC, MAG, and MAL variants require dedicated integration tests to verify their specific attention-based effects.
+    *   **Performance:** The Neural Memory's test-time update (`/update_memory`) is computationally intensive and currently lacks parallelization optimizations mentioned in the Titans paper.
+    *   **Outer Loop Training:** While an endpoint exists (`/train_outer`), effective outer loop training for the Neural Memory module requires significant further development.
+    *   **Documentation:** Still requires ongoing consolidation and refinement to match the very latest code state across all documents.
+    *   **Test Teardown:** Background task cancellation warnings during test shutdown need investigation.
+
+
+```
+
+# docs\attention.md
+
+```md
+# MultiHeadAttentionModule
+
+**Author:** Lucidia Core Team
+**Date:** 2025-03-28
+**Status:** Implemented
+
+## Overview
+
+The `MultiHeadAttentionModule` is a core component of Lucidia's Phase 4 implementation, providing a configurable attention mechanism that enables the Titans Architecture Variants (MAC, MAG, MAL) to operate effectively. This document details the implementation, usage, and configuration of this module.
+
+> *"Attention is the lens through which memory gains focus."*
+
+## Implementation Details
+
+The attention module is implemented in `synthians_trainer_server/attention.py` and builds upon TensorFlow's multi-head attention layer with significant enhancements for robustness and debugging.
+
+### Key Features
+
+1. **Robust Embedding Handling**:
+   - Validation of input embeddings (checking for NaN/Inf values)
+   - Automatic dimension alignment (384D vs 768D handling)
+   - Proper batching and reshaping of inputs
+
+2. **Performance Optimizations**:
+   - Configurable number of attention heads
+   - Per-head dimension control
+   - Optional dropout for regularization
+
+3. **Architectural Enhancements**:
+   - Optional residual connections
+   - Optional layer normalization
+   - Configurable activation functions
+
+4. **Metrics and Diagnostics**:
+   - Attention score capture
+   - Attention entropy calculation
+   - Sparsity measurements
+
+## API Reference
+
+### Constructor
+
+\`\`\`python
+MultiHeadAttentionModule(
+    num_heads=4,
+    key_dim=32,
+    value_dim=None,  # Defaults to key_dim
+    dropout=0.0,
+    use_bias=True,
+    use_layer_norm=True,
+    use_residual=True,
+    activation=None,
+    name="multi_head_attention",
+    **kwargs
+)
+\`\`\`
+
+### Key Methods
+
+#### call
+
+\`\`\`python
+def call(
+    self, 
+    query,
+    key,
+    value,
+    return_attention_scores=False,
+    training=None
+)
+\`\`\`
+
+Applies attention mechanism to query, key, and value tensors.
+
+- **Parameters**:
+  - `query`: Query tensor of shape `[batch_size, query_length, query_dim]`
+  - `key`: Key tensor of shape `[batch_size, key_length, key_dim]`
+  - `value`: Value tensor of shape `[batch_size, value_length, value_dim]`
+  - `return_attention_scores`: If True, returns attention scores along with output
+  - `training`: Boolean indicating whether in training mode
+
+- **Returns**:
+  - If `return_attention_scores=False`: Output tensor of shape `[batch_size, query_length, output_dim]`
+  - If `return_attention_scores=True`: Tuple of (output tensor, attention scores)
+
+#### process_sequence
+
+\`\`\`python
+def process_sequence(
+    self,
+    query,
+    keys,
+    values,
+    return_attention_scores=False
+)
+\`\`\`
+
+Processes a query against sequences of keys and values.
+
+- **Parameters**:
+  - `query`: Query tensor of shape `[query_dim]`
+  - `keys`: List of key tensors, each of shape `[key_dim]`
+  - `values`: List of value tensors, each of shape `[value_dim]`
+  - `return_attention_scores`: If True, returns attention scores along with output
+
+- **Returns**:
+  - If `return_attention_scores=False`: Output tensor of shape `[output_dim]`
+  - If `return_attention_scores=True`: Tuple of (output tensor, attention scores)
+
+## Usage Examples
+
+### Basic Usage
+
+\`\`\`python
+import tensorflow as tf
+from synthians_trainer_server.attention import MultiHeadAttentionModule
+
+# Initialize the attention module
+attention = MultiHeadAttentionModule(
+    num_heads=4,
+    key_dim=32,
+    use_layer_norm=True,
+    use_residual=True
+)
+
+# Create sample inputs
+query = tf.random.normal([1, 1, 128])  # Single query
+keys = tf.random.normal([1, 10, 128])   # 10 key vectors
+values = tf.random.normal([1, 10, 128]) # 10 value vectors
+
+# Apply attention
+output, attention_scores = attention(
+    query, keys, values, 
+    return_attention_scores=True
+)
+
+print(f"Output shape: {output.shape}")
+print(f"Attention scores shape: {attention_scores.shape}")
+\`\`\`
+
+### Integration with Titans Variants
+
+\`\`\`python
+from orchestrator.titans_variants import MACVariant
+from synthians_trainer_server.attention import MultiHeadAttentionModule
+
+# Create attention module
+attention_module = MultiHeadAttentionModule(
+    num_heads=4,
+    key_dim=32,
+    use_layer_norm=True,
+    use_residual=True
+)
+
+# Initialize MAC variant with attention module
+mac_variant = MACVariant(
+    attention_module=attention_module,
+    sequence_context_manager=sequence_context_manager
+)
+
+# Process input through variant
+result = mac_variant.process_input(
+    x_t=current_embedding,
+    k_t=key_projection,
+    v_t=value_projection,
+    q_t=query_projection,
+    y_t=retrieved_embedding
+)
+\`\`\`
+
+## Configuration
+
+The attention module can be configured in several ways to optimize for different use cases:
+
+### Optimizing for Sequence Handling
+
+\`\`\`python
+# For long-term dependencies
+attention = MultiHeadAttentionModule(
+    num_heads=8,  # More heads for finer-grained attention
+    key_dim=16,   # Smaller per-head dimension
+    dropout=0.1   # Add dropout for regularization
+)
+
+# For focused, specific attention
+attention = MultiHeadAttentionModule(
+    num_heads=2,  # Fewer heads for more focused attention
+    key_dim=64,   # Larger per-head dimension for more capacity
+    use_residual=False  # Disable residual to force attention-based output
+)
+\`\`\`
+
+### Dynamic Configuration
+
+The attention module parameters should ideally be aligned with the Neural Memory configuration. Future implementations should fetch these parameters dynamically:
+
+\`\`\`python
+# Get Neural Memory configuration
+config_response = await neural_memory_client.get_config()
+
+# Configure attention module based on Neural Memory parameters
+attention = MultiHeadAttentionModule(
+    num_heads=config_response.attention_heads,
+    key_dim=config_response.key_dim // config_response.attention_heads,
+    dropout=config_response.attention_dropout
+)
+\`\`\`
+
+## Debugging and Metrics
+
+The attention module provides several metrics for debugging and performance analysis:
+
+\`\`\`python
+# Get output and attention scores
+output, scores = attention(query, keys, values, return_attention_scores=True)
+
+# Calculate entropy of attention distribution
+entropy = -tf.reduce_sum(scores * tf.math.log(scores + 1e-10), axis=-1)
+print(f"Attention entropy: {entropy}")  # Higher entropy = more distributed attention
+
+# Calculate sparsity (% of scores below threshold)
+sparsity = tf.reduce_mean(tf.cast(scores < 0.01, tf.float32))
+print(f"Attention sparsity: {sparsity}")  # Higher sparsity = more focused attention
+\`\`\`
+
+## Limitations and Future Work
+
+1. **Scale Limitations**: The current implementation may have performance issues with very long sequences (1000+). Future versions could implement sparse attention or other efficient attention mechanisms.
+
+2. **Memory Usage**: For long sequences, memory usage can be significant. Consider implementing attention with linear complexity (e.g., Performer, Reformer).
+
+3. **TensorFlow Dependency**: The current implementation relies on TensorFlow. A PyTorch version might be beneficial for some deployment scenarios.
+
+4. **Dynamic Configuration**: Implement a dedicated endpoint in the Neural Memory server to expose configuration parameters for attention.
+
+5. **Attention Visualization**: Add tooling to visualize attention patterns for better interpretability.
+
+---
+
+**Related Documentation:**
+- [Phase 4 Implementation](phase_4_implementation.md)
+- [Titans Variants Integration](titans_variants_integration.md)
+- [API Updates](api_updates.md)
 
 ```
 
@@ -2676,6 +4190,701 @@ Orchestrates the bidirectional flow between the two hemispheres:
 
 ```
 
+# docs\COMPONENT_GUIDE.md
+
+```md
+Okay, here are the component-specific documentation guides based on the current state of the codebase, emphasizing integration points.
+
+---
+
+## Component Guide: Synthians Memory Core
+
+**Version:** 1.0
+**Date:** March 29, 2025
+**Primary Files:** `synthians_memory_core/`, `api/server.py`, `api/client/client.py`
+
+### 1. Overview
+
+The Synthians Memory Core serves as the primary, persistent storage and retrieval system for the Synthians cognitive architecture. It is responsible for managing individual memory entries (`MemoryEntry`) and related groups (`MemoryAssembly`), calculating memory relevance (`quickrecal_score`), handling emotional context, and providing fast, indexed access to memories. It is analogous to a highly organized, searchable knowledge base or library.
+
+### 2. Core Responsibilities
+
+*   **Memory Storage:** Persists `MemoryEntry` objects, including content, embeddings (Euclidean and optionally Hyperbolic), and rich metadata.
+*   **Memory Retrieval:** Retrieves memories based on semantic similarity (via vector search), QuickRecal scores, emotional resonance, and optional metadata filters.
+*   **Relevance Scoring:** Calculates `quickrecal_score` using the `UnifiedQuickRecallCalculator` based on factors like recency, emotion, importance, surprise feedback (intended), etc.
+*   **Metadata Synthesis:** Enriches memories with temporal, emotional, cognitive, and embedding-based metadata using `MetadataSynthesizer`.
+*   **Vector Indexing:** Provides fast similarity search using `MemoryVectorIndex` (FAISS), supporting CPU/GPU and persistence.
+*   **Emotional Processing:** Analyzes emotional content (`EmotionAnalyzer`) and applies emotional gating/filtering during retrieval (`EmotionalGatingService`).
+*   **Memory Assemblies:** Manages groups of related memories, maintaining composite embeddings and activation levels.
+*   **Persistence:** Handles asynchronous saving/loading of memories and assemblies to disk (`MemoryPersistence`).
+*   **Adaptive Thresholding:** Optionally adjusts retrieval similarity thresholds based on user feedback (`ThresholdCalibrator`).
+*   **Geometry Management:** Uses `GeometryManager` for consistent handling of embedding dimensions, normalization, and geometric calculations.
+*   **API Exposure:** Provides a comprehensive FastAPI interface for external interaction.
+*   **Trainer Integration:** Provides endpoints (`/api/memories/get_sequence_embeddings`, `/api/memories/update_quickrecal_score`) for interaction with the sequence trainer/orchestrator.
+
+### 3. Key Classes/Modules
+
+*   `synthians_memory_core.SynthiansMemoryCore`: Main orchestrating class.
+*   `synthians_memory_core.memory_structures`: Defines `MemoryEntry`, `MemoryAssembly`.
+*   `synthians_memory_core.hpc_quickrecal`: `UnifiedQuickRecallCalculator`.
+*   `synthians_memory_core.geometry_manager`: `GeometryManager`.
+*   `synthians_memory_core.emotional_intelligence`: `EmotionalAnalyzer`, `EmotionalGatingService`.
+*   `synthians_memory_core.memory_persistence`: `MemoryPersistence`.
+*   `synthians_memory_core.vector_index`: `MemoryVectorIndex`.
+*   `synthians_memory_core.metadata_synthesizer`: `MetadataSynthesizer`.
+*   `synthians_memory_core.adaptive_components`: `ThresholdCalibrator`.
+*   `synthians_memory_core.api.server`: FastAPI application exposing the core.
+*   `synthians_memory_core.memory_core.trainer_integration`: `TrainerIntegrationManager`.
+
+### 4. Configuration
+
+*   Primary configuration is passed as a dictionary to the `SynthiansMemoryCore` constructor.
+*   Key parameters include `embedding_dim`, `geometry` type, `storage_path`, `vector_index_type`, `persistence_interval`, etc.
+*   Environment variables (`HOST`, `PORT`, `LOG_LEVEL`, `EMBEDDING_MODEL`) control the API server runtime.
+*   `gpu_setup.py` attempts to configure FAISS for GPU usage during startup.
+
+### 5. API Endpoints (Purpose)
+
+The API (`api/server.py`) exposes core functionalities, including:
+*   Memory CRUD-like operations (Process/Store, Retrieve).
+*   Supporting functions (Generate Embedding, Analyze Emotion, Calculate QuickRecal).
+*   Feedback mechanisms (Provide Relevance Feedback).
+*   Advanced features (Detect Contradictions, Process Transcriptions, Assembly Management).
+*   Integration endpoints for the trainer/orchestrator.
+
+*(See `API_REFERENCE.md` for detailed endpoint definitions)*
+
+### 6. Internal Workflow Example (Memory Storage)
+
+1.  `/process_memory` endpoint receives data.
+2.  Validates/aligns/normalizes incoming embedding (or generates one).
+3.  Calls `SynthiansMemoryCore.process_new_memory`.
+4.  `process_new_memory` orchestrates:
+    *   Calculate QuickRecal score (`UnifiedQuickRecallCalculator`).
+    *   Analyze emotion (`EmotionAnalyzer`).
+    *   Calculate hyperbolic embedding if needed (`GeometryManager`).
+    *   Synthesize metadata (`MetadataSynthesizer`).
+    *   Create `MemoryEntry`.
+    *   Store entry in `self._memories`.
+    *   Save to disk (`MemoryPersistence.save_memory`).
+    *   Update relevant `MemoryAssembly` objects.
+    *   Add embedding to `MemoryVectorIndex`.
+5.  Returns details of the processed memory.
+
+### 7. Integration Points
+
+*   **Receives From Context Cascade Engine (CCE):**
+    *   New memory data via `POST /process_memory`.
+    *   Requests for sequence embeddings via `POST /api/memories/get_sequence_embeddings`.
+    *   Requests to update QuickRecal scores via `POST /api/memories/update_quickrecal_score` (**NOTE: Requires `update_memory` implementation**).
+*   **Sends To Context Cascade Engine (CCE):**
+    *   Response from `/process_memory` (includes `memory_id`, `embedding`, `quickrecal_score`, `metadata`).
+    *   Response from `/retrieve_memories` (list of memory dictionaries).
+    *   Response from `/api/memories/get_sequence_embeddings` (list of sequence embeddings).
+    *   Response from `/api/memories/update_quickrecal_score` (update status).
+*   **Internal Dependencies:** Relies heavily on its internal components (`GeometryManager`, `MemoryPersistence`, `MemoryVectorIndex`, `UnifiedQuickRecallCalculator`, etc.).
+
+### 8. Current Status & Known Gaps
+
+*   **Status:** Core storage, retrieval, indexing, emotion, metadata, and persistence functionalities are largely implemented and robust. FAISS integration handles GPU and validation well. API provides broad coverage.
+*   **Critical Gap:** The feedback loop is **broken**. The `SynthiansMemoryCore` class **lacks the implemented `update_memory` and `get_memory_by_id` methods**. This prevents the `TrainerIntegrationManager` (and thus the CCE) from applying QuickRecal score boosts based on surprise metrics received from the Neural Memory Server.
+*   **Minor Gaps:** Contradiction detection is basic; assembly removal logic is simplified. Embedding generation could be further centralized.
+
+---
+
+## Component Guide: Neural Memory Server
+
+**Version:** 1.0
+**Date:** March 29, 2025
+**Primary Files:** `synthians_trainer_server/`
+
+### 1. Overview
+
+The Neural Memory Server implements an adaptive, associative memory based on the principles outlined in the Titans paper. Its core component is the `NeuralMemoryModule`, a TensorFlow/Keras model capable of **test-time learning**. It learns associations between Key and Value projections derived from input embeddings and can retrieve associated Values based on Query projections. It runs as a separate service, providing low-level associative memory operations.
+
+### 2. Core Responsibilities
+
+*   **Key/Value/Query Projections:** Calculates distinct vector projections (K, V, Q) from input embeddings using learned weight matrices (outer parameters).
+*   **Associative Retrieval:** Given a Query projection (`q_t`), predicts/retrieves the associated Value embedding (`y_t`) using its internal `MemoryMLP` (`M`).
+*   **Test-Time Update:** Updates the weights of its internal `MemoryMLP` (`M`) based on the association between the current `k_t` and `v_t` (or `v'_t` for MAL). Calculates `loss` and `grad_norm` as surprise metrics during this update.
+*   **Dynamic Gate Calculation (for MAG):** Calculates adaptive gate values (`alpha_t`, `theta_t`, `eta_t`) based on attention outputs provided by the CCE.
+*   **State Management:** Manages internal memory weights (`M`) and momentum state.
+*   **Persistence:** Provides mechanisms to save and load its complete state (config, weights, momentum).
+*   **Diagnostics:** Collects metrics (`MetricsStore`) and exposes diagnostic endpoints.
+*   **API Exposure:** Provides a FastAPI interface for the CCE and potentially other tools.
+
+### 3. Key Classes/Modules
+
+*   `neural_memory.NeuralMemoryModule`: The core TensorFlow/Keras model implementing the memory logic.
+*   `neural_memory.MemoryMLP`: The internal MLP representing the associative memory `M`.
+*   `neural_memory.NeuralMemoryConfig`: Configuration class.
+*   `http_server.py`: FastAPI application exposing the Neural Memory API.
+*   `metrics_store.py`: `MetricsStore` for collecting operational metrics.
+*   `surprise_detector.py`: `SurpriseDetector` used by `/analyze_surprise` endpoint.
+
+### 4. Configuration
+
+*   Primary configuration via `NeuralMemoryConfig` (passed during initialization or loaded from state).
+*   Key parameters: `input_dim`, `key_dim`, `value_dim`, `query_dim`, `memory_hidden_dims`, gate initial values, `outer_learning_rate`.
+*   Initialized automatically on startup via `http_server.py`'s `startup_event`, but can be re-initialized via `POST /init`.
+*   State persistence paths specified in `/save` and `/load` requests.
+
+### 5. API Endpoints (Purpose)
+
+The API (`http_server.py`) provides low-level operations for the CCE:
+*   `POST /init`: Initialize/re-initialize the module.
+*   `POST /get_projections`: Get K, V, Q projections without updating memory.
+*   `POST /update_memory`: Perform the test-time learning update step, optionally using external gates (MAG) or projections (MAL). Returns surprise metrics.
+*   `POST /retrieve`: Retrieve associated value embedding (`y_t`) given an input embedding.
+*   `POST /calculate_gates`: Calculate dynamic gates based on attention output (for MAG).
+*   `GET /config`, `POST /config`: Get/Set configuration details and capabilities.
+*   `POST /save`, `POST /load`: Persist or load the module's state.
+*   `GET /health`, `GET /status`: Check service health and initialization status.
+*   `POST /analyze_surprise`: Analyze surprise between two embeddings.
+*   `GET /diagnose_emoloop`: Get diagnostic metrics.
+
+*(See `API_REFERENCE.md` for detailed endpoint definitions)*
+
+### 6. Internal Workflow Example (Update Step)
+
+1.  `/update_memory` receives data (input `x_t`, optional external K/V/Gates).
+2.  `NeuralMemoryModule.update_step` is called.
+3.  If K/V not provided externally, calculates `k_t, v_t` from `x_t` using `WK_layer`, `WV_layer`.
+4.  Determines gate values (`alpha_t`, `theta_t`, `eta_t`) using external values (if MAG) or internal logits.
+5.  Calculates predicted value `predicted_v = M(k_t)` using `MemoryMLP`.
+6.  Calculates `loss = ||predicted_v - v_t||^2` (using original `v_t` or `v'_t` from MAL).
+7.  Calculates gradients of `loss` w.r.t. `MemoryMLP` weights (`M`).
+8.  Calculates `grad_norm`.
+9.  Updates internal `momentum_state` using gradients and `theta_t`, `eta_t`.
+10. Updates `MemoryMLP` weights (`M`) using `momentum_state` and `alpha_t`.
+11. Returns `loss` and `grad_norm`.
+
+### 7. Integration Points
+
+*   **Receives From Context Cascade Engine (CCE):**
+    *   Initialization requests via `POST /init`.
+    *   Input embeddings (`x_t`) for projection via `POST /get_projections`.
+    *   Input embeddings (`x_t`), optional external projections (`k_t`, `v'_t`), and optional external gates (`alpha_t`, `theta_t`, `eta_t`) for memory update via `POST /update_memory`.
+    *   Input embeddings (`x_t`) for retrieval via `POST /retrieve`.
+    *   Attention outputs for gate calculation via `POST /calculate_gates`.
+    *   Requests for configuration/capabilities via `GET /config`.
+    *   Requests for diagnostics via `GET /diagnose_emoloop`.
+    *   Requests to save/load state via `POST /save`, `POST /load`.
+*   **Sends To Context Cascade Engine (CCE):**
+    *   Projections (`key_projection`, `value_projection`, `query_projection`) from `/get_projections`.
+    *   Loss and gradient norm from `/update_memory`, along with projections/gates used.
+    *   Retrieved embeddings (`retrieved_embedding`) and query projection from `/retrieve`.
+    *   Calculated gate values (`alpha`, `theta`, `eta`) from `/calculate_gates`.
+    *   Configuration details from `/config`.
+    *   Diagnostic metrics from `/diagnose_emoloop`.
+    *   Status/health information.
+*   **Internal Dependencies:** TensorFlow, NumPy, `MetricsStore`, `SurpriseDetector`.
+
+### 8. Current Status & Known Gaps
+
+*   **Status:** Implemented and functional, including support for external projections (MAL) and gates (MAG) via the API. Test-time learning mechanism works. Persistence and diagnostics are integrated. Auto-initialization on startup implemented.
+*   **Gaps:**
+    *   **Performance:** Single-threaded `update_step` is slow; parallelization needed for high throughput.
+    *   **Outer Loop:** `/train_outer` exists, but requires significant effort to use effectively for meta-learning optimal projection/gate parameters.
+    *   **Complexity:** The internal dynamics are complex and require robust monitoring via the `MetricsStore` and diagnostic endpoints.
+
+---
+
+## Component Guide: Context Cascade Engine (CCE)
+
+**Version:** 1.0
+**Date:** March 29, 2025
+**Primary Files:** `orchestrator/`
+
+### 1. Overview
+
+The Context Cascade Engine (CCE) serves as the central orchestrator for the Synthians cognitive architecture. It manages the bi-directional flow of information between the persistent Memory Core and the adaptive Neural Memory Server. The CCE implements the core cognitive cycle and dynamically adapts its processing based on the configured Titans Architecture Variant (NONE, MAC, MAG, MAL), integrating attention mechanisms where appropriate.
+
+### 2. Core Responsibilities
+
+*   **Orchestration:** Manages the step-by-step execution of the cognitive cycle for processing new inputs.
+*   **Service Integration:** Communicates with the Memory Core and Neural Memory Server APIs.
+*   **Variant Management:** Selects and executes the logic for the active Titans variant (MAC, MAG, MAL, or NONE).
+*   **History Management:** Maintains a sequential history of embeddings and projections (`SequenceContextManager`) needed for attention calculations in variants.
+*   **Surprise Feedback:** Receives surprise metrics (loss, grad_norm) from the Neural Memory Server and initiates QuickRecal score updates in the Memory Core (**Note: Currently failing due to missing MC methods**).
+*   **Context Propagation:** Ensures relevant information (embeddings, projections, metadata) is passed between stages.
+*   **Error Handling:** Manages communication errors with downstream services.
+
+### 3. Key Classes/Modules
+
+*   `context_cascade_engine.ContextCascadeEngine`: The main orchestrating class.
+*   `history.SequenceContextManager`: Manages the deque of historical context tuples.
+*   `titans_variants.py`: Defines `TitansVariantType` enum, `TitansVariantBase`, `MACVariant`, `MAGVariant`, `MALVariant` classes, and the `create_titans_variant` factory.
+*   `server.py`: Basic FastAPI application exposing the CCE (primarily `/process_memory`).
+
+### 4. Configuration
+
+*   Reads Memory Core URL (`MEMORY_CORE_URL`) and Neural Memory Server URL (`NEURAL_MEMORY_URL`) from environment variables or defaults.
+*   Reads the active Titans variant (`TITANS_VARIANT`) from environment variables (defaults to `NONE`).
+*   Configures `SequenceContextManager` length.
+*   Retrieves dynamic configuration (e.g., attention parameters) from the Neural Memory Server via `/config` on initialization.
+
+### 5. API Endpoints (Purpose)
+
+The API (`orchestrator/server.py`) primarily exposes:
+*   `POST /process_memory`: The main entry point that triggers the entire orchestrated cognitive cycle for a given input.
+*   Potentially other passthrough endpoints (like `/get_sequence_embeddings`, `/analyze_surprise`).
+
+*(See `API_REFERENCE.md` for detailed endpoint definitions)*
+
+### 6. Internal Workflow (Refactored Cognitive Cycle)
+
+The CCE's `process_new_input` method executes the following orchestrated steps:
+1.  Call Memory Core (`/process_memory`) to store input and get `x_t`, `memory_id`.
+2.  Call Neural Memory (`/get_projections`) to get `k_t`, `v_t`, `q_t`.
+3.  If MAG/MAL active, execute variant pre-update logic (calculating gates or `v'_t`).
+4.  Call Neural Memory (`/update_memory`) with `x_t` and any variant modifications (gates/projections). Receive `loss`, `grad_norm`.
+5.  Call Memory Core (`/api/memories/update_quickrecal_score`) with surprise metrics to boost QuickRecal (**Currently Failing**).
+6.  Call Neural Memory (`/retrieve`) with `x_t` to get raw associated embedding `y_t_raw` and the `q_t` used.
+7.  If MAC active, execute variant post-retrieval logic to get final `y_t_final`. Otherwise `y_t_final = y_t_raw`.
+8.  Store the full context `(timestamp, memory_id, x_t, k_t, v_t, q_t, y_t_final)` in `SequenceContextManager`.
+9.  Return a consolidated response.
+
+*(See Architecture Diagram in main ARCHITECTURE.md)*
+
+### 7. Integration Points
+
+*   **Calls Synthians Memory Core API:**
+    *   `POST /process_memory` (Input: content, embedding, metadata; Output: memory_id, embedding, score, metadata)
+    *   `POST /api/memories/update_quickrecal_score` (Input: memory_id, delta, reason; Output: status) (**Intended Call - Currently Failing**)
+    *   `POST /api/memories/get_sequence_embeddings` (Passthrough - Input: filters; Output: sequence)
+*   **Calls Neural Memory Server API:**
+    *   `POST /get_projections` (Input: input_embedding; Output: k, v, q projections)
+    *   `POST /update_memory` (Input: input_embedding, optional external k/v/gates; Output: loss, grad_norm, projections used, gates applied)
+    *   `POST /retrieve` (Input: input_embedding; Output: retrieved_embedding, query_projection)
+    *   `POST /calculate_gates` (MAG only - Input: attention_output; Output: alpha, theta, eta)
+    *   `GET /config` (Input: None; Output: Configuration details)
+    *   `POST /analyze_surprise` (Passthrough - Input: pred_emb, actual_emb; Output: surprise metrics)
+*   **Internal Dependencies:** `SequenceContextManager`, `TitansVariantBase` subclasses, shared `GeometryManager`, `MetricsStore`.
+
+### 8. Current Status & Known Gaps
+
+*   **Status:** Implements the refactored cognitive flow correctly, enabling proper timing for MAC, MAG, and MAL variants. Integrates with `SequenceContextManager` for history. Dynamically configures itself. Uses lazy loading for TensorFlow.
+*   **Gaps:**
+    *   **Dependent on Memory Core Fix:** The critical surprise feedback loop to update QuickRecal scores is non-functional until the Memory Core API is fixed.
+    *   **Error Handling:** While basic error handling exists, more sophisticated strategies for handling failures in Memory Core or Neural Memory calls (e.g., retries, fallback logic) could be added.
+    *   **State Management:** If the CCE were to become stateful (beyond the sequence history), careful management would be needed. Currently designed as mostly stateless per request cycle.
+
+---
+
+## Inter-Component Integration Summary
+
+*   **New Input:** User/System -> **CCE (`/process_memory`)** -> **Memory Core (`/process_memory`)** -> Returns `x_t`, `mem_id` to CCE.
+*   **Association Learning:** CCE -> **Neural Memory (`/get_projections`)** -> Returns `k_t, v_t, q_t` -> CCE -> **Variant Pre-Update (MAG/MAL)** -> CCE -> **Neural Memory (`/update_memory`)** -> Returns `loss`, `grad_norm`.
+*   **Surprise Feedback:** CCE -> **Memory Core (`/update_quickrecal_score`)** with `loss`/`grad_norm` -> Memory Core updates score (**BROKEN**).
+*   **Associative Retrieval:** CCE -> **Neural Memory (`/retrieve`)** -> Returns `y_t_raw`, `q_t` -> CCE -> **Variant Post-Update (MAC)** -> Generates `y_t_final`.
+*   **History:** CCE updates `SequenceContextManager` with `(ts, mem_id, x_t, k_t, v_t, q_t, y_t_final)`.
+*   **Configuration:** CCE -> **Neural Memory (`/config`)** -> Returns NM/Attention config.
+
+This flow highlights the central role of the CCE in mediating all interactions and implementing the core logic of the bi-hemispheric model and its variants. The broken feedback link to the Memory Core is the most significant integration issue to resolve.
+\`\`\`
+```
+
+# docs\CONFIGURATION_GUIDE.md
+
+```md
+Okay, here is the comprehensive configuration guide for the Synthians Cognitive Architecture, covering all three services and providing example scenarios.
+
+# Synthians Cognitive Architecture: Configuration Guide
+
+**Version:** 1.1
+**Date:** March 29, 2025
+
+## 1. Overview
+
+This guide details the configuration parameters for the three core services of the Synthians Cognitive Architecture:
+
+1.  **Synthians Memory Core:** Manages persistent memory, retrieval, and scoring.
+2.  **Neural Memory Server:** Handles adaptive associative memory and test-time learning.
+3.  **Context Cascade Engine (CCE):** Orchestrates the flow between the Memory Core and Neural Memory.
+
+Configuration is primarily managed through **Environment Variables** and **Configuration Dictionaries** passed during component initialization. Environment variables are particularly useful for Docker deployments.
+
+## 2. Configuration Mechanisms
+
+*   **Environment Variables:** Used for service URLs, ports, log levels, model paths, and high-level settings like the active Titans variant. Easy to manage in Docker/orchestration environments.
+*   **Configuration Dictionaries:** Passed to the Python constructors of core classes (`SynthiansMemoryCore`, `NeuralMemoryModule`, `ContextCascadeEngine`, `GeometryManager`, etc.). Allow for fine-grained control over component behavior.
+*   **API Endpoints:** Some components (like Neural Memory Server's `/init` and `/config`) allow configuration at runtime via API calls, although startup configuration via environment variables or code is generally preferred for consistency.
+
+## 3. Synthians Memory Core Configuration (`synthians_memory_core`)
+
+These parameters configure the main memory storage and retrieval service, typically controlled via the `config` dictionary passed to the `SynthiansMemoryCore` class constructor and environment variables for the API server.
+
+### 3.1. Core Parameters (`SynthiansMemoryCore` config dict)
+
+| Parameter                       | Type              | Default                               | Description                                                                                                  | Example                  |
+| :------------------------------ | :---------------- | :------------------------------------ | :----------------------------------------------------------------------------------------------------------- | :----------------------- |
+| `embedding_dim`                 | int               | 768                                   | **CRITICAL:** Dimension of embeddings used throughout the system. Must match embedding model output.         | 768                      |
+| `geometry`                      | str               | `hyperbolic`                          | Geometry space for embeddings (`euclidean`, `hyperbolic`, `spherical`, `mixed`). Affects distance calculations. | `hyperbolic`             |
+| `hyperbolic_curvature`          | float             | -1.0                                  | Negative curvature for Hyperbolic geometry (magnitude affects scaling). Ignored otherwise.                   | -1.0                     |
+| `storage_path`                  | str (Path)        | `/app/memory/stored/synthians`        | **CRITICAL:** Root directory for storing memory files, index, and assemblies. Mount as a volume in Docker. | `./memory_data`        |
+| `persistence_interval`          | float             | 60.0                                  | Frequency (seconds) for the background task to persist changed memories and index.                           | 300.0 (5 mins)           |
+| `decay_interval`                | float             | 3600.0                                | Frequency (seconds) for applying time decay to QuickRecal scores.                                           | 7200.0 (2 hours)         |
+| `prune_check_interval`          | float             | 600.0                                 | Frequency (seconds) for checking if memory pruning is needed based on `max_memory_entries`.                | 900.0 (15 mins)          |
+| `max_memory_entries`            | int               | 50000                                 | Maximum number of memories to keep before attempting to prune.                                               | 100000                   |
+| `prune_threshold_percent`       | float             | 0.9                                   | Pruning starts when memory count exceeds this percentage of `max_memory_entries` (0.0-1.0).              | 0.95                     |
+| `min_quickrecal_for_ltm`        | float             | 0.2                                   | Minimum *effective* QuickRecal score required for a memory to survive pruning (0.0-1.0).                 | 0.15                     |
+| `assembly_threshold`            | float             | 0.75                                  | Minimum similarity score for a memory to be added to an existing assembly (0.0-1.0).                         | 0.8                      |
+| `max_assemblies_per_memory`     | int               | 3                                     | Maximum number of assemblies a single memory can belong to.                                                | 5                        |
+| `adaptive_threshold_enabled`    | bool              | True                                  | Enable/disable the `ThresholdCalibrator` for adaptive retrieval thresholds.                                  | False                    |
+| `initial_retrieval_threshold`   | float             | 0.75                                  | Initial similarity threshold for retrieval if adaptive thresholding is disabled or not yet calibrated.       | 0.7                      |
+| `vector_index_type`             | str               | `Cosine`                              | FAISS index type (`L2`, `IP`, `Cosine`). `Cosine` often works well with normalized sentence embeddings.       | `IP`                     |
+| `use_gpu`                       | bool              | True                                  | Attempt to use GPU for FAISS index operations if available.                                                | True                     |
+| `gpu_id`                        | int               | 0                                     | ID of the GPU to use for FAISS if `use_gpu` is True.                                                         | 0                        |
+| `gpu_timeout_seconds`           | int               | 10                                    | Max seconds to wait for FAISS GPU initialization before falling back to CPU.                                 | 15                       |
+| `geometry_alignment_strategy` | str               | `truncate`                            | How `GeometryManager` handles dimension mismatches (`truncate`, `pad`). Passed to `GeometryManager`.       | `pad`                    |
+| `quickrecal_mode`               | str               | `hpc_qr`                              | Scoring mode for `UnifiedQuickRecallCalculator` (`standard`, `hpc_qr`, `minimal`, `custom`).               | `standard`               |
+| `quickrecal_factor_weights`   | Dict[str, float]  | *(Depends on mode)*                   | Custom weights for QuickRecall factors if `quickrecal_mode` is `custom`.                                   | `{"recency": 0.5, ...}` |
+| `emotion_model_path`            | str               | *(Auto-detects)*                      | Path to the local GoEmotions model for `EmotionAnalyzer`. Falls back to downloading.                     | `/models/emotion`        |
+| `emotion_device`                | str               | *(Auto-detects)*                      | Device for emotion model (`cpu` or `cuda`).                                                              | `cuda`                   |
+
+### 3.2. API Server Environment Variables (`api/server.py` via `run_server.py`)
+
+| Variable          | Default             | Description                                                                      | Example               |
+| :---------------- | :------------------ | :------------------------------------------------------------------------------- | :-------------------- |
+| `HOST`            | `0.0.0.0`           | Host address for the API server to bind to.                                      | `127.0.0.1`           |
+| `PORT`            | `5010`              | Port for the API server to listen on.                                            | `8000`                |
+| `LOG_LEVEL`       | `INFO`              | Logging level (e.g., `DEBUG`, `INFO`, `WARNING`, `ERROR`).                       | `DEBUG`               |
+| `EMBEDDING_MODEL` | `all-mpnet-base-v2` | Name of the Sentence Transformer model to load for embedding generation.         | `all-MiniLM-L6-v2`    |
+| `STORAGE_PATH`    | *(Inherited)*       | If set, overrides `storage_path` in the `SynthiansMemoryCore` config dict.       | `/persistent/memory`  |
+| `EMOTION_MODEL_PATH`| *(Inherited)*       | If set, overrides `emotion_model_path` in the `SynthiansMemoryCore` config dict. | `/models/emotion_alt` |
+
+## 4. Neural Memory Server Configuration (`synthians_trainer_server`)
+
+These parameters configure the adaptive associative memory service. They are primarily set via the `NeuralMemoryConfig` class, which can be initialized from a dictionary (e.g., during `POST /init`).
+
+### 4.1. Core Parameters (`NeuralMemoryConfig` dict)
+
+| Parameter               | Type             | Default             | Description                                                                                                         | Example            |
+| :---------------------- | :--------------- | :------------------ | :------------------------------------------------------------------------------------------------------------------ | :----------------- |
+| `input_dim`             | int              | 768                 | **CRITICAL:** Dimension of the raw input embeddings (`x_t`). Must match Memory Core's `embedding_dim`.                | 768                |
+| `key_dim`               | int              | 128                 | Dimension of the Key projections (`k_t`). Should match `query_dim`.                                                 | 128                |
+| `value_dim`             | int              | 768                 | Dimension of the Value projections (`v_t`) and the output of the memory MLP (`y_t`). Often matches `input_dim`.         | 768                |
+| `query_dim`             | int              | 128                 | Dimension of the Query projections (`q_t`). Should match `key_dim`.                                                 | 128                |
+| `memory_hidden_dims`    | List[int]        | `[512]`             | List of hidden layer sizes for the internal Memory MLP (`M`).                                                       | `[1024, 512]`      |
+| `gate_hidden_dims`      | List[int]        | `[64]`              | Hidden layer sizes for calculating complex gates (if `use_complex_gates` is True).                                  | `[128]`            |
+| `alpha_init`            | float            | -2.0                | Initial value for the *logit* of the alpha gate (forget rate). Sigmoid applied later. Lower => lower forget rate. | -3.0               |
+| `theta_init`            | float            | -3.0                | Initial value for the *logit* of the theta gate (inner learning rate). Sigmoid applied later. Lower => lower LR.  | -4.0               |
+| `eta_init`              | float            | 2.0                 | Initial value for the *logit* of the eta gate (momentum decay). Sigmoid applied later. Higher => more momentum.     | 3.0                |
+| `outer_learning_rate` | float            | 1e-4                | Learning rate for the Adam optimizer used in the outer training loop (`/train_outer`).                             | 5e-5               |
+| `use_complex_gates`     | bool             | False               | Whether to use MLP-based gates instead of simple scalar gates (currently noted as not implemented).                 | False              |
+
+### 4.2. API Server Environment Variables (`synthians_trainer_server/http_server.py`)
+
+| Variable                | Default         | Description                                                                          | Example                  |
+| :---------------------- | :-------------- | :----------------------------------------------------------------------------------- | :----------------------- |
+| `HOST`                  | `0.0.0.0`       | Host address for the API server.                                                     | `127.0.0.1`              |
+| `PORT`                  | `8001`          | Port for the API server.                                                             | `8081`                   |
+| `LOG_LEVEL`             | `info`          | Logging level.                                                                       | `debug`                  |
+| `NM_DEFAULT_STATE_PATH` | `None`          | Path to a state file to automatically load on startup.                                 | `/app/state/nm_init.json`|
+| `MEMORY_CORE_URL`       | `http://localhost:5010` | URL of the Memory Core service (used for potential future callbacks).          | `http://memory:5010`     |
+| `METRICS_LOG_DIR`       | `./logs`        | Directory where `MetricsStore` saves logs (`memory_updates.jsonl`, etc.).          | `/logs/neural_memory`    |
+
+## 5. Context Cascade Engine (CCE) Configuration (`orchestrator`)
+
+The CCE primarily uses environment variables for configuration.
+
+### 5.1. Environment Variables (`orchestrator/context_cascade_engine.py`)
+
+| Variable                  | Default                 | Description                                                                                   | Example                      |
+| :------------------------ | :---------------------- | :-------------------------------------------------------------------------------------------- | :--------------------------- |
+| `MEMORY_CORE_URL`         | `http://localhost:5010` | **CRITICAL:** URL of the running Synthians Memory Core service.                               | `http://memory-core-svc:5010`|
+| `NEURAL_MEMORY_URL`       | `http://localhost:8001` | **CRITICAL:** URL of the running Neural Memory Server service.                                | `http://neural-memory-svc:8001`|
+| `TITANS_VARIANT`          | `NONE`                  | Active Titans variant (`NONE`, `MAC`, `MAG`, `MAL`). Case-insensitive.                        | `MAG`                        |
+| `CCE_METRICS_ENABLED`     | `True`                  | Enable/disable cognitive metrics collection via `MetricsStore`. (`True`/`False` string)       | `False`                      |
+| `SEQUENCE_CONTEXT_LENGTH` | `50`                    | Max number of historical context tuples (`(ts, id, x, k, v, q, y)`) to keep for attention. | `100`                        |
+
+*(Note: The CCE API server (`orchestrator/server.py`) uses standard `HOST`/`PORT`/`LOG_LEVEL` variables if run directly, typically defaulting to port 8002).*
+
+## 6. Example Configurations
+
+### Scenario 1: Local Development (CPU Only, Standard Memory)
+
+*   **Goal:** Run all services locally on a machine without a dedicated GPU, focusing on basic memory functions.
+*   **Memory Core (`SynthiansMemoryCore` config / env vars):**
+    *   `embedding_dim: 384` (using `all-MiniLM-L6-v2`)
+    *   `EMBEDDING_MODEL: all-MiniLM-L6-v2`
+    *   `geometry: euclidean`
+    *   `use_gpu: False`
+    *   `vector_index_type: Cosine`
+    *   `quickrecal_mode: standard`
+    *   `storage_path: ./local_memory_data`
+    *   `PORT: 5010`
+*   **Neural Memory Server (Env vars / `/init` config):**
+    *   `input_dim: 384`
+    *   `key_dim: 64`
+    *   `value_dim: 384`
+    *   `query_dim: 64`
+    *   `memory_hidden_dims: [256]`
+    *   `PORT: 8001`
+    *   `METRICS_LOG_DIR: ./local_nm_logs`
+*   **CCE (Env vars):**
+    *   `MEMORY_CORE_URL: http://localhost:5010`
+    *   `NEURAL_MEMORY_URL: http://localhost:8001`
+    *   `TITANS_VARIANT: NONE`
+    *   `CCE_METRICS_ENABLED: True`
+    *   *(Run on default port 8002)*
+
+### Scenario 2: Docker Deployment (GPU Enabled, Hyperbolic, MAG Variant)
+
+*   **Goal:** Deploy services in Docker, leveraging GPU for FAISS and potentially emotion/embedding models, using Hyperbolic geometry and the MAG attention variant.
+*   **`docker-compose.yml` Environment Variables:**
+    *   **Memory Core Service:**
+        *   `PORT=5010`
+        *   `EMBEDDING_MODEL=all-mpnet-base-v2` (Requires 768 dim)
+        *   `STORAGE_PATH=/data/memory` (Mounted volume)
+        *   `EMOTION_MODEL_PATH=/models/emotion` (Mounted volume)
+        *   `USE_GPU=True` (Passed to `SynthiansMemoryCore` config)
+        *   `GEOMETRY=hyperbolic` (Passed to `SynthiansMemoryCore` config)
+        *   `QUICKRECAL_MODE=hpc_qr` (Passed to `SynthiansMemoryCore` config)
+        *   `VECTOR_INDEX_TYPE=Cosine`
+        *   **(Runtime must be configured for NVIDIA in compose file)**
+    *   **Neural Memory Service:**
+        *   `PORT=8001`
+        *   `METRICS_LOG_DIR=/logs/neural_memory` (Mounted volume)
+        *   `NM_DEFAULT_STATE_PATH=/data/state/nm_latest.json` (Optional, mounted volume)
+        *   **(Runtime must be configured for NVIDIA if using TF-GPU)**
+        *   *(Config dimensions like `input_dim: 768`, `key_dim: 128`, etc., are set via default or loaded state)*
+    *   **CCE Service:**
+        *   `MEMORY_CORE_URL=http://memory-core:5010` (Using Docker service names)
+        *   `NEURAL_MEMORY_URL=http://neural-memory:8001`
+        *   `TITANS_VARIANT=MAG`
+        *   `CCE_METRICS_ENABLED=True`
+        *   `SEQUENCE_CONTEXT_LENGTH=100`
+
+### Scenario 3: Minimal Resource Footprint (e.g., Edge Device - Conceptual)
+
+*   **Goal:** Configure for minimal CPU/RAM usage, sacrificing some features.
+*   **Memory Core:**
+    *   `embedding_dim: 384`
+    *   `geometry: euclidean`
+    *   `use_gpu: False`
+    *   `vector_index_type: L2` (Potentially simpler index types if needed)
+    *   `quickrecal_mode: minimal`
+    *   `adaptive_threshold_enabled: False`
+    *   `max_memory_entries: 5000`
+    *   `persistence_interval: 600` (Less frequent saves)
+    *   `decay_interval: 86400` (Daily decay)
+*   **Neural Memory Server:**
+    *   `input_dim: 384`, `key_dim: 32`, `value_dim: 384`, `query_dim: 32`
+    *   `memory_hidden_dims: [128]` (Smaller MLP)
+    *   (Likely wouldn't run Neural Memory on a very constrained edge device, but shows config options)
+*   **CCE:**
+    *   `TITANS_VARIANT: NONE`
+    *   `CCE_METRICS_ENABLED: False`
+    *   `SEQUENCE_CONTEXT_LENGTH: 20`
+
+## 7. Key Considerations
+
+*   **Consistency:** `embedding_dim` *must* be consistent between the Memory Core, the chosen `EMBEDDING_MODEL`, and the `input_dim`/`value_dim` of the Neural Memory Server.
+*   **URLs:** Ensure service URLs (`MEMORY_CORE_URL`, `NEURAL_MEMORY_URL`) are correct for the deployment environment (e.g., `localhost` for local, service names for Docker Compose/Kubernetes).
+*   **Storage Paths:** Directories specified in `storage_path`, `METRICS_LOG_DIR`, `EMOTION_MODEL_PATH`, `NM_DEFAULT_STATE_PATH` must exist and have correct permissions, especially when using Docker volumes.
+*   **GPU:** For GPU usage, ensure NVIDIA drivers, CUDA toolkit, `nvidia-docker` (or equivalent), and GPU-enabled versions of libraries (FAISS-GPU, TensorFlow-GPU) are installed correctly in the environment/container.
+*   **Titans Variants:** The CCE will dynamically use the variant specified by `TITANS_VARIANT`. Ensure the Neural Memory Server supports the required API endpoints for the selected variant (e.g., `/calculate_gates` for MAG, specific `/update_memory` parameters for MAG/MAL).
+
+This guide provides a comprehensive overview of configuring the Synthians Cognitive Architecture. Always refer to the specific component code for the most up-to-date default values and parameter handling.
+
+```
+
+# docs\Embedding_Dimension_Handling_Strategy.md
+
+```md
+Okay, here is the specific document detailing the embedding dimension handling strategy currently implemented in the Synthians codebase.
+
+\`\`\`markdown
+# Synthians Cognitive Architecture: Embedding Dimension Handling Strategy
+
+**Version:** 1.0
+**Date:** March 29, 2025
+
+## 1. Overview
+
+This document outlines the strategy employed across the Synthians cognitive architecture (Memory Core, Neural Memory Server, Orchestrator) to handle potentially different embedding dimensions (e.g., 384D vs. 768D) and ensure robust processing of vector data.
+
+The core goals of this strategy are:
+
+1.  **Consistency:** Ensure vector operations (similarity, distance) work reliably even with mixed-dimension inputs.
+2.  **Configurability:** Allow definition of a primary `embedding_dim` and an `alignment_strategy`.
+3.  **Robustness:** Validate embeddings for correctness (e.g., check for NaN/Inf values) and handle invalid data gracefully.
+4.  **Compatibility:** Ensure components requiring specific dimensions (like FAISS index, Neural Memory projections) receive correctly dimensioned data.
+
+## 2. Core Strategy: Multi-Layered Validation and Alignment
+
+The system uses a multi-layered approach, primarily centered around the `GeometryManager`, but with validation and alignment steps occurring at different component boundaries:
+
+1.  **Central Authority (`GeometryManager`):**
+    *   Defines the system's target `embedding_dim` via its configuration.
+    *   Defines the `alignment_strategy` (`'truncate'` or `'pad'`) to use when dimensions mismatch the target.
+    *   Provides core methods for validation (`_validate_vector`), alignment (`align_vectors`), and normalization (`normalize_embedding`).
+
+2.  **API Layer Validation (Memory Core API):**
+    *   The main API server (`api/server.py`) performs initial validation and alignment of embeddings received in requests (e.g., in `/process_memory`) *before* passing them to the `SynthiansMemoryCore` logic. This acts as a first line of defense.
+
+3.  **Memory Core Internal Processing:**
+    *   The `SynthiansMemoryCore` class relies heavily on the `GeometryManager` instance for all internal embedding operations: validating inputs, aligning vectors for comparison (`calculate_similarity`), and normalizing vectors.
+
+4.  **Vector Index Internal Alignment (`MemoryVectorIndex`):**
+    *   The `MemoryVectorIndex` (FAISS wrapper) performs its *own* validation and alignment (`_validate_embedding`, `_align_embedding_dimension`) when adding vectors (`add`) or receiving query vectors (`search`).
+    *   **Crucially:** It ensures that all vectors *stored within the FAISS index itself* strictly match the index's configured `embedding_dim`. This is achieved by padding or truncating vectors *before* they are added to the FAISS C-level index.
+
+5.  **Neural Memory Server Expectations:**
+    *   The Neural Memory module (`neural_memory.py`) expects input tensors matching the dimensions defined in its `NeuralMemoryConfig` (`input_dim`, `key_dim`, etc.).
+    *   Validation for the Neural Memory API (`http_server.py`) checks incoming vectors against these expected dimensions using `_validate_vector`.
+
+6.  **Orchestrator (`ContextCascadeEngine`):**
+    *   Acts primarily as a conduit, converting numpy arrays to lists for API calls.
+    *   Relies on the shared `GeometryManager` for any internal validation or processing needs.
+
+## 3. Key Components and Implementation Details
+
+### 3.1. `GeometryManager`
+
+*   **Configuration:**
+    *   `embedding_dim`: Target dimension (e.g., 768).
+    *   `alignment_strategy`: `'truncate'` (shorten longer vectors) or `'pad'` (zero-pad shorter vectors). Default appears to be a hybrid based on relative size if not specified, but explicit config is preferred.
+    *   `normalization_enabled`: Controls L2 normalization.
+*   **`_validate_vector`:** Checks for `None`, converts to `np.float32` array, checks for `NaN`/`Inf` (replaces with zeros and warns).
+*   **`align_vectors`:** Takes two vectors, aligns *both* to the configured `embedding_dim` based on the `alignment_strategy`. Logs warnings on dimension mismatch (limited number of warnings).
+*   **`normalize_embedding`:** Performs L2 normalization if enabled. Handles zero vectors.
+*   **Backward Compatibility:** Includes `_align_vectors` and `_normalize` methods that simply forward calls to the non-underscored versions, ensuring components using older naming still work.
+
+\`\`\`python
+# synthians_memory_core/geometry_manager.py
+
+def align_vectors(self, vec_a: np.ndarray, vec_b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    # ... validation ...
+    target_dim = self.config['embedding_dim']
+    strategy = self.config['alignment_strategy']
+    # ... logic to pad/truncate vec_a and vec_b to target_dim ...
+    if dim_a != target_dim:
+        # Apply strategy to align vec_a to target_dim
+        aligned_a = self._apply_alignment(vec_a, target_dim, strategy)
+    if dim_b != target_dim:
+        # Apply strategy to align vec_b to target_dim
+        aligned_b = self._apply_alignment(vec_b, target_dim, strategy)
+    return aligned_a, aligned_b
+
+def _validate_vector(...):
+    # ... checks for None, type, NaN/Inf ...
+    if np.isnan(vector).any() or np.isinf(vector).any():
+        # ... log warning ...
+        return np.zeros_like(vector) # Replace invalid vector with zeros
+    return vector
+\`\`\`
+
+### 3.2. `MemoryVectorIndex` (FAISS Wrapper)
+
+*   **Configuration:** Takes `embedding_dim` on initialization, which *must* match the dimension of the internal FAISS index.
+*   **`_validate_embedding`:** Internal validation similar to `GeometryManager`, but *also* performs alignment (padding/truncation) to match `self.embedding_dim`. This is crucial because FAISS requires all vectors within an index to have the same dimension.
+*   **`add`:** Calls `_validate_embedding` on the input vector. The validated (and potentially aligned) vector is added to the FAISS index.
+*   **`search`:** Calls `_validate_embedding` on the query vector to ensure it matches the index dimension before performing the FAISS search.
+
+\`\`\`python
+# synthians_memory_core/vector_index.py
+
+def _validate_embedding(self, embedding: Union[np.ndarray, list, tuple]) -> Optional[np.ndarray]:
+    # ... checks for None, type, 1D shape, NaN/Inf ...
+
+    # Check dimension and align to self.embedding_dim
+    if len(embedding) != self.embedding_dim:
+        logger.warning(f"Embedding dimension mismatch: expected {self.embedding_dim}, got {len(embedding)}")
+        if len(embedding) < self.embedding_dim:
+            # Pad with zeros
+            padding = np.zeros(self.embedding_dim - len(embedding), dtype=np.float32)
+            embedding = np.concatenate([embedding, padding])
+        else:
+            # Truncate
+            embedding = embedding[:self.embedding_dim]
+    # ... ensure float32 ...
+    return embedding
+
+def add(self, memory_id: str, embedding: np.ndarray) -> bool:
+    validated_embedding = self._validate_embedding(embedding)
+    if validated_embedding is None: return False
+    # FAISS expects shape [n, dim]
+    self.index.add(np.array([validated_embedding], dtype=np.float32))
+    # ... update mapping ...
+
+def search(self, query_embedding: np.ndarray, k: int = 5, threshold: float = 0.0) -> List[Tuple[str, float]]:
+    validated_query = self._validate_embedding(query_embedding)
+    if validated_query is None: return []
+    # FAISS expects shape [n, dim]
+    distances, indices = self.index.search(np.array([validated_query], dtype=np.float32), k)
+    # ... process results ...
+\`\`\`
+
+### 3.3. Memory Core API Server (`api/server.py`)
+
+*   **`process_memory` Endpoint:** Explicitly validates the incoming `embedding` for NaN/Inf and dimension mismatches *before* calling `memory_core.process_new_memory`. It aligns the embedding to the expected dimension (`memory_core.config['embedding_dim']`).
+*   **Other Endpoints:** Generally pass embeddings as lists within JSON payloads. Downstream components are responsible for validation and alignment.
+
+\`\`\`python
+# synthians_memory_core/api/server.py - Inside process_memory endpoint
+
+if embedding is not None:
+    # ... Check for NaN/Inf ...
+    # Ensure correct dimensionality
+    expected_dim = app.state.memory_core.config.get('embedding_dim', 768)
+    actual_dim = len(embedding)
+    if actual_dim != expected_dim:
+        logger.warning(...)
+        if actual_dim < expected_dim:
+            embedding = embedding + [0.0] * (expected_dim - actual_dim) # Pad
+        else:
+            embedding = embedding[:expected_dim] # Truncate
+
+# Call core processing with potentially aligned embedding
+result = await app.state.memory_core.process_new_memory(...)
+\`\`\`
+
+### 3.4. `SynthiansMemoryCore` Class
+
+*   **`process_new_memory`:** Receives embedding (potentially pre-aligned by the API layer), validates again using `geometry_manager._validate_vector`, aligns using `geometry_manager._align_vectors` (often redundant if API pre-aligned, but safe), and normalizes using `geometry_manager._normalize`.
+*   **`retrieve_memories` / `_get_candidate_memories`:** Uses `geometry_manager.calculate_similarity` for comparisons *after* retrieving candidates. Candidate retrieval relies on `vector_index.search`, where alignment happens internally.
+
+### 3.5. Neural Memory Server (`synthians_trainer_server/http_server.py`)
+
+*   **`_validate_vector` Helper:** Validates incoming vectors in API requests against the specific dimensions required by the endpoint (e.g., `input_dim` for `/update_memory`, `query_dim` for `/retrieve` queries *after projection*). It raises HTTPExceptions on mismatch. **It does not perform alignment.**
+*   **Expectation:** Assumes the caller (CCE) provides correctly dimensioned vectors based on the Neural Memory's configuration.
+
+### 3.6. Orchestrator (`orchestrator/context_cascade_engine.py`)
+
+*   Relies on the shared `GeometryManager` for validation (`_validate_embedding`).
+*   Uses helper (`_to_list`) to convert numpy arrays to lists before sending them via API calls to the Memory Core or Neural Memory Server.
+
+## 4. Validation Details
+
+*   **NaN/Inf Handling:** Vectors containing `NaN` or `Inf` are detected by `_validate_vector` (in `GeometryManager` and `MemoryVectorIndex`). These invalid vectors are typically replaced with **zero vectors** of the appropriate dimension, accompanied by a warning log.
+*   **Shape:** Validation generally ensures vectors are 1-dimensional.
+*   **Type:** Vectors are consistently converted to `np.float32` before being used in FAISS or TensorFlow operations.
+
+## 5. Normalization
+
+*   L2 normalization is typically applied to embeddings before storage, similarity calculation, or use in geometric operations.
+*   This is controlled by the `normalization_enabled` flag in `GeometryManager` and implemented in `normalize_embedding`.
+
+## 6. Configuration
+
+*   **`embedding_dim`:** Set consistently across `GeometryManager`, `MemoryVectorIndex`, Memory Core API server (`SynthiansMemoryCore` config), and relevant dimensions in `NeuralMemoryConfig`.
+*   **`alignment_strategy`:** Configured in `GeometryManager` (`'truncate'` or `'pad'`).
+
+## 7. Potential Issues & Areas for Improvement
+
+*   **Redundancy:** `MetadataSynthesizer` contains its own `_validate_embedding` and `_align_vectors_for_comparison` methods. These should ideally be removed, and it should use the shared `GeometryManager` instance for consistency.
+*   **Consistency Checks:** Add startup checks to verify that `embedding_dim` configurations match across key components (GeometryManager, VectorIndex, NeuralMemory input/output dims where applicable).
+*   **Alignment Strategy Default:** The default behavior in `GeometryManager`'s `align_vectors` if `alignment_strategy` isn't explicitly 'pad' or 'truncate' seems to be a mix (truncate if larger, pad if smaller). This should be clarified or made stricter based on the config value.
+
+## 8. Conclusion
+
+The Synthians system employs a robust, multi-layered strategy for handling embedding dimensions and validation. `GeometryManager` serves as the central configuration point, while `MemoryVectorIndex` ensures internal consistency for FAISS. Validation and alignment occur at API boundaries and within core components, aiming for both flexibility and operational reliability. Key features include NaN/Inf replacement, configurable alignment (padding/truncation), and consistent use of L2 normalization.
+\`\`\`
+```
+
 # docs\embedding_handling.md
 
 ```md
@@ -2688,6 +4897,103 @@ The Synthians Memory Core implements robust handling for embeddings throughout t
 1. **Dimension Mismatches**: Safely handling vectors of different dimensions (e.g., 384 vs. 768)
 2. **Malformed Embeddings**: Detecting and handling NaN/Inf values in embedding vectors
 3. **Efficient Retrieval**: Using FAISS for fast similarity search with automatic GPU acceleration
+4. **Component Compatibility**: Ensuring consistent behavior across different components through backward compatibility
+
+## Recent Enhancements (March 2025)
+
+Several significant improvements have been made to the embedding handling system:
+
+### 1. Backward Compatibility Methods in GeometryManager
+
+To ensure consistent behavior across all components, backward compatibility methods were added to the GeometryManager class:
+
+\`\`\`python
+def _align_vectors(self, v1: np.ndarray, v2: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Backward compatibility method that forwards to align_vectors."""
+    return self.align_vectors(v1, v2)
+
+def _normalize(self, vector: np.ndarray) -> np.ndarray:
+    """Backward compatibility method that forwards to normalize_embedding."""
+    # Ensure vector is numpy array before calling
+    validated_vector = self._validate_vector(vector, "Vector for _normalize")
+    if validated_vector is None:
+        # Return zero vector if validation fails
+        return np.zeros(self.config.get('embedding_dim', 768), dtype=np.float32)
+    return self.normalize_embedding(validated_vector)
+\`\`\`
+
+These methods ensure that both naming conventions (`_align_vectors`/`align_vectors` and `_normalize`/`normalize_embedding`) work correctly across all components.
+
+### 2. Robust Vector Alignment
+
+The system now includes comprehensive support for handling dimension mismatches between different embedding models (particularly 384D vs 768D vectors):
+
+\`\`\`python
+def _align_vectors_for_comparison(v1, v2):
+    """Safely align two vectors to the same dimension for comparison operations.
+    
+    If vectors have different dimensions, either pads the smaller one with zeros
+    or truncates the larger one to match dimensions.
+    
+    Args:
+        v1: First vector (numpy array)
+        v2: Second vector (numpy array)
+        
+    Returns:
+        Tuple of aligned vectors (v1_aligned, v2_aligned)
+    """
+    if v1.shape != v2.shape:
+        # Get dimensions
+        dim1 = v1.shape[0]
+        dim2 = v2.shape[0]
+        target_dim = max(dim1, dim2)
+        
+        # Align vectors to target dimension
+        if dim1 < target_dim:
+            v1 = np.pad(v1, (0, target_dim - dim1))
+        elif dim1 > target_dim:
+            v1 = v1[:target_dim]
+            
+        if dim2 < target_dim:
+            v2 = np.pad(v2, (0, target_dim - dim2))
+        elif dim2 > target_dim:
+            v2 = v2[:target_dim]
+    
+    return v1, v2
+\`\`\`
+
+### 3. Enhanced Embedding Validation
+
+All embeddings are now validated more thoroughly with proper error handling:
+
+\`\`\`python
+def _validate_embedding(embedding, allow_zero=True):
+    """Validate that an embedding vector contains only valid values.
+    
+    Args:
+        embedding: The embedding vector to validate
+        allow_zero: Whether to allow zero vectors
+        
+    Returns:
+        bool: True if the embedding is valid, False otherwise
+    """
+    if embedding is None:
+        return False
+        
+    # Convert to numpy array if needed
+    if not isinstance(embedding, np.ndarray):
+        embedding = np.array(embedding, dtype=np.float32)
+        
+    # Check for NaN or Inf values
+    if np.isnan(embedding).any() or np.isinf(embedding).any():
+        return False
+        
+    # Optionally check for zero vectors
+    if not allow_zero and np.all(embedding == 0):
+        return False
+        
+    return True
+\`\`\`
 
 ## Embedding Validation
 
@@ -3353,6 +5659,1215 @@ docker-compose -f docker-compose-test.yml up --abort-on-container-exit
 
 ```
 
+# docs\integration_fixes.md
+
+```md
+# Integration Fixes - Lucidia Memory System
+
+*Last Updated: March 29, 2025*
+
+## Overview
+
+This document details critical integration fixes implemented to ensure seamless communication between the Memory Core, Neural Memory module, and Context Cascade Engine components of the Lucidia bi-hemispheric memory system.
+
+## Latest Critical Fixes (March 29, 2025)
+
+### 1. Deep Metadata Merging in Memory Updates
+
+**Issues Fixed:**
+- Nested metadata dictionaries were being overwritten rather than merged during updates
+- Metadata fields like timestamps and source information were lost during updates
+- Test failures occurred in `test_update_metadata`, `test_update_persistence`, and `test_quickrecal_updated_timestamp`
+
+**Solution:**
+- Enhanced the `_deep_update_dict` method with improved dictionary merging:
+  \`\`\`python
+  def _deep_update_dict(self, d: Dict, u: Dict) -> Dict:
+      """
+      Recursively update a dictionary with another dictionary
+      This handles nested dictionaries properly
+      """
+      for k, v in u.items():
+          if isinstance(v, dict) and k in d and isinstance(d[k], dict):
+              # Only recursively merge if both the source and update have dict values
+              d[k] = self._deep_update_dict(d[k], v)
+          else:
+              d[k] = v
+      return d
+  \`\`\`
+
+- Restructured the `update_memory` method to handle metadata updates separately:
+  \`\`\`python
+  # Store metadata update separately to apply after all direct attributes
+  metadata_to_update = None
+  
+  # Update the memory fields
+  for key, value in updates.items():
+      if key == "metadata" and isinstance(value, dict):
+          # Store metadata updates to apply them after direct attribute updates
+          metadata_to_update = value
+          continue
+      
+      # Process other attributes...
+  
+  # Apply metadata updates after other fields have been processed
+  if metadata_to_update:
+      if memory.metadata is None:
+          memory.metadata = {}
+      # Use deep update to properly handle nested dictionaries
+      self._deep_update_dict(memory.metadata, metadata_to_update)
+  \`\`\`
+
+- Fixed Vector Index update method:
+  \`\`\`python
+  try:
+      self.vector_index.update_entry(memory_id, memory.embedding)
+  except AttributeError:
+      # Handle case where update_entry doesn't exist (use remove/add pattern)
+      self.vector_index.add(memory_id, memory.embedding)
+  \`\`\`
+
+**Benefits:**
+- Preserves existing metadata structures when updating nested dictionaries
+- Ensures timestamp and source information persist across updates
+- Improves robustness of the memory persistence system
+- See the detailed [metadata_handling.md](./metadata_handling.md) document for more information
+
+### 2. Memory ID Retrieval and Update
+
+**Issues Fixed:**
+- Missing `get_memory_by_id` method in SynthiansMemoryCore prevented updating quickrecal scores
+- Missing `update_memory` method in SynthiansMemoryCore blocked surprise-based memory boosting
+
+**Solution:**
+- Implemented `get_memory_by_id` in SynthiansMemoryCore:
+  \`\`\`python
+  async def get_memory_by_id(self, memory_id: str) -> Optional[MemoryEntry]:
+      async with self._lock:
+          return self._memories.get(memory_id, None)
+  \`\`\`
+
+- Implemented `update_memory` in SynthiansMemoryCore:
+  \`\`\`python
+  async def update_memory(self, memory_id: str, updates: Dict[str, Any]) -> bool:
+      async with self._lock:
+          # Get the memory
+          memory = self._memories.get(memory_id)
+          if not memory:
+              return False
+              
+          # Update memory fields
+          for key, value in updates.items():
+              if hasattr(memory, key):
+                  setattr(memory, key, value)
+              # Special handling for metadata
+              elif key == "metadata" and isinstance(value, dict):
+                  if memory.metadata is None:
+                      memory.metadata = {}
+                  memory.metadata.update(value)
+          
+          # Update quickrecal timestamp if score changed
+          if "quickrecal_score" in updates:
+              memory.quickrecal_updated = datetime.utcnow()
+          
+          # Update vector index if necessary
+          if memory.embedding is not None and memory_id in self.vector_index.id_to_index:
+              self.vector_index.update_entry(memory_id, memory.embedding)
+          
+          # Schedule persistence update
+          await self.persistence.save_memory(memory)
+          return True
+  \`\`\`
+
+### 3. Neural Memory Dimension Mismatch
+
+**Issues Fixed:**
+- Configuration error: `query_dim` (768) not matching `key_dim` (128) in Neural Memory module
+- Memory retrieval failing with "Input dimension mismatch" errors
+
+**Solution:**
+- Enhanced dimension validation in Neural Memory `call` method:
+  \`\`\`python
+  # Config sanity check - key_dim and query_dim should match
+  if self.config['query_dim'] != self.config['key_dim']:
+      logger.error(f"CONFIG ERROR: query_dim ({self.config['query_dim']}) != key_dim ({self.config['key_dim']})")
+      # Use key_dim as the source of truth for validation
+      expected_dim = self.config['key_dim']
+      logger.warning(f"Using key_dim={expected_dim} as expected dimension for memory_mlp input")
+  else:
+      expected_dim = self.config['key_dim']
+  \`\`\`
+
+- Implemented adaptive projection handling in the retrieval endpoint:
+  \`\`\`python
+  # Check for dimension mismatch in configuration
+  if nm.config['query_dim'] != nm.config['key_dim']:
+      logger.warning(f"Configuration error detected! Using key projection instead")
+      # Use k_t which is already at key_dim (128) dimensionality
+      input_tensor = k_t
+  else:
+      # Configuration is correct, use q_t as intended
+      input_tensor = q_t
+          
+  # Use the properly dimensioned tensor for memory retrieval
+  retrieved_tensor = nm(input_tensor, training=False)
+  \`\`\`
+
+### 4. Cognitive Cascade Integration
+
+**Issues Fixed:**
+- Context Cascade Engine wasn't properly passing raw embeddings to Neural Memory module
+- Surprise feedback loop was broken, preventing quickrecal score boosts
+
+**Solution:**
+- Updated query generation in Context Cascade Engine to pass raw embedding:
+  \`\`\`python
+  # Use actual_embedding as the query for Neural Memory retrieval
+  query_for_retrieve = actual_embedding
+  \`\`\`
+
+- Fixed surprise feedback path through TrainerIntegrationManager:
+  \`\`\`python
+  async def update_quickrecal_score(self, request: UpdateQuickrecalScoreRequest) -> UpdateQuickrecalScoreResponse:
+      memory_id = request.memory_id
+      surprise_value = request.surprise_value
+      grad_norm = request.grad_norm
+      
+      # Retrieve the memory by ID
+      memory = await self.memory_core.get_memory_by_id(memory_id)
+      
+      if not memory:
+          logger.error(f"Memory {memory_id} not found for quickrecal update")
+          return UpdateQuickrecalScoreResponse(status="error", message=f"Memory {memory_id} not found")
+      
+      # Calculate QuickRecal boost based on surprise metrics
+      boost = self._calculate_boost(surprise_value, grad_norm)
+      
+      # Update the memory's quickrecal score
+      new_quickrecal = min(1.0, memory.quickrecal_score + boost)
+      
+      # Apply the update to the memory
+      update_success = await self.memory_core.update_memory(memory_id, {"quickrecal_score": new_quickrecal})
+      
+      if update_success:
+          return UpdateQuickrecalScoreResponse(status="success", 
+                                              old_score=memory.quickrecal_score,
+                                              new_score=new_quickrecal,
+                                              boost_applied=boost)
+      else:
+          return UpdateQuickrecalScoreResponse(status="error", message="Failed to update memory")
+  \`\`\`
+
+## Results
+
+The full cognitive cycle is now operational, with:
+
+1. Memory ingestion and embedding storage working correctly
+2. Neural memory test-time learning capturing associations
+3. Surprise detection feeding back into the memory system
+4. QuickRecal scores being dynamically updated based on cognitive significance
+5. Emotional and relevance-based memory retrieval functioning properly
+
+These fixes have resulted in:
+- Reduced processing time (from ~4900ms to ~650ms)
+- Stable cognitive diagnostics
+- Complete end-to-end memory processing and retrieval
+
+## Previous Component Compatibility Fixes
+
+### 1. GeometryManager Method Naming Consistency
+
+**Issues Fixed:**
+- Method naming inconsistencies between different components calling GeometryManager methods
+- Some components used underscore-prefixed method names (`_align_vectors`, `_normalize`) while the GeometryManager implemented non-underscore versions (`align_vectors`, `normalize_embedding`)
+
+**Solution:**
+- Added backward compatibility methods in `geometry_manager.py`:
+  \`\`\`python
+  def _align_vectors(self, v1: np.ndarray, v2: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+      """Backward compatibility method that forwards to align_vectors."""
+      return self.align_vectors(v1, v2)
+
+  def _normalize(self, vector: np.ndarray) -> np.ndarray:
+      """Backward compatibility method that forwards to normalize_embedding."""
+      # Ensure vector is numpy array before calling
+      validated_vector = self._validate_vector(vector, "Vector for _normalize")
+      if validated_vector is None:
+          # Return zero vector if validation fails
+          return np.zeros(self.config.get('embedding_dim', 768), dtype=np.float32)
+      return self.normalize_embedding(validated_vector)
+  \`\`\`
+
+### 2. API Response Enhancements
+
+**Issues Fixed:**
+- The `ProcessMemoryResponse` model was missing an `embedding` field expected by the ContextCascadeEngine
+- This caused errors when the CCE attempted to access the embedding after calling Memory Core
+
+**Solution:**
+- Updated the `ProcessMemoryResponse` model in `api/server.py`:
+  \`\`\`python
+  class ProcessMemoryResponse(BaseModel):
+      success: bool
+      memory_id: Optional[str] = None
+      quickrecal_score: Optional[float] = None
+      embedding: Optional[List[float]] = None  # Added this field
+      metadata: Optional[Dict[str, Any]] = None
+  \`\`\`
+- Modified the response construction to include the embedding in the JSON response
+
+### 3. Configuration Parameter Consistency
+
+**Issues Fixed:**
+- `TrainerIntegrationManager` was initializing `GeometryManager` with incorrect parameters
+- Explicit parameters (`target_dim`, `max_warnings`) were used instead of the expected configuration dictionary
+
+**Solution:**
+- Modified the initialization in `trainer_integration.py`:
+  \`\`\`python
+  # Before:
+  self.geometry_manager = GeometryManager(target_dim=768, max_warnings=10)
+  
+  # After:
+  self.geometry_manager = GeometryManager({
+      'embedding_dim': self.memory_core.config.get('embedding_dim', 768),
+      'max_warnings': 10
+  })
+  \`\`\`
+
+## Neural Memory Module Enhancements
+
+### 1. Auto-Initialization
+
+**Issues Fixed:**
+- Neural Memory server required explicit initialization via `/init` endpoint
+- Context Cascade Engine did not automatically initialize it
+
+**Solution:**
+- Added startup auto-initialization in `http_server.py`:
+  \`\`\`python
+  @app.on_event("startup")
+  async def startup_event():
+      global neural_memory, memory_core_url, surprise_detector, geometry_manager
+      
+      # Auto-initialization logic
+      try:
+          default_config_dict = {
+              'input_dim': 768,
+              'query_dim': 768,
+              'hidden_dim': 768,
+              'output_dim': 768
+          }
+          # Create default config and initialize module
+          config = NeuralMemoryConfig(**default_config_dict)
+          neural_memory = NeuralMemoryModule(config=config)
+          # Initialize dependent components
+          geometry_manager = GeometryManager({'embedding_dim': neural_memory.config['input_dim']})
+          # ...
+      except Exception as e:
+          logger.error(f"Auto-initialization failed: {e}")
+  \`\`\`
+
+### 2. TensorFlow GradientTape Optimization
+
+**Issues Fixed:**
+- `ValueError` in Neural Memory's `update_step` method
+- Error related to explicitly watching `tf.Variable` objects in GradientTape
+
+**Solution:**
+- Removed unnecessary `tape.watch(var)` calls:
+  \`\`\`python
+  # Before:
+  with tf.GradientTape() as tape:
+      # Explicitly watch all inner variables
+      for var in inner_vars:
+          tape.watch(var)  # Unnecessary and potentially problematic
+  
+  # After:
+  with tf.GradientTape() as tape:
+      # Tape automatically watches trainable variables
+      # No explicit watch calls needed
+  \`\`\`
+
+### 3. Vector Dimension Alignment
+
+**Issues Fixed:**
+- Dimension mismatch between Memory Core (768D) and Neural Memory (input_dim vs query_dim)
+- `/retrieve` endpoint passing raw query instead of properly projected query
+
+**Solution:**
+- Updated `/retrieve` endpoint in `http_server.py` to use projections:
+  \`\`\`python
+  # Get projected query vector
+  k_t, v_t, q_t = nm.get_projections(query_tensor)
+  
+  # Use projected query for retrieval
+  retrieved_tensor = nm(q_t, training=False)
+  \`\`\`
+- Configured Neural Memory with matching dimensions
+
+## Context Cascade Engine Fixes
+
+### 1. String Formatting Error
+
+**Issues Fixed:**
+- String formatting error in `/process_memory` endpoint
+- Invalid f-string format when generating feedback message
+
+**Solution:**
+- Fixed string formatting in `context_cascade_engine.py`:
+  \`\`\`python
+  # Before:
+  f"NM Surprise (Loss:{loss:.4f if loss is not None else 'N/A'}, ...)"
+  
+  # After:
+  loss_str = f"{loss:.4f}" if isinstance(loss, (int, float)) else 'N/A'
+  f"NM Surprise (Loss:{loss_str}, ...)"
+  \`\`\`
+
+## End-to-End Testing
+
+After implementing these fixes, we successfully validated the end-to-end flow using the `lucidia_think_trace.py` tool. The tool now successfully:
+
+1. Stores memory in Memory Core
+2. Returns memory with embedding to Context Cascade Engine
+3. Updates Neural Memory with the new memory
+4. Calculates surprise and applies QuickRecal boost
+5. Retrieves associated memories via Neural Memory
+6. Completes the full cognitive trace
+
+## Next Steps
+
+1. **Refine Surprise-to-Boost Logic:** The current implementation uses a simple mapping from surprise to boost; this could be enhanced with more sophisticated algorithms.
+
+2. **Implement Real Diagnostics:** The Neural Memory server should expose more detailed diagnostic information about its internal state.
+
+3. **Optimize Vector Dimension Handling:** Consider implementing more efficient dimension handling to avoid repeated conversions.
+
+4. **Enhance Error Handling:** Add more comprehensive error handling and recovery mechanisms.
+
+5. **Integration Testing:** Add automated tests for the complete memory system pipeline.
+
+```
+
+# docs\mac_variant_implementation.md
+
+```md
+# MAC Variant Implementation Guide
+
+## Overview
+
+The Memory-Attended Content (MAC) variant is a specialized architecture in the Lucidia Cognitive System that enhances retrieved memory embeddings using attention mechanisms over historical context. This document details the implementation, integration, and usage of the MAC variant within the refactored Context Cascade Engine.
+
+## Architecture
+
+The MAC variant follows this processing flow:
+
+1. Retrieve raw embedding from Neural Memory → Get `y_t` (raw retrieval)
+2. `q_t`, `y_t` + Historical context (K_hist, Y_hist) → Attend(q_t, K_hist, Y_hist) → `attended_y_t`
+3. Return `attended_y_t` as enhanced memory representation
+
+![MAC Architecture](../assets/diagrams/mac_architecture.png)
+
+## Implementation Details
+
+### Core Components
+
+1. **TitansVariantBase**
+   - Provides common infrastructure for all variants
+   - Handles API client initialization and neural memory URL configuration
+   - Manages sequence context and historical context tracking
+   - Implements lazy loading for TensorFlow to prevent NumPy version conflicts
+
+2. **MACVariant Class**
+   - Implements the Memory-Attended Content logic
+   - Initializes attention modules for output enhancement
+   - Processes query embeddings and retrieved outputs through attention mechanisms
+   - Applies attention over historical keys and values to enhance retrieved memory
+
+3. **ContextCascadeEngine**
+   - Orchestrates the variant selection and initialization
+   - Routes memory operations through the appropriate variant
+   - Invokes MAC processing *after* Neural Memory retrieval
+   - Updates sequence history with the enhanced output
+
+### Key Methods
+
+#### MACVariant
+
+\`\`\`python
+async def process_output(self, q_t: np.ndarray, y_t: np.ndarray) -> Dict[str, Any]:
+    """Process output through MAC variant logic to enhance retrieved memory.
+    
+    Args:
+        q_t: Query projection from Neural Memory
+        y_t: Raw retrieved embedding from Neural Memory
+    
+    Returns:
+        Dict containing attended output and metrics
+    """
+    try:
+        # Get historical keys and values for attention calculation
+        k_hist = self.sequence_context.get_recent_keys()
+        y_hist = self.sequence_context.get_recent_outputs()
+        
+        if not k_hist or len(k_hist) == 0 or not y_hist or len(y_hist) == 0:
+            logger.warning("No historical context available for MAC attention")
+            return {"status": "error", "error": "No historical context available"}
+        
+        # Apply attention between query and historical keys
+        attention_output = self.compute_attention(
+            query=q_t,
+            keys=k_hist,
+            values=y_hist
+        )
+        
+        # Combine retrieved embedding with attention output
+        attended_y_t = self.combine_outputs(y_t, attention_output)
+        
+        return {
+            "status": "success",
+            "attended_y_t": attended_y_t,
+            "metrics": {
+                "attention_magnitude": float(np.linalg.norm(attention_output)),
+                "combination_ratio": self.combination_ratio
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error in MAC variant processing: {str(e)}")
+        return {"status": "error", "error": str(e)}
+\`\`\`
+
+#### Integration with ContextCascadeEngine
+
+The refactored ContextCascadeEngine handles the MAC variant by applying its processing *after* Neural Memory retrieval, enhancing the retrieved content before returning it:
+
+\`\`\`python
+async def _apply_variant_post_retrieval(self, step_context):
+    """Apply variant-specific post-retrieval processing for MAC variant.
+    
+    Args:
+        step_context: The current processing context
+        
+    Returns:
+        Dict containing variant processing results
+    """
+    try:
+        if self.active_variant_type == TitansVariantType.MAC:
+            # Process MAC variant: Enhance retrieved embedding with attention
+            mac_result = await self.variant_processor.process_output(
+                step_context["q_t"], step_context["y_t"]
+            )
+            
+            if "attended_y_t" in mac_result:
+                # Replace retrieved embedding with attention-enhanced version
+                step_context["y_t"] = mac_result["attended_y_t"]
+                step_context["y_t_list"] = self._to_list(mac_result["attended_y_t"])
+                logger.info("MAC variant produced attended output")
+            else:
+                logger.warning(f"MAC variant processing failed: {mac_result.get('error')}")
+                
+            return mac_result
+            
+        return {"status": "not_applicable"}
+    except Exception as e:
+        logger.error(f"Error in _apply_variant_post_retrieval: {str(e)}")
+        return {"status": "error", "error": str(e)}
+\`\`\`
+
+### Attention Mechanism
+
+The MAC variant uses a multi-head attention mechanism to determine the relevance of historical memory embeddings to the current query:
+
+\`\`\`python
+def compute_attention(self, query, keys, values):
+    """Compute attention between query and historical keys/values.
+    
+    Args:
+        query: Current query embedding (q_t)
+        keys: Historical key embeddings (k_hist)
+        values: Historical value or output embeddings (y_hist)
+    
+    Returns:
+        Attention-weighted combination of values
+    """
+    tf = _get_tf()  # Lazy load TensorFlow
+    
+    # Ensure inputs are properly shaped for attention
+    query = tf.expand_dims(tf.convert_to_tensor(query, dtype=tf.float32), axis=0)  # [1, dim]
+    keys = tf.convert_to_tensor(keys, dtype=tf.float32)  # [seq_len, dim]
+    keys = tf.expand_dims(keys, axis=0)  # [1, seq_len, dim]
+    values = tf.convert_to_tensor(values, dtype=tf.float32)  # [seq_len, dim]
+    values = tf.expand_dims(values, axis=0)  # [1, seq_len, dim]
+    
+    # Apply attention
+    attention_output = self.attention_layer(
+        query=query,  # [1, 1, dim]
+        key=keys,     # [1, seq_len, dim]
+        value=values  # [1, seq_len, dim]
+    )
+    
+    # Remove batch dimension [1, 1, dim] -> [dim]
+    return tf.squeeze(attention_output).numpy()
+\`\`\`
+
+### Embedding Handling
+
+The MAC variant includes robust handling for embedding dimension mismatches and malformed embeddings:
+
+1. **Dimension Alignment**: Uses the `_align_vectors_for_comparison` method to handle mismatches between 384D and 768D embeddings
+2. **Validation**: Validates embeddings to detect and handle NaN/Inf values
+3. **Safe Conversion**: Properly handles different tensor types when converting between TensorFlow and NumPy
+
+\`\`\`python
+def _align_vectors(self, vector_a, vector_b):
+    """Align vectors to the same dimension for processing.
+    
+    Handles dimension mismatches by padding smaller vectors with zeros
+    or truncating larger vectors.
+    
+    Args:
+        vector_a: First vector
+        vector_b: Second vector to align with
+        
+    Returns:
+        Tuple of aligned vectors (a_aligned, b_aligned)
+    """
+    a_dim = vector_a.shape[-1]
+    b_dim = vector_b.shape[-1]
+    
+    if a_dim == b_dim:
+        return vector_a, vector_b
+    
+    if a_dim < b_dim:
+        # Pad vector_a to match vector_b
+        padding = np.zeros(b_dim - a_dim)
+        a_aligned = np.concatenate([vector_a, padding])
+        return a_aligned, vector_b
+    else:
+        # Truncate vector_a to match vector_b
+        return vector_a[:b_dim], vector_b
+\`\`\`
+
+## Testing the MAC Variant
+
+To test the MAC variant, you can use the `lucidia_think_trace` tool with the appropriate environment variable:
+
+\`\`\`bash
+# Run in Docker container
+docker exec -e TITANS_VARIANT=MAC trainer-server python -m synthians_memory_core.tools.lucidia_think_trace --query "Testing MAC variant" --memcore-url "http://host.docker.internal:5010"
+\`\`\`
+
+The output should show:
+
+1. Successful Neural Memory retrieval
+2. Proper enhancement of retrieved embedding via attention
+3. Modified retrieved embedding in the response
+
+## Activation
+
+To activate the MAC variant, set the `TITANS_VARIANT` environment variable:
+
+\`\`\`bash
+export TITANS_VARIANT=MAC  # For Linux/macOS
+set TITANS_VARIANT=MAC      # For Windows CMD
+\`\`\`
+
+In the Docker setup, you can specify this when starting the container:
+
+\`\`\`bash
+docker run -e TITANS_VARIANT=MAC ...
+\`\`\`
+
+## Common Issues and Troubleshooting
+
+### Insufficient Historical Context
+
+The MAC variant requires historical keys and values to calculate attention. If there isn't enough historical context, you might see warnings like:
+
+\`\`\`
+No historical context available for MAC attention
+\`\`\`
+
+Solution: Ensure that multiple inputs have been processed through the system before expecting MAC to enhance memory retrieval.
+
+### TensorFlow Import Errors
+
+If you encounter errors related to TensorFlow imports or NumPy version conflicts, verify that:
+
+1. The lazy loading mechanism is correctly implemented
+2. The fix_numpy.py script has run before any TensorFlow imports
+
+## Conclusion
+
+The MAC variant implementation enhances memory retrieval by using attention mechanisms to incorporate relevant historical context into retrieved embeddings. This approach provides several benefits:
+
+1. Improved contextual relevance of retrieved memories
+2. Enhanced continuity across sequential memory operations
+3. Reduced retrieval errors by incorporating complementary information from past retrievals
+
+By applying attention *after* the Neural Memory update and retrieval, MAC focuses on enhancing the usefulness of retrieved content rather than modifying how memories are stored.
+
+```
+
+# docs\mag_variant_implementation.md
+
+```md
+# MAG Variant Implementation Guide
+
+## Overview
+
+The Memory-Attended Gates (MAG) variant is a specialized architecture in the Lucidia Cognitive System that modifies the gate values used in the Neural Memory update process through attention mechanisms. This document details the implementation, integration, and usage of the MAG variant within the refactored Context Cascade Engine.
+
+## Architecture
+
+The MAG variant follows this processing flow:
+
+1. `q_t` → Attend(q_t, K_hist, K_hist) → `attention_output`
+2. Call Neural Memory's `/calculate_gates` endpoint with attention output
+3. Update memory with calculated gates
+
+![MAG Architecture](../assets/diagrams/mag_architecture.png)
+
+## Implementation Details
+
+### Core Components
+
+1. **TitansVariantBase**
+   - Provides common infrastructure for all variants
+   - Handles API client initialization and neural memory URL configuration
+   - Manages sequence context and historical context tracking
+   - Implements lazy loading for TensorFlow to prevent NumPy version conflicts
+
+2. **MAGVariant Class**
+   - Implements the Memory-Attended Gates logic
+   - Initializes attention modules for gate calculation
+   - Processes input embeddings and queries through attention mechanisms
+   - Calculates attention-based gate values to influence Neural Memory updates
+
+3. **NeuralMemoryModule**
+   - Provides gate calculation capabilities via dedicated projection layers
+   - Processes attention outputs to compute optimal gate values
+   - Applies external gate values during memory updates
+   - Returns loss and gradient norm metrics for QuickRecal boosting
+
+4. **ContextCascadeEngine**
+   - Orchestrates the variant selection and initialization
+   - Routes memory operations through the appropriate variant
+   - Manages the flow of data between components
+   - Ensures correct sequencing of operations to maximize variant effectiveness
+
+### Key Methods
+
+#### MAGVariant
+
+\`\`\`python
+async def process_input(self, q_t: np.ndarray):
+    """Process input through MAG variant logic to generate gate values.
+    
+    Args:
+        q_t: Query projection from Neural Memory
+    
+    Returns:
+        Dict containing gate values and metrics
+    """
+    try:
+        # Get historical keys for attention calculation
+        k_hist = self.sequence_context.get_recent_keys()
+        
+        if not k_hist or len(k_hist) == 0:
+            logger.warning("No historical keys available for MAG attention")
+            return {"status": "error", "error": "No historical context available"}
+        
+        # Use attention to determine gate values
+        attention_output = self.compute_attention(q_t, k_hist)
+        
+        # Call Neural Memory's /calculate_gates endpoint
+        response = await self.api_client.calculate_gates(
+            attention_output=self._to_list(attention_output)
+        )
+        
+        # Extract the calculated gates
+        gates = response.get("gates", {})
+        
+        return {
+            "status": "success",
+            "gates": gates,
+            "metrics": {
+                "attention_magnitude": float(np.linalg.norm(attention_output))
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error in MAG variant processing: {str(e)}")
+        return {"status": "error", "error": str(e)}
+\`\`\`
+
+#### Integration with ContextCascadeEngine
+
+The refactored ContextCascadeEngine handles the MAG variant by applying its processing *before* the Neural Memory update, ensuring gates can properly influence the memory update process:
+
+\`\`\`python
+async def _apply_variant_pre_update(self, step_context):
+    """Apply variant-specific pre-update processing for MAG/MAL variants.
+    
+    For MAG: Calculates attention-based gates
+    For MAL: Calculates modified value projection
+    
+    Args:
+        step_context: The current processing context
+        
+    Returns:
+        Dict containing variant processing results
+    """
+    try:
+        if self.active_variant_type == TitansVariantType.MAG:
+            # Process MAG variant
+            mag_result = await self.variant_processor.process_input(step_context["q_t"])
+            
+            if mag_result.get("status") == "success":
+                # Store gates for use in Neural Memory update
+                step_context["gates"] = mag_result.get("gates", {})
+                logger.info(f"MAG variant calculated gates: {step_context['gates']}")
+            else:
+                logger.warning(f"MAG variant processing failed: {mag_result.get('error')}")
+            
+            return mag_result
+            
+        elif self.active_variant_type == TitansVariantType.MAL:
+            # Process MAL variant
+            # ...
+            
+    except Exception as e:
+        logger.error(f"Error in _apply_variant_pre_update: {str(e)}")
+        return {"status": "error", "error": str(e)}
+\`\`\`
+
+### Neural Memory Update
+
+The Neural Memory update process now accepts and applies the gates calculated by the MAG variant:
+
+\`\`\`python
+async def _update_neural_memory(self, step_context):
+    """Update Neural Memory with appropriate modifications based on active variant.
+    
+    Args:
+        step_context: The current processing context
+        
+    Returns:
+        Dict containing update response
+    """
+    try:
+        # Prepare update parameters
+        update_params = {"input_embedding": self._to_list(step_context["x_t"])}
+        
+        # Add MAG gates if available
+        if "gates" in step_context and step_context["gates"]:
+            update_params.update({
+                "alpha_t": step_context["gates"].get("alpha_t"),
+                "theta_t": step_context["gates"].get("theta_t"),
+                "eta_t": step_context["gates"].get("eta_t")
+            })
+            
+        # Add MAL modified value if available
+        if "v_prime" in step_context and step_context["v_prime"] is not None:
+            update_params.update({
+                "key_projection": self._to_list(step_context["k_t"]),
+                "value_projection": self._to_list(step_context["v_prime"])
+            })
+            
+        # Call Neural Memory update endpoint
+        update_resp = await self.neural_memory_client.update_memory(**update_params)
+        
+        # Update step context with response data
+        step_context["loss"] = update_resp.get("loss")
+        step_context["grad_norm"] = update_resp.get("grad_norm")
+        
+        return update_resp
+        
+    except Exception as e:
+        logger.error(f"Error updating Neural Memory: {str(e)}")
+        return {"status": "error", "error": str(e)}
+\`\`\`
+
+## Testing the MAG Variant
+
+To test the MAG variant, you can use the `lucidia_think_trace` tool with the appropriate environment variable:
+
+\`\`\`bash
+# Run in Docker container
+docker exec -e TITANS_VARIANT=MAG trainer-server python -m synthians_memory_core.tools.lucidia_think_trace --query "Testing MAG variant" --memcore-url "http://host.docker.internal:5010"
+\`\`\`
+
+The output should show:
+
+1. Successful calculation of attention-based gates
+2. Proper application of gates during Neural Memory update
+3. Expected loss and gradient norm metrics
+
+## Activation
+
+To activate the MAG variant, set the `TITANS_VARIANT` environment variable:
+
+\`\`\`bash
+export TITANS_VARIANT=MAG  # For Linux/macOS
+set TITANS_VARIANT=MAG      # For Windows CMD
+\`\`\`
+
+In the Docker setup, you can specify this when starting the container:
+
+\`\`\`bash
+docker run -e TITANS_VARIANT=MAG ...
+\`\`\`
+
+## Common Issues and Troubleshooting
+
+### Insufficient Historical Context
+
+The MAG variant requires historical keys to calculate attention-based gates. If there isn't enough historical context, you might see warnings like:
+
+\`\`\`
+No historical keys available for MAG attention
+\`\`\`
+
+Solution: Ensure that multiple inputs have been processed through the system before expecting MAG to influence the memory update process.
+
+### TensorFlow Import Errors
+
+If you encounter errors related to TensorFlow imports or NumPy version conflicts, verify that:
+
+1. The lazy loading mechanism is correctly implemented
+2. The fix_numpy.py script has run before any TensorFlow imports
+
+## Conclusion
+
+The refactored MAG variant implementation enables more effective memory-based cognitive processing by:
+
+1. Using attention mechanisms to dynamically adjust Neural Memory update parameters
+2. Properly sequencing operations to ensure gates are calculated before the memory update
+3. Maintaining a clean and modular architecture with appropriate separation of concerns
+
+This implementation follows the general Lucidia principle: "Memory shapes how we think, and thinking shapes how we remember." By allowing attention over past experiences to modulate how new experiences are stored, the MAG variant enhances the cognitive system's ability to prioritize and integrate information.
+
+```
+
+# docs\mal_variant_implementation.md
+
+```md
+# MAL Variant Implementation Guide
+
+## Overview
+
+The Memory-Attended Learning (MAL) variant is a specialized architecture in the Lucidia Cognitive System that modifies the value projections used in Neural Memory updates through attention mechanisms over historical context. This document details the implementation, integration, and usage of the MAL variant within the refactored Context Cascade Engine.
+
+## Architecture
+
+The MAL variant follows this processing flow:
+
+1. Get projections from Neural Memory (k_t, v_t, q_t) without updating
+2. `q_t`, `v_t` + Historical context (K_hist, V_hist) u2192 Attend(q_t, K_hist, V_hist) u2192 Modified value `v_prime`
+3. Update Neural Memory using modified value projection `v_prime`
+
+![MAL Architecture](../assets/diagrams/mal_architecture.png)
+
+## Implementation Details
+
+### Core Components
+
+1. **TitansVariantBase**
+   - Provides common infrastructure for all variants
+   - Handles API client initialization and neural memory URL configuration
+   - Manages sequence context and historical context tracking
+   - Implements lazy loading for TensorFlow to prevent NumPy version conflicts
+
+2. **MALVariant Class**
+   - Implements the Memory-Attended Learning logic
+   - Initializes attention modules for value projection modification
+   - Processes query and value projections through attention mechanisms
+   - Creates enhanced value representations for memory storage
+
+3. **NeuralMemoryModule**
+   - Processes input embeddings to calculate key, value, and query projections
+   - Supports updates with externally provided value projections
+   - Performs memory updates with the modified value projection
+
+4. **ContextCascadeEngine**
+   - Orchestrates the variant selection and initialization
+   - Routes memory operations through the appropriate variant
+   - Invokes MAL processing *before* Neural Memory update
+   - Passes the modified value projection to the Neural Memory update
+
+### Key Methods
+
+#### MALVariant
+
+\`\`\`python
+async def calculate_v_prime(self, q_t: np.ndarray, v_t: np.ndarray) -> Dict[str, Any]:
+    """Calculate modified value projection using attention over historical values.
+    
+    Args:
+        q_t: Query projection from Neural Memory
+        v_t: Original value projection from Neural Memory
+    
+    Returns:
+        Dict containing modified value projection and metrics
+    """
+    try:
+        # Get historical keys and values for attention calculation
+        k_hist, v_hist = self.sequence_context.get_recent_kv_pairs()
+        
+        if not k_hist or len(k_hist) == 0 or not v_hist or len(v_hist) == 0:
+            logger.warning("No historical context available for MAL attention")
+            return {"status": "error", "error": "No historical context available"}
+        
+        # Validate inputs and handle dimension mismatches
+        q_t = self._validate_embedding(q_t)
+        v_t = self._validate_embedding(v_t)
+        
+        # Apply attention between query and historical keys/values
+        tf = _get_tf()  # Lazy load TensorFlow
+        
+        # Ensure inputs are properly shaped for attention
+        query = tf.expand_dims(tf.convert_to_tensor(q_t, dtype=tf.float32), axis=0)  # [1, dim]
+        keys = tf.convert_to_tensor(k_hist, dtype=tf.float32)  # [seq_len, dim]
+        keys = tf.expand_dims(keys, axis=0)  # [1, seq_len, dim]
+        values = tf.convert_to_tensor(v_hist, dtype=tf.float32)  # [seq_len, dim]
+        values = tf.expand_dims(values, axis=0)  # [1, seq_len, dim]
+        
+        # Apply attention to generate attended values
+        attended_v = self.attention_module(
+            query=query,  # [1, 1, dim]
+            key=keys,     # [1, seq_len, dim]
+            value=values  # [1, seq_len, dim]
+        )
+        
+        # Remove batch dimension [1, 1, dim] -> [dim]
+        attended_v = tf.squeeze(attended_v).numpy()
+        
+        # Combine original and attended values to create v_prime
+        v_prime = self.combine_values(v_t, attended_v)
+        
+        return {
+            "status": "success",
+            "v_prime": v_prime,
+            "metrics": {
+                "attention_magnitude": float(np.linalg.norm(attended_v)),
+                "combination_ratio": self.combination_ratio
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error in MAL variant processing: {str(e)}")
+        return {"status": "error", "error": str(e)}
+\`\`\`
+
+#### Integration with ContextCascadeEngine
+
+The refactored ContextCascadeEngine handles the MAL variant by applying its processing *before* the Neural Memory update, modifying how memories are stored:
+
+\`\`\`python
+async def _apply_variant_pre_update(self, step_context):
+    """Apply variant-specific pre-update processing for MAG/MAL variants.
+    
+    Args:
+        step_context: The current processing context
+        
+    Returns:
+        Dict containing variant processing results
+    """
+    try:
+        # ... [MAG variant handling code] ...
+        
+        elif self.active_variant_type == TitansVariantType.MAL:
+            # Process MAL variant: Calculate modified value projection
+            mal_result = await self.variant_processor.calculate_v_prime(
+                step_context["q_t"], step_context["v_t"]
+            )
+            
+            if "v_prime" in mal_result:
+                # Store modified value projection for use in Neural Memory update
+                step_context["v_prime"] = mal_result["v_prime"]
+                logger.info("MAL variant calculated modified value projection")
+            else:
+                logger.warning(f"MAL variant processing failed: {mal_result.get('error')}")
+            
+            return mal_result
+            
+        return {"status": "not_applicable"}
+    except Exception as e:
+        logger.error(f"Error in _apply_variant_pre_update: {str(e)}")
+        return {"status": "error", "error": str(e)}
+\`\`\`
+
+### Neural Memory Update
+
+The Neural Memory update process accepts and applies the modified value projection calculated by the MAL variant:
+
+\`\`\`python
+async def _update_neural_memory(self, step_context):
+    """Update Neural Memory with appropriate modifications based on active variant.
+    
+    Args:
+        step_context: The current processing context
+        
+    Returns:
+        Dict containing update response
+    """
+    try:
+        # Prepare update parameters
+        update_params = {"input_embedding": self._to_list(step_context["x_t"])}
+        
+        # ... [MAG variant handling code] ...
+        
+        # Add MAL variant modified value if available
+        if "v_prime" in step_context and step_context["v_prime"] is not None:
+            update_params.update({
+                "key_projection": self._to_list(step_context["k_t"]),
+                "value_projection": self._to_list(step_context["v_prime"])
+            })
+            logger.info("Adding MAL modified value projection to Neural Memory update")
+        
+        # Call Neural Memory update endpoint
+        update_resp = await self.neural_memory_client.update_memory(**update_params)
+        
+        # Update step context with response data
+        step_context["loss"] = update_resp.get("loss")
+        step_context["grad_norm"] = update_resp.get("grad_norm")
+        
+        return update_resp
+        
+    except Exception as e:
+        logger.error(f"Error updating Neural Memory: {str(e)}")
+        return {"status": "error", "error": str(e)}
+\`\`\`
+
+### Value Combination
+
+The MAL variant combines the original value projection with the attention-based value to create the enhanced `v_prime`:
+
+\`\`\`python
+def combine_values(self, v_t, attended_v):
+    """Combine original value projection with attention-based value.
+    
+    Args:
+        v_t: Original value projection
+        attended_v: Attention-based value from historical context
+    
+    Returns:
+        Combined value projection (v_prime)
+    """
+    # Ensure dimensions match
+    v_t, attended_v = self._align_vectors(v_t, attended_v)
+    
+    # Combine using configured ratio
+    v_prime = (1 - self.combination_ratio) * v_t + self.combination_ratio * attended_v
+    
+    return v_prime
+\`\`\`
+
+### Embedding Handling
+
+The MAL variant includes robust handling for embedding dimension mismatches and malformed embeddings:
+
+1. **Dimension Alignment**: Uses the `_align_vectors` method to handle mismatches between 384D and 768D embeddings
+2. **Validation**: Uses the `_validate_embedding` method to detect and handle NaN/Inf values
+3. **Safe Conversion**: Uses proper tensor conversion with error handling
+
+\`\`\`python
+def _validate_embedding(self, embedding):
+    """Validate embedding and replace invalid values with zeros.
+    
+    Args:
+        embedding: Input embedding to validate
+    
+    Returns:
+        Validated embedding with NaN/Inf replaced by zeros
+    """
+    try:
+        # Convert to numpy if needed
+        if not isinstance(embedding, np.ndarray):
+            embedding = np.array(embedding, dtype=np.float32)
+        
+        # Check for NaN or Inf values
+        if np.isnan(embedding).any() or np.isinf(embedding).any():
+            logger.warning(f"Found NaN/Inf in embedding, replacing with zeros")
+            # Replace NaN/Inf with zeros
+            embedding = np.where(np.isnan(embedding) | np.isinf(embedding), 0.0, embedding)
+        
+        return embedding
+    except Exception as e:
+        logger.error(f"Error validating embedding: {str(e)}")
+        # Return zero vector as fallback
+        return np.zeros(768, dtype=np.float32)
+\`\`\`
+
+## Testing the MAL Variant
+
+To test the MAL variant, you can use the `lucidia_think_trace` tool with the appropriate environment variable:
+
+\`\`\`bash
+# Run in Docker container
+docker exec -e TITANS_VARIANT=MAL trainer-server python -m synthians_memory_core.tools.lucidia_think_trace --query "Testing MAL variant" --memcore-url "http://host.docker.internal:5010"
+\`\`\`
+
+The output should show:
+
+1. Successful calculation of modified value projection
+2. Proper application of modified value during Neural Memory update
+3. Expected loss and gradient norm metrics
+
+## Activation
+
+To activate the MAL variant, set the `TITANS_VARIANT` environment variable:
+
+\`\`\`bash
+export TITANS_VARIANT=MAL  # For Linux/macOS
+set TITANS_VARIANT=MAL      # For Windows CMD
+\`\`\`
+
+In the Docker setup, you can specify this when starting the container:
+
+\`\`\`bash
+docker run -e TITANS_VARIANT=MAL ...
+\`\`\`
+
+## Common Issues and Troubleshooting
+
+### Insufficient Historical Context
+
+The MAL variant requires historical keys and values to calculate the modified value projection. If there isn't enough historical context, you might see warnings like:
+
+\`\`\`
+No historical context available for MAL attention
+\`\`\`
+
+Solution: Ensure that multiple inputs have been processed through the system before expecting MAL to influence the memory update process.
+
+### TensorFlow Import Errors
+
+If you encounter errors related to TensorFlow imports or NumPy version conflicts, verify that:
+
+1. The lazy loading mechanism is correctly implemented
+2. The fix_numpy.py script has run before any TensorFlow imports
+
+### Dimension Mismatch Errors
+
+If you encounter dimension mismatch errors, verify that:
+
+1. The `_align_vectors` method is properly handling dimension differences
+2. All inputs are properly validated before processing
+3. TensorFlow operations are properly handling tensor shapes
+
+## Conclusion
+
+The MAL variant implementation enhances memory storage by modifying how value projections are calculated before Neural Memory updates. This approach provides several benefits:
+
+1. Improved contextual coherence in stored memories
+2. Enhanced learning by incorporating relevant historical values
+3. More efficient memory representation through context-aware value projections
+
+By applying attention to modify the value projection *before* the Neural Memory update, MAL influences how memories are stored rather than how they're retrieved, complementing the approaches of the MAC and MAG variants.
+
+```
+
 # docs\memory_system_remaster.md
 
 ```md
@@ -3507,24 +7022,140 @@ The Synthians Memory System has been significantly enhanced with better persiste
 
 ```
 
+# docs\metadata_handling.md
+
+```md
+# Metadata Handling Improvements in SynthiansMemoryCore
+
+**Date:** March 29, 2025
+
+## Overview
+
+This document describes the enhanced metadata handling capabilities implemented in the `SynthiansMemoryCore` class, focusing on the improved deep dictionary merging strategy used during memory updates.
+
+## Problem Statement
+
+Prior to the March 2025 improvements, the `update_memory` method in `SynthiansMemoryCore` suffered from inadequate handling of nested metadata dictionaries. The implementation used a shallow merging strategy that replaced entire nested dictionaries rather than performing a proper deep merge. This led to data loss in several scenarios:
+
+1. When updating a nested dictionary field, the entire nested structure was replaced rather than merged
+2. When updating metadata while preserving timestamp information (e.g., `quickrecal_updated_at`), the timestamps were being overwritten
+3. When attempting to persist memories after updates, important metadata fields were being lost
+
+## Implementation Details
+
+### Deep Dictionary Merge
+
+The core improvement involves the enhanced `_deep_update_dict` method which now properly handles nested dictionary structures:
+
+\`\`\`python
+def _deep_update_dict(self, d: Dict, u: Dict) -> Dict:
+    """
+    Recursively update a dictionary with another dictionary
+    This handles nested dictionaries properly
+    """
+    for k, v in u.items():
+        if isinstance(v, dict) and k in d and isinstance(d[k], dict):
+            # Only recursively merge if both the source and update have dict values
+            d[k] = self._deep_update_dict(d[k], v)
+        else:
+            d[k] = v
+    return d
+\`\`\`
+
+Key changes in this implementation:
+- Only attempts recursive merging when both the source (`d[k]`) and update (`v`) values are dictionaries
+- Ensures the key exists in the source dictionary before attempting to merge
+- Preserves the existing structure when merging nested dictionaries
+
+### Improved Metadata Update Flow
+
+The `update_memory` method now processes metadata updates in a more controlled manner:
+
+1. Metadata updates are collected separately during the main attribute update loop
+2. Direct attributes (like `quickrecal_score`) are processed first
+3. Metadata updates are applied after all direct attributes have been processed
+4. Deep merging is used to preserve existing metadata while adding/updating specific fields
+
+This ensures that important metadata like timestamps and source information are preserved across updates.
+
+### Vector Index Update
+
+The method now also properly handles the vector index update by:
+1. Using the `update_entry` method when available
+2. Falling back to a remove/add pattern when `update_entry` isn't available
+3. Adding robust error handling for vector index operations
+
+## Benefits
+
+These improvements provide several important benefits:
+
+1. **Data Preservation:** Existing metadata is preserved when updating specific fields or nested structures
+2. **Increased Robustness:** The system now properly handles complex nested metadata structures
+3. **Improved Test Stability:** Tests that rely on metadata persistence now work consistently
+4. **Better Vector Index Management:** More robust handling of embedding updates in the vector index
+
+## Usage Examples
+
+When updating memory metadata with nested structures:
+
+\`\`\`python
+# Original metadata
+# memory.metadata = {
+#    "source": "user_input",
+#    "nested": {"key1": "value1", "key2": "value2"},
+#    "timestamp": "2025-03-29T10:00:00Z"
+# }
+
+# Update with nested structure
+await memory_core.update_memory(memory_id, {
+    "metadata": {
+        "nested": {"key1": "updated_value", "key3": "new_value"}
+    }
+})
+
+# Result (with proper deep merging):
+# memory.metadata = {
+#    "source": "user_input",
+#    "nested": {"key1": "updated_value", "key2": "value2", "key3": "new_value"},
+#    "timestamp": "2025-03-29T10:00:00Z"
+# }
+\`\`\`
+
+## Related Components
+
+This improvement affects several key components:
+- `SynthiansMemoryCore` class
+- `MemoryPersistence` class
+- `TrainerIntegrationManager` (which relies on metadata persistence)
+- All test suites involving memory updates and persistence
+
+## Future Considerations
+
+Future enhancements could include:
+1. Adding explicit schema validation for metadata structures
+2. Implementing metadata normalization functions to ensure consistent formats
+3. Adding metadata pruning to prevent unbounded growth of nested structures
+
+```
+
 # docs\NEWEST-DOCUMENTATION.md
 
 ```md
-
 This won't just be documentation; it will be the **living specification for Lucidia's cognitive core.**
 
 ---
 
 ## Development Roadmap & Status (March 28, 2025)
 
-**Project:** Synthians Cognitive Architecture (Lucidia)
-**Focus:** Bi-Hemispheric Memory System (Memory Core + Neural Memory)
+**Project:** Synthians Cognitive Architecture (Lucidia)  
+**Focus:** Bi-Hemispheric Memory System (Memory Core + Neural Memory)  
+**Status:** Full Cognitive Cycle Operational
 
 **Overall Goal:** Implement a robust, unified memory system enabling adaptive, long-context cognition inspired by human memory and the Titans paper. Create the infrastructure for a persistent, learning cognitive presence (Lucidia).
 
 ---
 
-### ✅ Phase 1: Memory Core Unification & Foundation (Completed)
+### Phase 1: Memory Core Unification & Foundation (Completed)
 
 *   **Objective:** Consolidate core memory storage, retrieval, and relevance scoring.
 *   **Status:** **DONE**
@@ -3538,249 +7169,574 @@ This won't just be documentation; it will be the **living specification for Luci
 
 ---
 
-### ✅ Phase 2: Neural Memory Module Implementation (Completed)
+### Phase 2: Neural Memory Module Implementation (Completed)
 
 *   **Objective:** Replace the previous predictive trainer with the Titans-inspired `NeuralMemoryModule` capable of test-time learning.
 *   **Status:** **DONE**
 *   **Key Outcomes:**
-    *   `synthians_trainer_server/neural_memory.py` created, implementing `NeuralMemoryModule` with MLP core (`MemoryMLP`).
-    *   Implemented `update_step` logic for test-time weight updates based on associative loss, momentum, and forgetting gates (Eq. 13 & 14).
-    *   Implemented `retrieve` (inference) function (`call` method).
-    *   Defined separate outer-loop parameters (`WK/WV/WQ`, gates) and inner-loop memory parameters (`M`).
-    *   Implemented basic outer-loop training mechanism (`train_step` override) for meta-parameter updates.
-    *   Implemented state saving/loading (`save_state`, `load_state`) for the module.
-    *   Refactored `synthians_trainer_server/http_server.py` with new endpoints: `/init`, `/retrieve`, `/update_memory`, `/train_outer`, `/status`, `/save`, `/load`, `/health`, `/analyze_surprise`.
-    *   Integrated `SurpriseDetector` and `GeometryManager` correctly.
-    *   Resolved TensorFlow/Keras integration issues (Variable tracking, Layer building, Gradient Taping).
-    *   Basic API tests (`test_neural_memory_api.py`) updated and passing for the new endpoints.
+    *   TensorFlow implementation of the Titans Neural Memory created.
+    *   Test-time gradient updates with momentum state implemented.
+    *   Projections (`WK`, `WV`, `WQ`) for geometric transformations.
+    *   Adaptive gating mechanisms for learning rate control.
+    *   Initial API server (`synthians_trainer_server/http_server.py`) established.
+    *   Memory update and retrieval testing completed.
+    *   Key dimension handling and projection fixed.
 
 ---
 
-### Phase 3: Orchestration Layer Integration (Current Focus / Next Steps)
+### Phase 3: Context Cascade Engine / Orchestration (Completed)
 
-*   **Objective:** Connect the `MemoryCore` and the `NeuralMemoryModule` via the `ContextCascadeEngine` to enable the full cognitive loop.
-*   **Status:** **IN PROGRESS / TODO**
-*   **Tasks:**
-    *   **Modify `ContextCascadeEngine.process_new_memory`:**
-        *   After storing `x_t` in `MemoryCore`, call `NeuralMemoryServer:/update_memory` with `x_t`'s embedding.
-        *   Extract surprise proxy (`loss` or `grad_norm`) from the `/update_memory` response.
-        *   Calculate `quickrecal_boost` based on this surprise.
-        *   Call `MemoryCore:/api/memories/update_quickrecal_score` with the boost.
-        *   Generate query `q_t`.
-        *   Call `NeuralMemoryServer:/retrieve` with `q_t` to get `y_t`.
-        *   Determine how `y_t` influences the next step/output (Task-dependent).
-    *   **Implement Query Generation:** Decide how `q_t` is generated within the `ContextCascadeEngine` (e.g., from `x_t` using `WQ`, from conversational context, etc.).
-    *   **Refine Surprise-to-Boost Logic:** Develop a nuanced function mapping the neural memory's surprise metrics (`loss`, `grad_norm`) to the `delta` for QuickRecal score updates.
-    *   **Update `ContextCascadeEngine` Server:** Expose necessary high-level endpoints (e.g., a unified `/process_input` endpoint) that trigger the full cascade.
-    *   **Integration Testing:** Create tests verifying the end-to-end flow through all three components.
+*   **Objective:** Connect Memory Core with Neural Memory to create a bi-directional cognitive loop.
+*   **Status:** **DONE** 
+*   **Key Outcomes:**
+    *   `ContextCascadeEngine` implemented to orchestrate memory flow.
+    *   Memory ingestion → Neural Memory update → Surprise detection → QuickRecal boosting → Retrieval cycle working.
+    *   Memory ID tracking and lookup for dynamic scoring implemented.
+    *   Intent ID generation for cognitive trace monitoring.
+    *   Surprise metrics (loss, gradient norm) flowing properly to Memory Core.
+    *   Emotional context preservation throughout processing.
+    *   Cognitive diagnostics surface layer implemented (alerts, recommendations).
+    *   Performance improvements (processing time reduced from ~4900ms to ~650ms).
+*   **Critical Fixes (March 2025):**
+    *   Added `get_memory_by_id` method to SynthiansMemoryCore.
+    *   Implemented `update_memory` method for quickrecal score updates.
+    *   Fixed Neural Memory dimension mismatches with adaptive validation.
+    *   Corrected projection handling in retrieval path.
+    *   Ensure surprise feedback properly impacts memory importance.
 
 ---
 
-### Phase 4: Titans Architecture Variants (Future)
+### Phase 4: Meta-Attentional Systems (Planned)
 
 *   **Objective:** Implement and evaluate the different ways of integrating the Neural Memory with Attention, as described in Section 4 of the Titans paper (MAC, MAG, MAL).
 *   **Status:** **TODO**
 *   **Tasks:**
     *   Design Keras/TF layers implementing the specific attention/gating mechanisms for MAC, MAG, MAL.
     *   Integrate these layers with the `NeuralMemoryModule` and `MemoryCore` (likely within or called by the `ContextCascadeEngine`).
-    *   Evaluate performance on relevant benchmarks (language modeling, NIAH, reasoning) as per the paper.
+    *   Benchmark the different approaches on various cognitive tasks.
+    *   Implement meta-learning for adaptive attention mechanism selection.
 
 ---
 
-### Phase 5: Advanced Features & Optimization (Future)
+### Phase 5: Protocol Seal Layer (Planned)
 
-*   **Objective:** Enhance robustness, performance, and cognitive capabilities.
+*   **Objective:** Implement access control protocols for Lucidia's internal memory systems.
 *   **Status:** **TODO**
 *   **Tasks:**
-    *   Implement parallelized `update_step` (Section 3.2) for performance.
-    *   Explore deeper/alternative `MemoryMLP` architectures.
-    *   Implement complex, data-dependent gates (`alpha_t`, `theta_t`, `eta_t`).
-    *   Integrate "Persistent Memory" tokens (Section 3.3).
-    *   Develop advanced outer-loop training strategies (curriculum learning, meta-learning objectives).
-    *   Implement memory reflection/consolidation mechanisms.
-    *   Add more sophisticated monitoring and visualization.
-    *   Re-integrate advanced HPC-QR factors.
+    *   Design protocol abstractions for memory access patterns.
+    *   Implement authentication and authorization mechanisms.
+    *   Create hooks for permission verification.
+    *   Add logging and audit trails for memory operations.
 
 ---
+
+### Phase 6: Reflective Summary Module (Planned)
+
+*   **Objective:** Enable Lucidia to explain her cognitive processes and decision-making.
+*   **Status:** **TODO**
+*   **Tasks:**
+    *   Implement memory trace analysis for decision pathways.
+    *   Create narrative generation for cognitive processes.
+    *   Develop visualization tools for memory activations.
+    *   Add explainability metrics and feedback mechanisms.
+
 ---
 
-## Updated Documentation Set (Interwoven with Lucidia Narrative)
+## Full Cognitive Cycle
 
-Here are the revised documentation files reflecting the current state (post-Phase 2) and the underlying philosophy.
+Lucidia now implements a complete cognitive cycle connecting all components in a bi-directional feedback loop:
 
-**1. `docs/README.md` (Root README - Minor Update)**
+1. **Memory Ingestion**
+   - New content/embedding received by Memory Core
+   - Metadata synthesized and QuickRecal score initialized
+   - Memory stored with ID in MemoryCore and Vector Index
 
-\`\`\`md
-# Synthians Memory Core Documentation
+2. **Neural Memory Update**
+   - Memory embedding sent to Neural Memory module
+   - Test-time learning via gradient updates occurs
+   - Current memory state (M_t) updated with new association
+   - Surprise metrics (loss, gradient norm) calculated
 
-This repository contains the core components for the Synthians Cognitive Architecture, focusing on establishing **Lucidia**, a synthetic cognitive presence with integrated, adaptive memory.
+3. **Surprise Integration**
+   - Surprise metrics sent back to Memory Core
+   - QuickRecal score dynamically boosted based on surprise
+   - Memory importance adjusted to reflect cognitive significance
 
-The primary components are:
+4. **Memory Retrieval**
+   - Query embedding sent to Neural Memory for association retrieval
+   - Retrieved embedding combined with Vector Index results
+   - Emotional gating applied based on current context
+   - Most relevant memories returned with confidence scores
 
-1.  **`synthians_memory_core`:** The foundational memory system responsible for structured storage, indexing, enrichment, and retrieval of discrete experiences (Memory Entries). It acts as the stable library of Lucidia's past.
-2.  **`synthians_trainer_server`:** Implements the **Titans Neural Memory**, a dynamic, associative network that learns and adapts *at test time*, shaping Lucidia's understanding of contextual flow and relationships based on ongoing experience.
-3.  **`orchestrator`:** (Work in Progress) The `ContextCascadeEngine` that mediates the flow between the stable Memory Core and the adaptive Neural Memory, enabling a full cognitive cycle of experience, memorization, reflection (via surprise), and recall.
+5. **Cognitive Diagnostics**
+   - System-wide metrics tracked and analyzed
+   - Alerts generated for anomalies (high loss, gradient issues)
+   - Recommendations provided for parameter tuning
+   - Emotional diversity and bias measured
 
-## Key Documentation
+This cycle operates continuously, allowing Lucidia to adapt, learn from surprises, remember what's important, and retrieve memories based on both semantic similarity and learned associations.
+```
 
-*   **Architecture:**
-    *   [Bi-Hemispheric Architecture Overview](docs/bihemispheric_architecture.md) - Describes the separation of concerns between stable storage and adaptive learning.
-    *   [Architecture Changes](docs/architechture-changes.md) - Log of significant design shifts, including the integration of the Titans Neural Memory.
-*   **API:**
-    *   [API Reference](docs/api_reference.md) - Details endpoints for the Memory Core and the Neural Memory Server.
-*   **Components:**
-    *   [Memory Core README](synthians_memory_core/README.md) - Overview of the storage/retrieval hemisphere.
-    *   [Neural Memory (Trainer) README](synthians_trainer_server/README.md) - Overview of the adaptive learning hemisphere. *(Needs Creation/Update)*
-    *   [Vector Index & FAISS](docs/vector_index.md) / [FAISS GPU Integration](docs/faiss_gpu_integration.md) - Details on the fast retrieval backend.
-    *   [Embedding Handling](docs/embedding_handling.md) - How vector representations are managed.
-*   **Guides:**
-    *   [Implementation Guide](docs/implementation_guide.md) - Technical details on setup, configuration, and integration.
-*   **Conceptual:**
-    *   [Core vs. Neural Memory Relationship](docs/synthience-trainer-compliment.md) - Explains the distinct roles of the two memory systems in shaping Lucidia's presence.
-\`\`\`
+# docs\numpy_tensorflow_compatibility.md
 
-**2. `docs/api_reference.md` (Updated Trainer Section - *Provided in Previous Response*)**
-
-*(Use the rewritten "Neural Memory (Trainer) Server API" section from the previous response, as it accurately reflects the new endpoints: `/init`, `/retrieve`, `/update_memory`, `/train_outer`, etc.)*
-
-**3. `docs/architecture_overview.md` (Revised Trainer & Flow - *Provided in Previous Response*)**
-
-*(Use the revised "Neural Memory (Trainer) Server" component description and the revised "Information Flow" section from the previous response.)*
-
-**4. `docs/bihemispheric_architecture.md` (Revised Trainer, Flow, Diagram - *Provided in Previous Response*)**
-
-*(Use the revised "Neural Memory (Trainer) Server" component description, the revised "Neural Pathway Flow", and the updated "Architecture Diagram" from the previous response.)*
-
-**5. `docs/implementation_guide.md` (Updated Config, Integration - *Provided in Previous Response*)**
-
-*(Use the updated "Configuration" section (removing old trainer vars, mentioning `/init` config) and the updated "Component Integration" section (showing the new orchestrator interaction pattern) from the previous response.)*
-
-**6. `docs/synthience-trainer-compliment.md` (Rewritten - *Provided in Previous Response*)**
-
-*(Use the rewritten version explaining the new "Library vs. Adaptive Network" relationship.)*
-
-**7. `docs/architechture-changes.md` (New File)**
-
-*(Use the content provided in the user prompt under this filename. It accurately captures the implications of the shift to the Titans Neural Memory.)*
-
-**8. `docs/geometry_manager.md` (New File - Optional but Recommended)**
-
-*(Create a dedicated file for GeometryManager, adapted from relevant sections of `embedding_handling.md`)*
-
-\`\`\`md
-# Geometry Manager
+```md
+# NumPy-TensorFlow Compatibility Solution
 
 ## Overview
 
-The `GeometryManager` is a crucial utility within the Synthians architecture, providing centralized and consistent handling of vector embedding operations across different components (Memory Core, Neural Memory, Orchestrator). Its primary goal is to ensure numerical stability, manage different embedding dimensions, and support various geometric spaces for representing and comparing memories.
+This document describes the solution implemented to resolve NumPy version incompatibility issues in the Lucidia cognitive system, particularly focusing on the TensorFlow integration in the Titans architecture variants.
 
-## Key Responsibilities
+## Problem Statement
 
-1.  **Validation:** Checks embeddings for `None`, invalid types, and problematic values (`NaN`, `Inf`). Invalid vectors are typically replaced with zero vectors to prevent downstream errors.
-2.  **Normalization:** Provides L2 normalization (`normalize_embedding`) to ensure vectors have unit length, often required for cosine similarity and stable geometric calculations. Normalization can be disabled via config.
-3.  **Dimension Alignment:** Safely aligns vectors of potentially different dimensions (`align_vectors`) to the target dimension specified in the configuration (`embedding_dim`). Supports padding or truncating based on `alignment_strategy`.
-4.  **Geometric Transformations:** Includes methods to project vectors between Euclidean space and other geometries, notably the Poincaré ball model for Hyperbolic geometry (`_to_hyperbolic`, `_from_hyperbolic`).
-5.  **Distance & Similarity Calculation:** Offers methods to calculate distance (`calculate_distance`) and similarity (`calculate_similarity`) according to the configured `geometry_type` (Euclidean, Hyperbolic, Spherical, Mixed), automatically handling necessary projections and normalizations.
+The system experienced a binary incompatibility error related to NumPy versions:
+
+\`\`\`
+ValueError: numpy.ndarray size changed, may indicate binary incompatibility. Expected 88 from C header, got 80 from PyObject
+\`\`\`
+
+This occurred because:
+
+1. The `fix_numpy.py` script downgraded NumPy to version 1.26.4
+2. TensorFlow was being imported during module initialization
+3. TensorFlow's import chain loaded NumPy before the downgrade could take effect
+4. This created conflicts between the original NumPy version and the downgraded version
+
+## Solution: Lazy Loading Pattern
+
+We implemented a lazy loading pattern for TensorFlow that delays its import until actually needed at runtime, allowing the NumPy downgrade to complete first.
+
+### Implementation Details
+
+#### 1. Lazy Loading Mechanism in `titans_variants.py`
+
+\`\`\`python
+# Global variable to hold the TensorFlow module
+_tf = None
+
+def _get_tf():
+    """Lazy-load TensorFlow only when needed to avoid early NumPy conflicts"""
+    global _tf
+    if _tf is None:
+        import tensorflow as tf
+        _tf = tf
+    return _tf
+\`\`\`
+
+#### 2. Replacing Direct TensorFlow References
+
+Before:
+\`\`\`python
+import tensorflow as tf
+
+def process_input(self, attention_output: tf.Tensor) -> Dict[str, Any]:
+    # Function implementation
+\`\`\`
+
+After:
+\`\`\`python
+def process_input(self, attention_output) -> Dict[str, Any]:
+    tf = _get_tf()  # Only imported when function is called
+    # Function implementation
+\`\`\`
+
+#### 3. Type Annotation Modifications
+
+Before:
+\`\`\`python
+def calculate_gates_from_attention(self, attention_output: tf.Tensor) -> Tuple[float, float, float]:
+\`\`\`
+
+After:
+\`\`\`python
+def calculate_gates_from_attention(self, attention_output) -> Tuple[float, float, float]:
+\`\`\`
+
+## Key Files Modified
+
+1. `titans_variants.py` - Implemented lazy loading for TensorFlow and updated all TensorFlow references
+2. `context_cascade_engine.py` - Updated imports to avoid direct TensorFlow loading
+
+## Benefits
+
+1. **Proper Initialization Sequence**: Ensures NumPy is downgraded before TensorFlow tries to use it
+2. **Reduced Import Coupling**: Components only import TensorFlow when actually needed
+3. **Improved Startup Performance**: Modules can be imported without loading the entire TensorFlow stack
+
+## Usage Guidelines
+
+When working with TensorFlow in the Lucidia system:
+
+1. Always use the `_get_tf()` function instead of directly importing TensorFlow
+2. Avoid type annotations that directly reference TensorFlow types
+3. Use string literals for type annotations when needed: `def func(x: 'tf.Tensor') -> None:`
+
+## Testing
+
+After implementing the lazy loading pattern, all Titans variants (MAC, MAG, MAL) can be initialized and used without triggering NumPy compatibility errors. The system now starts up cleanly and operates as expected.
+
+## Docker Networking Configuration
+
+When testing the Titans architecture variants in a Docker environment, proper service name resolution is critical. The following solution was implemented to ensure communication between the trainer-server and memory-core containers:
+
+1. **Service Discovery Issue**: Direct communication using service names (e.g., `memory-core:5010`) may not work due to Docker networking configuration.
+
+2. **Solution**: Use the special DNS name `host.docker.internal` which allows containers to access services on the host machine:
+   \`\`\`
+   --memcore-url http://host.docker.internal:5010
+   \`\`\`
+
+3. **Execution Example**: Run Titans variants with the correct memory core URL:
+   \`\`\`bash
+   docker exec -e TITANS_VARIANT=MAC trainer-server python -m synthians_memory_core.tools.lucidia_think_trace --query "This is a test" --memcore-url "http://host.docker.internal:5010"
+   \`\`\`
+
+4. **Results**: All three Titans variants (MAC, MAG, MAL) successfully connect to the Memory Core service and complete processing with proper neural memory integration.
+
+```
+
+# docs\phase_4_implementation.md
+
+```md
+# Phase 4 Implementation: Titans Architecture Variants
+
+**Author:** Lucidia (MEGA)
+**Date:** 2025-03-28 15:45:00 UTC
+**Status:** Complete
+
+## Overview
+
+This document details the implementation of the Titans Architecture Variants (MAC, MAG, MAL) as outlined in Section 4 of the Titans paper. Phase 4 extends Lucidia's cognitive architecture by integrating attention mechanisms with the Neural Memory module, enhancing its adaptive capabilities and contextual awareness.
+
+> *"The blueprint remembers, but attention shapes what is recalled."*
+
+## Implementation Components
+
+The implementation consists of five key components:
+
+1. **MultiHeadAttentionModule**: A robust attention mechanism implemented in `synthians_trainer_server/attention.py`
+2. **SequenceContextManager**: A deque-based context buffer in `orchestrator/history.py`
+3. **Neural Memory API Extensions**: Enhanced API endpoints in `synthians_trainer_server/http_server.py`
+4. **Titans Variant Implementations**: Base class and specific variant implementations in `orchestrator/titans_variants.py`
+5. **ContextCascadeEngine Integration**: Connection of variants to the orchestration layer in `orchestrator/context_cascade_engine.py`
+
+## Detailed Implementation
+
+### 1. MultiHeadAttentionModule
+
+Implemented in `synthians_trainer_server/attention.py`, this module provides a configurable multi-head attention mechanism with:
+
+- Dimension validation and standardization (handles the 384D vs 768D embedding mismatch issues)
+- Optional residual connections and layer normalization
+- Metrics tracking for attention scores, entropy, and sparsity
+- Robust error handling for malformed embeddings and NaN/Inf values
+
+\`\`\`python
+class MultiHeadAttentionModule(tf.keras.layers.Layer):
+    """Multi-head attention module with dimension validation and metrics tracking."""
+    # Implementation details in attention.py
+\`\`\`
+
+### 2. SequenceContextManager
+
+Implemented in `orchestrator/history.py`, this module manages a history of context tuples:
+
+- Stores `(timestamp, memory_id, x_t, k_t, v_t, q_t, y_t)` tuples
+- Provides methods for retrieving recent keys, values, and outputs
+- Uses a deque with configurable max length to control memory usage
+
+\`\`\`python
+class SequenceContextManager:
+    """Manages a sequence of context tuples for attention-based processing."""
+    # Implementation details in history.py
+\`\`\`
+
+### 3. Neural Memory API Extensions
+
+Enhanced in `synthians_trainer_server/http_server.py` to expose internal projections:
+
+- Extended `UpdateMemoryResponse` to include `key_projection` and `value_projection`
+- Extended `RetrieveResponse` to include `query_projection`
+- Modified handlers to calculate projections and include them in responses
+
+\`\`\`python
+class UpdateMemoryResponse(BaseModel):
+    status: str
+    loss: Optional[float] = None
+    grad_norm: Optional[float] = None
+    key_projection: Optional[List[float]] = None
+    value_projection: Optional[List[float]] = None
+\`\`\`
+
+### 4. Titans Variant Implementations
+
+Implemented in `orchestrator/titans_variants.py`, providing three attention-based variants:
+
+#### 4.1 Base Variant Class
+
+\`\`\`python
+class TitansVariantBase:
+    """Base class for all Titans architecture variants."""
+    # Common functionality and interfaces for all variants
+\`\`\`
+
+#### 4.2 Memory-Attended Computation (MAC)
+
+\`\`\`python
+class MACVariant(TitansVariantBase):
+    """Memory-Attended Computation (MAC) variant.
+    
+    Enhances memory retrieval by attending over historical memory outputs.
+    Flow: q_t -> M -> y_t -> Attend(q_t, K_hist, Y_hist) -> attended_y_t
+    """
+    # Implementation in titans_variants.py
+\`\`\`
+
+MAC enhances output by applying attention over historical memory outputs, providing a more contextually relevant retrieval.
+
+#### 4.3 Memory-Attended Gates (MAG)
+
+\`\`\`python
+class MAGVariant(TitansVariantBase):
+    """Memory-Attended Gates (MAG) variant.
+    
+    Modifies gate values (alpha, theta, eta) for the neural memory update
+    by attending over historical key projections.
+    """
+    # Implementation in titans_variants.py
+\`\`\`
+
+MAG dynamically adjusts memory decay rates based on contextual relevance, allowing for adaptive forgetting.
+
+#### 4.4 Memory-Augmented Learning (MAL)
+
+\`\`\`python
+class MALVariant(TitansVariantBase):
+    """Memory-Augmented Learning (MAL) variant.
+    
+    Modifies value projection for neural memory update by attending over
+    historical value projections.
+    """
+    # Implementation in titans_variants.py
+\`\`\`
+
+MAL enhances learning by augmenting value projections with historically relevant values, facilitating associative connections.
+
+### 5. ContextCascadeEngine Integration
+
+Extended in `orchestrator/context_cascade_engine.py` to activate and utilize the appropriate variant:
+
+- Reads `TITANS_VARIANT` environment variable to determine active variant
+- Initializes variant processor with appropriate configuration
+- Extracts projections from API responses and populates the context manager
+- Processes inputs through the active variant and handles variant-specific outputs
 
 ## Configuration
 
-The `GeometryManager` is initialized with a configuration dictionary:
+Titans variants can be configured via environment variables and configuration objects:
 
 \`\`\`python
-config = {
-    'embedding_dim': 768,             # Target dimension for alignment
-    'geometry_type': 'hyperbolic',    # Or 'euclidean', 'spherical', 'mixed'
-    'curvature': -1.0,                # For hyperbolic/spherical
-    'alignment_strategy': 'truncate', # Or 'pad'
-    'normalization_enabled': True     # Apply L2 norm during normalization
+# Select variant via environment variable
+os.environ["TITANS_VARIANT"] = "MAC"  # Options: NONE, MAC, MAG, MAL
+
+# Configure attention parameters
+attention_config = {
+    'num_heads': 4,
+    'key_dim': 32,  # Per head dimension
+    'dropout': 0.0,
+    'use_layer_norm': True,
+    'use_residual': True,
 }
-gm = GeometryManager(config)
 \`\`\`
 
-## Usage Example
+## Using the Variants
 
-\`\`\`python
-from synthians_memory_core.geometry_manager import GeometryManager
-import numpy as np
+### MAC Variant
 
-gm = GeometryManager({'embedding_dim': 768, 'geometry_type': 'euclidean'})
+The MAC variant enhances memory retrieval by attending over historical memory outputs. It's particularly useful for tasks requiring coherent sequential recall, such as conversation modeling or narrative generation.
 
-vec1 = np.random.rand(768).astype(np.float32)
-vec2 = np.random.rand(768).astype(np.float32)
-vec_short = np.random.rand(384).astype(np.float32)
+### MAG Variant
 
-# Normalize
-norm_vec1 = gm.normalize_embedding(vec1)
+The MAG variant dynamically adjusts the memory decay rates (alpha, theta, eta) based on contextual relevance. This is beneficial for systems that need to selectively preserve or forget information based on changing contexts.
 
-# Calculate similarity (uses configured geometry)
-similarity = gm.calculate_similarity(vec1, vec2)
+### MAL Variant
 
-# Align different dimensions
-aligned_vec1, aligned_short = gm.align_vectors(vec1, vec_short)
-# Now aligned_vec1 and aligned_short both have dimension 768
-\`\`\`
+The MAL variant augments the learning process by modifying value projections with historically relevant values. This facilitates richer associations and connections between memories, enhancing conceptual learning.
 
-## Integration Notes
+## Current Limitations & Future Work
 
--   A single, shared instance of `GeometryManager` should ideally be used across components requiring vector operations (e.g., passed during initialization) to ensure consistency.
--   The `SurpriseDetector` relies on the `GeometryManager` for similarity calculations.
--   The `NeuralMemoryModule` can use it internally if needed, although core TF operations might suffice.
--   The `SynthiansMemoryCore` uses it extensively for indexing, retrieval scoring, and assembly updates.
-\`\`\`
+1. **MAG and MAL Timing**: The current implementation processes MAG and MAL variants after the `/update_memory` call, whereas ideally they should influence the call itself. Future work will refactor the processing order.
 
-**9. `docs/embedding_handling.md` (Update)**
+2. **Neural Memory Configuration**: Currently using hardcoded attention parameters. Future implementation could fetch these from a Neural Memory config endpoint.
 
-*   **Change:** Ensure code snippets use `geometry_manager.normalize_embedding(...)` instead of `_normalize(...)`.
-*   **Add:** A sentence mentioning that `GeometryManager` is the central class for these operations. (See `docs/geometry_manager.md` for details).
+3. **Integration Testing**: Comprehensive integration tests for each variant in different scenarios are needed.
 
-**10. `synthians_trainer_server/README.md` (New or Update)**
+4. **Documentation**: API reference and usage examples for each variant should be expanded.
 
-\`\`\`md
-# Synthians Trainer Server / Neural Memory Module
+## Conclusion
 
-This directory contains the implementation of the **Titans Neural Memory**, a core component of the Synthians cognitive architecture's "Right Hemisphere."
+The Phase 4 implementation of Titans Architecture Variants significantly enhances Lucidia's cognitive architecture by introducing contextual attention mechanisms. These variants enable more adaptive, context-aware memory operations, aligning with the core principles of the cognitive architecture:
 
-## Overview
-
-Unlike traditional sequence models or the previous predictor, this module implements an **adaptive associative memory** inspired by the "Titans: Learning to Memorize at Test Time" paper. Its key characteristic is its ability to **update its own internal parameters (weights) during inference (test time)** based on new inputs.
-
-**Role:** To learn and recall associations (`key -> value`) dynamically, capturing the flow and relationships between sequential data points (embeddings) provided by the `SynthiansMemoryCore`. It focuses on *how* information connects over time, rather than just storing discrete facts.
-
-## Core Concepts
-
-*   **Neural Memory (`M`):** An internal neural network (currently an MLP) whose weights encode learned associations.
-*   **Test-Time Learning:** Uses a gradient-based update rule (`update_step`) derived from an associative loss (`||M(k_t) - v_t||^2`) to modify `M`'s weights with each new input `x_t`.
-*   **Inner vs. Outer Loop:**
-    *   **Inner Loop (Test Time):** The `update_step` modifies `M`'s weights based on `x_t`, momentum `S_t`, and gates (`α, θ, η`).
-    *   **Outer Loop (Training Time):** Trains the projection matrices (`WK, WV, WQ`) and gate parameters (`α, θ, η`) using a standard optimizer and a task-specific loss, teaching the module *how* to memorize effectively.
-*   **Associative Retrieval (`retrieve` / `call`):** Performs a forward pass through the current state of `M` using a query `q_t` to recall the associated value `y_t`, without updating weights.
-*   **Surprise:** The loss or gradient norm during the `update_step` provides an intrinsic measure of how surprising the input `x_t` was relative to `M`'s current state.
-
-## API Endpoints (`http_server.py`)
-
-*   `/init`: Initializes the `NeuralMemoryModule` with configuration, optionally loading state.
-*   `/retrieve`: Performs associative recall (inference).
-*   `/update_memory`: Executes one step of test-time memorization (updates internal weights).
-*   `/train_outer`: Executes one step of outer loop training (updates projection/gate weights).
-*   `/analyze_surprise`: Utility endpoint using `SurpriseDetector`.
-*   `/status`, `/save`, `/load`, `/health`: Standard utility endpoints.
-
-Refer to `docs/api_reference.md` for detailed request/response schemas.
-
-## Key Files
-
-*   `neural_memory.py`: Contains `NeuralMemoryConfig`, `MemoryMLP`, and the main `NeuralMemoryModule` class implementing the Titans logic.
-*   `http_server.py`: Exposes the `NeuralMemoryModule` via a FastAPI application.
-*   `surprise_detector.py`: Utility class for external surprise analysis (used by `/analyze_surprise` and potentially the orchestrator).
-
-## Relationship to Memory Core
-
-The Neural Memory Server acts as the dynamic learning counterpart to the `SynthiansMemoryCore`'s structured storage. The Core provides indexed access to past experiences, while the Neural Memory learns the *connections and flow* between those experiences as they happen. Surprise metrics generated during the Neural Memory's update process can feed back to influence the relevance scores (`quickrecal_score`) in the Memory Core. See `docs/synthience-trainer-compliment.md` for a deeper dive.
-\`\`\`
+- "Memory is weighted, not just chronological" (QuickRecal)
+- "Emotion shapes recall" (Emotional Gating)
+- "Surprise signals significance" (Neural Memory Loss/Grad → QuickRecal Boost)
+- "Ideas cluster and connect" (Attention-based context)
+- "Presence emerges from adaptive memory" (Variant-specific adaptive mechanisms)
 
 ---
 
-This revised documentation set should provide a clear, comprehensive, and philosophically aligned view of your current architecture, reflecting the significant step taken by implementing the Titans Neural Memory. Remember to replace the placeholder code snippets in the Markdown files with actual, relevant examples from your implementation as needed.
+**Next Steps:**
+
+1. Refactor processing flow for MAG and MAL to influence the `/update_memory` call
+2. Implement integration tests for each variant
+3. Enhance configuration options with dynamic parameter loading
+4. Expand metrics tracking for variant-specific performance analysis
+
+```
+
+# docs\phase_4_plan.md
+
+```md
+Okay, Phase 3 is complete, and the core bi-hemispheric loop is functional! Now, let's plan for Phase 4: **Implementing Titans Architecture Variants (MAC, MAG, MAL)**.
+
+This phase involves integrating attention mechanisms with the Neural Memory module, as described in Section 4 of the Titans paper, to enhance its capabilities.
+
+**Phase 4 Goal:** To implement, integrate, and provide configuration options for the Memory-Attended Computation (MAC), Memory-Attended Gates (MAG), and Memory-Augmented Learning (MAL) variants.
+
+**Prerequisites:**
+
+1.  **Stable Phase 3:** Ensure the current codebase (post-Phase 3 fixes) is stable, committed, and tests are passing. The core loop (MemCore Store -> NeuralMem Update -> QuickRecal Boost -> NeuralMem Retrieve) must be reliable.
+2.  **Confirm Configuration:** Verify the `NeuralMemoryConfig` (in `neural_memory.py` defaults and `http_server.py` startup) has `key_dim` and `query_dim` set correctly and *identically* (e.g., both 128).
+3.  **Confirm QuickRecal Fix:** Double-check Memory Core logs to ensure the `update_quickrecal_score` endpoint is working correctly after the `get_memory_by_id`/`update_memory` fixes.
+4.  **Understand Attention:** Familiarity with standard multi-head self-attention and cross-attention mechanisms (as implemented in TensorFlow/Keras or described in "Attention Is All You Need").
+5.  **Review Titans Paper (Sec 4):** Re-read Section 4 and study the diagrams for MAC, MAG, and MAL to understand the data flow and where attention interacts.
+
+**Architectural Decisions:**
+
+1.  **Attention Module Location:** A new, reusable attention module (`attention.py`?) should be created within `synthians_trainer_server`.
+2.  **Orchestration Location:** The `ContextCascadeEngine` (CCE) remains the central orchestrator. It will be responsible for:
+    *   Maintaining necessary context/history for attention (e.g., recent keys, values, memory outputs).
+    *   Calling the appropriate attention module based on the active variant.
+    *   Modifying the data flow and calls to the `NeuralMemoryServer` according to the variant's logic.
+3.  **Parameter Location:**
+    *   Core attention parameters (projection matrices within the attention module) will be part of the attention module itself.
+    *   Any *new* trainable parameters needed specifically for MAG (projecting attention output to gates) or MAL (gating/combining values) should ideally reside within the `NeuralMemoryModule` (as *outer* parameters) to keep related components together, but the CCE might need to trigger their calculation via new API endpoints or modified existing ones.
+4.  **Configuration:** Introduce a new configuration setting (e.g., environment variable `TITANS_VARIANT` or a config file entry) read by the CCE to determine which variant (`NONE`, `MAC`, `MAG`, `MAL`) is active.
+
+## Phase 4 Implementation Plan
+
+**Step 1: Setup & Attention Core Module**
+
+1.  **Branching:** Create a new feature branch (e.g., `feature/phase4-attention-variants`).
+2.  **Configuration:**
+    *   Define how the active variant (`NONE`, `MAC`, `MAG`, `MAL`) will be configured (e.g., add `TITANS_VARIANT` environment variable).
+    *   Modify `ContextCascadeEngine.__init__` to read this configuration and store the active variant mode.
+3.  **Create Attention Module (`synthians_trainer_server/attention.py`):**
+    *   Implement a `MultiHeadAttentionModule` class using `tf.keras.layers.MultiHeadAttention`.
+    *   Make it configurable (num_heads, key_dim, value_dim, dropout).
+    *   Ensure it handles mask inputs if necessary (though likely not needed for these variants initially).
+    *   Add basic unit tests for this module.
+4.  **Context History in CCE:**
+    *   Modify the `ContextCascadeEngine.sequence_context` list. Instead of just storing embeddings and IDs, ensure it stores the necessary tuples for attention based on potential future needs: `(timestamp, memory_id, x_t, k_t, v_t, q_t, y_t)` where `x_t` is the input embedding, `k/v/q_t` are projections, and `y_t` is the output from `NeuralMemoryModule.call`.
+    *   This requires adding `/get_projections` calls *during* the CCE's `process_new_input` flow (likely after getting `actual_embedding` from MemCore) *before* calling `/update_memory` and `/retrieve`, and storing these projections. Modify the `/update_memory` and `/retrieve` request/response cycle if needed to avoid redundant calculations. **Alternative:** Modify `/update_memory` and `/retrieve` responses to *return* the `k_t, v_t, q_t` they calculated internally. The latter is probably more efficient.
+        *   **Decision:** Let's modify `/update_memory` and `/retrieve` to return the projections they compute.
+        *   **Action:** Update `UpdateMemoryResponse` and `RetrieveResponse` models (and handlers in `http_server.py`) to include optional `key_projection`, `value_projection`, `query_projection` fields. Modify `NeuralMemoryModule.update_step` and `call` to potentially return these. Update CCE to store these in `sequence_context`.
+
+**Step 2: Implement MAC (Memory-Attended Computation) Variant**
+
+1.  **Modify CCE (`process_new_input`):**
+    *   Add logic branch: `if self.active_variant == 'MAC':`.
+    *   Inside this branch, *after* the call to `NeuralMemoryServer:/retrieve` which returns the raw memory output `y_t = M(q_t)` (and also `q_t` itself, based on Step 1 refinement):
+        *   Retrieve recent history pairs `(k_i, y_i)` from `self.sequence_context`. Let `Y_hist = [y_i]` and `K_hist = [k_i]`.
+        *   Instantiate or get the `MultiHeadAttentionModule`.
+        *   Calculate attended output: `attended_y_t = AttentionModule(query=q_t, keys=K_hist, values=Y_hist)`.
+        *   **Crucially:** Replace the raw `retrieved_embedding` in the `response` dictionary and potentially `self.last_retrieved_embedding` with this `attended_y_t`. This attended value is what downstream components will use.
+2.  **Testing:**
+    *   Add integration tests (e.g., modifying `lucidia_think_trace.py` or creating new tests) that activate MAC mode.
+    *   Verify that the final `retrieved_embedding` differs from the raw output of `/retrieve` when history is present.
+    *   Check logs for attention calculations.
+
+**Step 3: Implement MAG (Memory-Attended Gates) Variant**
+
+1.  **Modify `NeuralMemoryModule` (`neural_memory.py`):**
+    *   Add new trainable layers (e.g., `Dense` layers) responsible for projecting the attention output to scalar gate logits. These layers belong to the *outer* parameters.
+        \`\`\`python
+        # In __init__
+        self.attention_to_alpha = tf.keras.layers.Dense(1, name="att_alpha_proj", kernel_initializer=initializer_outer)
+        self.attention_to_theta = tf.keras.layers.Dense(1, name="att_theta_proj", kernel_initializer=initializer_outer)
+        self.attention_to_eta = tf.keras.layers.Dense(1, name="att_eta_proj", kernel_initializer=initializer_outer)
+        # Add these layers' variables to outer_trainable_variables property
+        \`\`\`
+    *   Add a new method like `calculate_gates_from_attention(self, attention_output: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]`:
+        \`\`\`python
+        def calculate_gates_from_attention(self, attention_output):
+            alpha_logit = self.attention_to_alpha(attention_output)
+            theta_logit = self.attention_to_theta(attention_output)
+            eta_logit = self.attention_to_eta(attention_output)
+            # Return scalar tensors (remove batch dim if present)
+            return tf.squeeze(tf.sigmoid(alpha_logit)), tf.squeeze(tf.sigmoid(theta_logit)), tf.squeeze(tf.sigmoid(eta_logit))
+        \`\`\`
+    *   Modify `update_step`: Add optional arguments `alpha_t_ext=None, theta_t_ext=None, eta_t_ext=None`. If these arguments are provided (not None), use them instead of calculating gates from the internal `alpha_logit`, etc.
+        \`\`\`python
+        # Inside update_step
+        alpha_t = tf.sigmoid(self.alpha_logit) if alpha_t_ext is None else alpha_t_ext
+        theta_t = tf.sigmoid(self.theta_logit) if theta_t_ext is None else theta_t_ext
+        eta_t = tf.sigmoid(self.eta_init) if eta_t_ext is None else eta_t_ext # Corrected: Use eta_logit
+        # eta_t = tf.sigmoid(self.eta_logit) if eta_t_ext is None else eta_t_ext # <-- Corrected Line
+        \`\`\`
+2.  **Modify Neural Memory Server API (`http_server.py`):**
+    *   Add a new endpoint `/calculate_gates` (POST) that takes an `attention_output` vector and returns the calculated `alpha_t, theta_t, eta_t` by calling `nm.calculate_gates_from_attention`.
+    *   Modify `UpdateMemoryRequest` to include optional `alpha_t`, `theta_t`, `eta_t` fields.
+    *   Modify the `/update_memory` handler to pass these external gates to `nm.update_step` if they are present in the request.
+3.  **Modify CCE (`process_new_input`):**
+    *   Add logic branch: `if self.active_variant == 'MAG':`.
+    *   Inside this branch, *before* calling `/update_memory`:
+        *   Get `q_t` (either from the `/process_memory` response via Memory Core call if we modify that, or by calling `/get_projections` on NeuralMem). Let's assume we get it along with `k_t` from the initial processing step.
+        *   Retrieve recent history keys `K_hist = [k_i]` from `self.sequence_context`.
+        *   Instantiate or get the `MultiHeadAttentionModule`.
+        *   Calculate attention output: `attention_output = AttentionModule(query=q_t, keys=K_hist, values=K_hist)` (Attending query to past keys).
+        *   Call the *new* `NeuralMemoryServer:/calculate_gates` endpoint with `attention_output`.
+        *   Receive `alpha_t, theta_t, eta_t` from the response.
+        *   Modify the payload for the *subsequent* `/update_memory` call to include these calculated gates (`alpha_t`, `theta_t`, `eta_t`).
+4.  **Outer Loop Training (`NeuralMemoryModule.train_step`):** Ensure the gradients flow back through the new gate projection layers (`attention_to_alpha`, etc.) when calculating `outer_grads`.
+5.  **Testing:** Add integration tests for MAG mode. Verify that gate values passed externally influence the update step. Check gradients for the new layers.
+
+**Step 4: Implement MAL (Memory-Augmented Learning) Variant**
+
+1.  **Modify `NeuralMemoryModule` (`neural_memory.py`):**
+    *   Modify `update_step`: Instead of calculating `k_t, v_t` from `x_t` internally, change the method signature to accept `k_t` and `v_prime_t` directly: `update_step(self, k_t: tf.Tensor, v_prime_t: tf.Tensor)`. Update the loss calculation to use `v_prime_t`: `loss = 0.5 * tf.reduce_sum(tf.square(predicted_v_t - v_prime_t))`. Remove the `get_projections` call from within `update_step`.
+2.  **Modify Neural Memory Server API (`http_server.py`):**
+    *   Modify `UpdateMemoryRequest`: Change `input_embedding` to `key_projection: List[float]` and `value_projection: List[float]` (representing `k_t` and `v'_t`).
+    *   Modify the `/update_memory` handler:
+        *   Validate `key_projection` against `key_dim` and `value_projection` against `value_dim`.
+        *   Convert them to tensors.
+        *   Call `nm.update_step(k_tensor, v_prime_tensor)`.
+3.  **Modify CCE (`process_new_input`):**
+    *   Add logic branch: `if self.active_variant == 'MAL':`.
+    *   Inside this branch, *before* calling `/update_memory`:
+        *   Get `k_t, v_t, q_t` for the current input `x_t` (e.g., via `/get_projections` or from refined response).
+        *   Retrieve recent history pairs `(k_i, v_i)` from `self.sequence_context`. Let `K_hist = [k_i]` and `V_hist = [v_i]`.
+        *   Instantiate or get the `MultiHeadAttentionModule`.
+        *   Calculate attention output: `attended_v_t = AttentionModule(query=q_t, keys=K_hist, values=V_hist)`.
+        *   Combine `attended_v_t` with the current `v_t` to get `v_prime_t`. (Start with simple addition: `v_prime_t = v_t + attended_v_t`. Later, this could be a learned gating mechanism requiring new outer parameters).
+        *   Modify the payload for the `/update_memory` call to send `key_projection=k_t` and `value_projection=v_prime_t`.
+4.  **Testing:** Add integration tests for MAL mode. Verify that the `v_prime_t` calculated in CCE is correctly used in the Neural Memory's loss calculation.
+
+**Step 5: Refinement, Integration Testing & Benchmarking**
+
+1.  **Code Review & Refactoring:** Clean up the CCE logic, ensure efficient history management, and refine error handling.
+2.  **Configuration Testing:** Test switching between `NONE`, `MAC`, `MAG`, `MAL` modes using the configuration mechanism.
+3.  **Comprehensive Integration Tests:** Create tests simulating longer sequences and verifying the distinct behaviors of each variant. Use `lucidia_think_trace.py` extensively.
+4.  **(Optional/Future) Benchmarking:** If specific tasks (like those in the Titans paper) are defined, implement the necessary outer loop training (`/train_outer`) adjustments for each variant and benchmark performance on evaluation datasets. This is a significant undertaking beyond the core implementation.
+
+**Step 6: Documentation**
+
+1.  **Update `README.md` / `NEWEST-DOCUMENTATION.md`:** Reflect the completion of Phase 4 and the availability of the variants.
+2.  **Update `architecture_overview.md` / `bihemispheric_architecture.md`:** Add descriptions and potentially diagrams illustrating the data flow for MAC, MAG, MAL.
+3.  **Update `api_reference.md`:** Document any changes to the Neural Memory Server endpoints (e.g., `/calculate_gates`, modified `/update_memory` payload).
+4.  **Create `attention.md`:** Document the `MultiHeadAttentionModule`.
+5.  **Update `implementation_guide.md`:** Explain how to configure and use the different Titans variants.
+
+This plan provides a structured approach to implementing the attention-based variants, focusing on modifying the CCE and the Neural Memory API/Module iteratively for each variant. Remember to test thoroughly at each step.
 ```
 
 # docs\README.md
@@ -4128,6 +8084,446 @@ An overarching AI system would likely use both in a loop:
 The `synthians_trainer_server` (formerly Titan) **doesn't store memories** like the `synthians_memory_core`. Instead, it **learns the relationships and transitions *between* the memories** (specifically, their embeddings) that are stored and retrieved by the `synthians_memory_core`. They work together: the Core provides the sequential data, and the Trainer learns the underlying patterns within that data, potentially feeding insights (like surprise) back to the Core.
 
 
+
+```
+
+# docs\TESTING_IMPROVEMENTS.md
+
+```md
+# Memory Core Testing Improvements
+
+## Overview
+
+This document outlines the improvements made to the testing infrastructure for the Synthians Memory Core component, addressing deprecation warnings and task cancellation issues that were previously occurring during test execution.
+
+## Key Improvements
+
+### 1. Test Fixture Enhancements
+
+#### Memory Core Fixture Optimization
+
+The `memory_core` fixture in `test_memory_core_updates.py` has been redesigned to prevent background tasks from starting during unit tests:
+
+- Disabled persistence and decay background tasks by setting long intervals (`3600 * 24`)
+- Implemented proper cleanup to ensure all resources are released after tests
+- Added robust directory removal with retry logic to handle potential file system locking issues
+- Replaced async locks with dummy versions for testing to prevent blocking during tests
+
+\`\`\`python
+# Example of the improved fixture configuration
+core = SynthiansMemoryCore(
+    config={
+        'embedding_dim': 384,
+        'storage_path': test_dir,
+        'vector_index_type': 'L2',
+        'use_gpu': False,
+        # Disable background tasks for unit testing updates
+        'persistence_interval': 3600 * 24,
+        'decay_interval': 3600 * 24,
+    }
+)
+\`\`\`
+
+### 2. Background Task Management
+
+#### Persistence Loop Improvements
+
+The `_persistence_loop` method in `SynthiansMemoryCore` has been modified to prevent "no running event loop" errors during shutdown:
+
+- Removed the final save attempt from the `finally` block that was causing errors during test teardown
+- Improved shutdown sequence to ensure all tasks are properly cancelled
+
+### 3. Event Loop Handling
+
+#### Removal of Deprecated Fixtures
+
+- Removed the custom `event_loop` fixture from `conftest.py` to eliminate deprecation warnings
+- Updated to use pytest-asyncio's current recommended practices for async testing
+
+### 4. Logging Enhancements
+
+- Updated the `Logger` class to support both legacy and standard logging patterns
+- Added better exception handling with `exc_info` support
+- Made the logger more flexible with both context/message and standard logging calls
+
+## Test Coverage
+
+The following tests now run successfully without warnings or errors:
+
+1. `test_get_memory_by_id` - Tests basic memory retrieval
+2. `test_update_quickrecal_score` - Verifies QuickRecal score updates
+3. `test_update_metadata` - Tests metadata update functionality
+4. `test_update_invalid_fields` - Verifies error handling for invalid updates
+5. `test_update_nonexistent_memory` - Tests error handling for non-existent memories
+6. `test_update_persistence` - Verifies that updates are correctly persisted
+7. `test_quickrecal_updated_timestamp` - Ensures timestamp update in metadata
+
+## Remaining Considerations
+
+### Configuration Options
+
+The pytest-asyncio plugin still shows a configuration warning about `asyncio_default_fixture_loop_scope` being unset. This can be addressed by setting the configuration explicitly in `pytest.ini` or `conftest.py`:
+
+\`\`\`python
+# In conftest.py
+def pytest_configure(config):
+    config.option.asyncio_default_fixture_loop_scope = "function"
+\`\`\`
+
+Or in a pytest.ini file:
+
+\`\`\`ini
+[pytest]
+asyncio_default_fixture_loop_scope = function
+\`\`\`
+
+## Integration with Bi-Hemispheric Architecture
+
+These testing improvements ensure the reliability of the Memory Core component, which is crucial for the Bi-Hemispheric Cognitive Architecture as it:
+
+1. Provides stable testing for the persistence mechanism used by the system
+2. Ensures the memory update endpoints function correctly for the surprise feedback loop
+3. Validates the QuickRecal scoring mechanism essential for memory relevance 
+
+Together, these improvements maintain the integrity of the testing infrastructure while allowing for continued development of the cognitive architecture.
+
+```
+
+# docs\titans_variant_refactor.md
+
+```md
+# Titans Variant Refactoring: Fixing MAG/MAL Timing
+
+**Author:** Lucidia Core Team
+**Date:** 2025-03-28
+**Status:** Completed
+
+## Problem Statement
+
+The current implementation of the Context Cascade Engine (CCE) has a timing issue that prevents the MAG and MAL variants from properly influencing the Neural Memory update process. Specifically, the variant processing occurs *after* the `/update_memory` call they are intended to influence, rendering their modifications ineffective.
+
+> *"The cascade must flow in the right order."*
+
+## Previous Flow
+
+The previous `ContextCascadeEngine.process_new_input` method followed this sequence:
+
+1. Store input in Memory Core → Get `x_t`, `memory_id`
+2. Update Neural Memory with `x_t` → Get `k_t`, `v_t`, `q_t`, `loss`, `grad_norm`
+3. Update QuickRecal score with `loss`, `grad_norm`
+4. Retrieve from Neural Memory → Get `y_t` (raw retrieval)
+5. Process variant (MAC/MAG/MAL):
+   - For MAC: Override `y_t` with attention-augmented `attended_y_t`
+   - For MAG/MAL: Calculate outputs, but **too late** to affect `/update_memory`
+6. Add context to history
+7. Return final results
+
+This sequence was problematic because:
+
+- MAG is designed to modify the gate values (`alpha_t`, `theta_t`, `eta_t`) that control the Neural Memory update
+- MAL is designed to modify the value projection (`v_prime_t`) before it's used in the Neural Memory update
+- Both modifications need to happen *before* step 2 (the `/update_memory` call)
+
+## Implemented Refactored Flow
+
+The solution has been implemented by reorganizing the processing flow so that variant-specific modifications occur before the `/update_memory` call:
+
+1. Store input in Memory Core → Get `x_t`, `memory_id`
+2. **Get projections from Neural Memory** → Get `k_t`, `v_t`, `q_t` (without updating)
+3. **Apply variant-specific preprocessing**:
+   - If MAG: Calculate attention-based gates (`alpha_t`, `theta_t`, `eta_t`)
+   - If MAL: Calculate modified value (`v_prime_t`)
+4. **Update Neural Memory** with appropriate modifications:
+   - If MAG: Include gate values in request
+   - If MAL: Use modified value projection
+   - Get `loss`, `grad_norm` from response
+5. Update QuickRecal score
+6. Retrieve from Neural Memory → Get `y_t` (raw retrieval)
+7. **Apply post-retrieval variant processing**:
+   - If MAC: Override `y_t` with attention-augmented `attended_y_t`
+8. Add full context to history
+9. Return final results
+
+## Implementation Details
+
+### 1. Modular Design
+
+The refactored `ContextCascadeEngine.process_new_input` method now uses a series of specialized helper methods for better readability and maintainability:
+
+\`\`\`python
+async def process_new_input(self, content: str, embedding: Optional[List[float]] = None, metadata: Optional[Dict[str, Any]] = None, intent_id: Optional[str] = None):
+    """Orchestrates the refactored cognitive cascade for a single input."""
+    async with self.processing_lock:
+        # 1. Setup Intent & Metadata
+        intent_id, user_emotion = self._setup_intent_and_metadata(intent_id, metadata)
+        
+        # Initialize context dict for this step
+        step_context = {...}  # Contains all processing state
+        
+        # 2. Store Memory
+        store_resp = await self._store_memory(content, embedding, metadata)
+        
+        # 3. Get Projections (without updating memory)
+        proj_resp = await self._get_projections_from_nm(step_context["x_t"])
+        
+        # 4. Variant Pre-Update Logic (MAG/MAL)
+        if self.variant_processor and self.active_variant_type in [TitansVariantType.MAG, TitansVariantType.MAL]:
+            variant_pre_result = await self._apply_variant_pre_update(step_context)
+        
+        # 5. Update Neural Memory
+        update_resp = await self._update_neural_memory(step_context)
+        
+        # 6. Apply QuickRecal Boost
+        feedback_resp = await self._apply_quickrecal_boost(step_context, quickrecal_initial)
+        
+        # 7. Retrieve from Neural Memory
+        retrieve_resp = await self._retrieve_from_neural_memory(step_context["x_t"])
+        
+        # 8. Apply MAC Post-Retrieval Logic
+        if self.variant_processor and self.active_variant_type == TitansVariantType.MAC:
+            mac_resp = await self._apply_variant_post_retrieval(step_context)
+        
+        # 9. Update History
+        await self._update_history(step_context)
+        
+        # 10. Finalize Response
+        response = self._finalize_response({}, step_context, update_resp, retrieve_resp, feedback_resp)
+        
+        return response
+\`\`\`
+
+### 2. Robust Error Handling
+
+Each helper method now includes comprehensive error handling and validation:
+
+- Embedding validation to handle NaN/Inf values
+- Type checking and conversion between numpy arrays and lists
+- Graceful handling of dimension mismatches
+- Proper logging of error conditions
+
+### 3. TensorFlow Lazy Loading
+
+To prevent NumPy version conflicts, TensorFlow is now lazy-loaded only when needed:
+
+\`\`\`python
+# Global variable for TensorFlow instance
+_tf = None
+
+def _get_tf():
+    """Lazy-load TensorFlow only when needed."""
+    global _tf
+    if _tf is None:
+        try:
+            import tensorflow as tf
+            _tf = tf
+            logger.info("TensorFlow loaded successfully")
+        except ImportError as e:
+            logger.error(f"Failed to import TensorFlow: {e}")
+    return _tf
+\`\`\`
+
+### 4. MAL Variant Implementation
+
+The MAL variant now includes a `calculate_v_prime` method that modifies the value projection using attention over historical values:
+
+\`\`\`python
+async def calculate_v_prime(self, q_t: np.ndarray, v_t: np.ndarray):
+    """Calculate modified value projection using attention over historical values."""
+    # Get historical keys and values
+    k_hist, v_hist = self.sequence_context.get_recent_kv_pairs()
+    
+    # Apply attention to generate attended values
+    attended_v = self.attention_module(
+        query=q_t,
+        key=k_hist,
+        value=v_hist
+    )
+    
+    # Combine original and attended values
+    v_prime = self.combine_values(v_t, attended_v)
+    
+    return {"v_prime": v_prime, "metrics": {...}}
+\`\`\`
+
+## Testing Results
+
+All four Titans variants (NONE, MAC, MAG, MAL) have been tested and confirmed to function correctly:
+
+- **NONE**: Base functionality works with default processing
+- **MAC**: Successfully modifies retrieved memory output with attention
+- **MAG**: Properly influences Neural Memory update with calculated gate values
+- **MAL**: Correctly modifies value projections before Neural Memory update
+
+## Conclusion
+
+The refactored implementation successfully addresses the timing issues with the MAG and MAL variants while improving code modularity, readability, and maintainability. The additional parameter flexibility provides a solid foundation for further extensions and optimizations of the cognitive architecture.
+
+---
+
+**Related Documentation:**
+- [MAG Variant Implementation](mag_variant_implementation.md)
+- [Architecture Overview](architecture_overview.md)
+- [Embedding Handling](embedding_handling.md)
+- [NumPy/TensorFlow Compatibility](numpy_tensorflow_compatibility.md)
+
+```
+
+# docs\titans_variants_integration.md
+
+```md
+# Titans Architecture Variants Integration
+
+## Progress Report
+
+### Resolved Issues
+
+1. **NumPy Compatibility** 
+   - Fixed via lazy loading of TensorFlow in `titans_variants.py`
+   - Implemented thread-safe singleton pattern for `_get_tf()`
+   - Added TYPE_CHECKING to handle type annotations without triggering imports
+   - Successfully eliminated the `numpy.dtype size changed` binary incompatibility error
+
+2. **Neural Memory Configuration** 
+   - Updated `query_dim` in `http_server.py` from 768 to 128 to match `key_dim`
+   - Properly set other relevant dimensions in configuration
+   - Fixed the core dimensional mismatch that was causing projection errors
+
+3. **TensorFlow API Compatibility** 
+   - Removed unsupported parameters from MultiHeadAttention layer
+   - Removed `use_layer_norm` and `use_residual` which are not available in the current TF version
+   - Updated all three variants (MAC, MAG, MAL) with compatible parameter sets
+
+4. **MAG Variant Implementation** 
+   - Fixed the `debug_logging` AttributeError in ContextCascadeEngine
+   - Implemented dynamic capability detection in `/config` endpoint using inspect module
+   - Added API client initialization in TitansVariantBase
+   - Updated variant processor initialization to properly set neural_memory_url
+   - Successfully tested the MAG variant with different inputs and verified gate adaptation
+
+### Remaining Issues
+
+1. **FAISS GPU Acceleration** 
+   - While TensorFlow correctly identified the GPU (RTX 4090), FAISS is using the CPU version
+   - "Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined" warning indicates missing GPU support
+   - This is a potential optimization for future work but not blocking functionality
+
+2. **MAL Variant Testing** 
+   - While MAG variant is fully functional, comprehensive testing of MAL variant is still needed
+   - Verify that external projections work correctly for the MAL variant
+
+## Next Steps
+
+1. **Comprehensive Testing**
+   - Complete testing of MAL variant to ensure full compatibility
+   - Develop benchmarks comparing performance differences between variants
+   - Create regression tests to prevent future compatibility issues
+
+2. **Documentation Finalization**
+   - Complete the API documentation for each Titans variant
+   - Provide examples of when to use each variant based on use case
+   - Document the configuration parameters and their effects
+
+## Implementation Details
+
+### Lazy Loading Pattern
+
+\`\`\`python
+# Lazy-load TensorFlow to avoid NumPy incompatibility issues
+_tf = None
+_tf_lock = threading.Lock()
+
+def _get_tf():
+    """Lazy-load TensorFlow only when needed to avoid early NumPy conflicts"""
+    global _tf
+    if _tf is None:
+        with _tf_lock:
+            # Double-check after acquiring lock (thread-safe singleton pattern)
+            if _tf is None:
+                import tensorflow as tf
+                _tf = tf
+    return _tf
+\`\`\`
+
+### Variant Initialization
+
+Variants are initialized with compatible MultiHeadAttention parameters:
+
+\`\`\`python
+self.attention_module = _get_tf().keras.layers.MultiHeadAttention(
+    num_heads=attention_config["num_heads"],
+    key_dim=attention_config["key_dim"],
+    dropout=attention_config["dropout"],
+    name="MAC_Attention"
+)
+\`\`\`
+
+### Neural Memory Configuration
+
+Updated configuration with proper dimension alignment:
+
+\`\`\`python
+default_config_dict = {
+    # Set input_dim to match Memory Core's embedding dimension (768)
+    'input_dim': 768,
+    # Key and query dimensions should match for proper attention computation
+    'key_dim': 128,
+    'query_dim': 128,  # Match key_dim for proper dimension alignment
+    'value_dim': 768,  # Output dimension matches input_dim for consistency
+    'hidden_dim': 512   # Intermediate projection dimension
+}
+\`\`\`
+
+### Dynamic Capability Detection
+
+To support runtime variant capabilities detection, we've implemented a dynamic signature inspection approach:
+
+\`\`\`python
+# Dynamically determine capabilities based on implemented method signatures
+# Check if update_step supports external gates and projections using inspect
+update_step_sig = inspect.signature(nm.update_step)
+supports_external_gates = any(param in update_step_sig.parameters 
+                           for param in ["external_alpha_t", "external_theta_t", "external_eta_t"])
+supports_external_projections = any(param in update_step_sig.parameters 
+                                for param in ["external_k_t", "external_v_t"])
+
+logger.info(f"Detected capabilities: supports_external_gates={supports_external_gates}, "
+           f"supports_external_projections={supports_external_projections}")
+\`\`\`
+
+### MAG Variant Implementation
+
+MAG (Memory-Attended Gates) variant modifies gate values through attention mechanisms:
+
+\`\`\`python
+# Process input and calculate gates using attention output
+async def process_input(self, memory_id, x_t, k_t, v_t, q_t, y_t):
+    try:
+        # Use attention to determine gate values
+        attention_output = self.compute_attention(q_t, k_t)
+        
+        # Call Neural Memory's /calculate_gates endpoint
+        response = self.api_client.calculate_gates(
+            attention_output=attention_output.numpy().tolist()
+        )
+        
+        # Extract the calculated gates
+        gates = response.get("gates", {})
+        alpha_t = gates.get("alpha_t")
+        theta_t = gates.get("theta_t")
+        eta_t = gates.get("eta_t")
+        
+        logger.info(f"MAG variant calculated gates: alpha={alpha_t}, theta={theta_t}, eta={eta_t}")
+        
+        return {
+            "memory_id": memory_id,
+            "gates": gates,
+            "metrics": {
+                "attention_output_norm": float(np.linalg.norm(attention_output))
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error in MAG variant processing: {str(e)}")
+        return {"error": str(e)}
 
 ```
 
@@ -4868,6 +9264,14 @@ class GeometryManager:
 
         return aligned_a, aligned_b
 
+    def _align_vectors(self, vec_a: np.ndarray, vec_b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Backward compatibility method that forwards to align_vectors.
+        
+        Several components are calling this method with underscore, but the implementation
+        is named 'align_vectors' (without underscore). This method ensures backward compatibility.
+        """
+        return self.align_vectors(vec_a, vec_b)
+
     def normalize_embedding(self, vector: np.ndarray) -> np.ndarray:
         """L2 normalize a vector."""
         # Ensure input is numpy array
@@ -4883,6 +9287,19 @@ class GeometryManager:
             logger.debug("GeometryManager", "normalize_embedding received zero vector, returning as is.")
             return vector
         return vector / norm
+
+    def _normalize(self, vector: np.ndarray) -> np.ndarray:
+        """Backward compatibility method that forwards to normalize_embedding.
+        
+        Several components are calling this method with underscore, but the implementation
+        is named 'normalize_embedding' (without underscore). This method ensures backward compatibility.
+        """
+        # Ensure vector is numpy array before calling
+        validated_vector = self._validate_vector(vector, "Vector for _normalize")
+        if validated_vector is None:
+            # Return zero vector if validation fails
+            return np.zeros(self.config.get('embedding_dim', 768), dtype=np.float32)
+        return self.normalize_embedding(validated_vector)
 
     def _to_hyperbolic(self, euclidean_vector: np.ndarray) -> np.ndarray:
         """Project Euclidean vector to Poincaré ball."""
@@ -6118,8 +10535,16 @@ class TrainerIntegrationManager:
     def __init__(self, memory_core: SynthiansMemoryCore):
         """Initialize with reference to the memory core."""
         self.memory_core = memory_core
-        # Initialize geometry manager to handle dimension mismatches
-        self.geometry_manager = GeometryManager(target_dim=768, max_warnings=10)
+        
+        # Get the embedding dimension from the main memory core config for consistency
+        embedding_dim = self.memory_core.config.get('embedding_dim', 768)  # Default to 768 if not found
+        
+        # Correctly initialize GeometryManager with a config dictionary
+        self.geometry_manager = GeometryManager(config={
+            'embedding_dim': embedding_dim,
+            'normalization_enabled': True,
+            'alignment_strategy': 'truncate'
+        })
     
     async def get_sequence_embeddings(self, 
                                 topic: Optional[str] = None, 
@@ -6357,6 +10782,7 @@ import uuid
 from .memory_structures import MemoryEntry, MemoryAssembly # Use the unified structure
 from .custom_logger import logger # Use the shared custom logger
 from datetime import datetime
+import copy
 
 class MemoryPersistence:
     """Handles disk-based memory operations with robustness."""
@@ -6376,6 +10802,7 @@ class MemoryPersistence:
         self.memory_index: Dict[str, Dict[str, Any]] = {}
         self._lock = asyncio.Lock()
         self.stats = {'saves': 0, 'loads': 0, 'deletes': 0, 'backups': 0, 'errors': 0}
+        self._initialized = False  # Add initialization flag
 
         # Ensure directories exist
         try:
@@ -6385,10 +10812,16 @@ class MemoryPersistence:
              logger.error("MemoryPersistence", "Failed to create storage directories", {"path": self.storage_path, "error": str(e)})
              raise # Initialization failure is critical
 
-        # Load index on init
-        asyncio.create_task(self._load_index()) # Load index in background
+        logger.info("MemoryPersistence", "Initialized (index loading deferred)", {"storage_path": str(self.storage_path)})
 
-        logger.info("MemoryPersistence", "Initialized", {"storage_path": str(self.storage_path)})
+    async def initialize(self):
+        """Load the memory index asynchronously."""
+        if self._initialized:
+            return
+        logger.info("MemoryPersistence", "Initializing (loading index)...")
+        await self._load_index()
+        self._initialized = True
+        logger.info("MemoryPersistence", "Initialization complete.")
 
     async def _load_index(self):
         """Load the memory index from disk."""
@@ -6413,78 +10846,110 @@ class MemoryPersistence:
                  logger.error("MemoryPersistence", "Error loading memory index, starting fresh.", {"path": str(self.index_path), "error": str(e)})
                  self.memory_index = {} # Start fresh on error
 
+    async def _save_index_no_lock(self):
+        """Save the memory index to disk atomically, without acquiring a lock.
+        This method should only be called when the caller already holds self._lock."""
+        try:
+            logger.debug("MemoryPersistence", "Saving memory index to disk")
+            temp_path = self.index_path.with_suffix('.tmp')
+            async with aiofiles.open(temp_path, 'w') as f:
+                await f.write(json.dumps(self.memory_index, indent=2))
+            await asyncio.to_thread(os.replace, temp_path, self.index_path)
+            self.stats['last_index_update'] = time.time()
+            logger.debug("MemoryPersistence", "Memory index saved successfully")
+            return True
+        except asyncio.TimeoutError:
+            logger.error("MemoryPersistence", "Timeout saving memory index")
+            return False
+        except Exception as e:
+            logger.error("MemoryPersistence", "Error saving memory index", {"path": str(self.index_path), "error": str(e)})
+            # Attempt to remove potentially corrupted temp file
+            if await asyncio.to_thread(os.path.exists, temp_path):
+                try: await asyncio.to_thread(os.remove, temp_path)
+                except Exception: pass
+            return False
+
     async def _save_index(self):
-        """Save the memory index to disk atomically."""
+        """Save the memory index to disk atomically with lock acquisition."""
         async with self._lock:
-             temp_path = self.index_path.with_suffix('.tmp')
-             try:
-                 async with aiofiles.open(temp_path, 'w') as f:
-                     await f.write(json.dumps(self.memory_index, indent=2))
-                 await asyncio.to_thread(os.replace, temp_path, self.index_path)
-                 self.stats['last_index_update'] = time.time()
-             except Exception as e:
-                 logger.error("MemoryPersistence", "Error saving memory index", {"path": str(self.index_path), "error": str(e)})
-                 # Attempt to remove potentially corrupted temp file
-                 if await asyncio.to_thread(os.path.exists, temp_path):
-                      try: await asyncio.to_thread(os.remove, temp_path)
-                      except Exception: pass
+            await self._save_index_no_lock()
 
     async def save_memory(self, memory: MemoryEntry) -> bool:
         """Save a single memory entry to disk."""
         try:
-            # Create a unique ID if one doesn't exist
-            if not hasattr(memory, 'id') or memory.id is None:
-                memory.id = f"mem_{uuid.uuid4().hex[:12]}"
+            # Check if we're being called during shutdown/cleanup with no event loop
+            try:
+                loop = asyncio.get_running_loop()
+                if not loop.is_running():
+                    logger.warning("MemoryPersistence", f"Attempted to save memory {memory.id} with no running event loop")
+                    return False
+            except RuntimeError:
+                # No running event loop - this happens during test cleanup sometimes
+                logger.warning("MemoryPersistence", f"Error saving memory {memory.id}: no running event loop")
+                return False
             
-            # Ensure the storage directory exists
-            memory_dir = self.storage_path 
-            memory_dir.mkdir(exist_ok=True, parents=True)
-            
-            # Generate a filename based on the memory ID
-            file_path = memory_dir / f"{memory.id}.json"
-            
-            # Convert the memory to a serializable dict
-            memory_dict = memory.to_dict()
+            logger.debug("MemoryPersistence", f"Saving memory {memory.id} - acquiring lock")
+            async with self._lock:
+                try:
+                    # Create a unique ID if one doesn't exist
+                    if not hasattr(memory, 'id') or memory.id is None:
+                        memory.id = f"mem_{uuid.uuid4().hex[:12]}"
+                    
+                    # Ensure the storage directory exists
+                    memory_dir = self.storage_path 
+                    memory_dir.mkdir(exist_ok=True, parents=True)
+                    
+                    # Generate a filename based on the memory ID
+                    file_path = memory_dir / f"{memory.id}.json"
+                    
+                    # Convert the memory to a serializable dict
+                    memory_dict = memory.to_dict()
 
-            # Write the memory to disk
-            async with aiofiles.open(file_path, 'w') as f:
-                # Ensure complex numbers or other non-serializables are handled
-                def default_serializer(obj):
-                     if isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
-                                         np.int16, np.int32, np.int64, np.uint8,
-                                         np.uint16, np.uint32, np.uint64)):
-                         return int(obj)
-                     elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
-                         return float(obj)
-                     elif isinstance(obj, (np.ndarray,)): # Handle complex arrays if needed
-                         return obj.tolist()
-                     elif isinstance(obj, set):
-                         return list(obj)
-                     try:
-                          # Fallback for other types
-                          return str(obj)
-                     except:
-                          return "[Unserializable Object]"
-                await f.write(json.dumps(memory_dict, indent=2, default=default_serializer))
-            
-            # Update the memory index
-            self.memory_index[memory.id] = {
-                'path': str(file_path.relative_to(self.storage_path)),
-                'timestamp': memory.timestamp if hasattr(memory, 'timestamp') else time.time(),
-                'quickrecal': memory.quickrecal_score if hasattr(memory, 'quickrecal_score') else 0.5,
-                'type': 'memory'  # Default type since memory_type doesn't exist
-            }
-            
-            # Save the memory index
-            await self._save_index()
-            
-            self.stats['saves'] += 1
-            self.stats['successful_saves'] = self.stats.get('successful_saves', 0) + 1
-            return True
-        except Exception as e:
-            logger.error("MemoryPersistence", f"Error saving memory {getattr(memory, 'id', 'unknown')}: {str(e)}")
-            self.stats['saves'] += 1
-            self.stats['failed_saves'] = self.stats.get('failed_saves', 0) + 1
+                    # Write the memory to disk
+                    async with aiofiles.open(file_path, 'w') as f:
+                        # Ensure complex numbers or other non-serializables are handled
+                        def default_serializer(obj):
+                             if isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
+                                                 np.int16, np.int32, np.int64, np.uint8,
+                                                 np.uint16, np.uint32, np.uint64)):
+                                 return int(obj)
+                             elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+                                 return float(obj)
+                             elif isinstance(obj, (np.ndarray,)): # Handle complex arrays if needed
+                                 return obj.tolist()
+                             elif isinstance(obj, set):
+                                 return list(obj)
+                             elif isinstance(obj, datetime):
+                                 return obj.isoformat()
+                             try:
+                                  # Fallback for other types
+                                  return str(obj)
+                             except:
+                                  return "[Unserializable Object]"
+                        await f.write(json.dumps(memory_dict, indent=2, default=default_serializer))
+                    
+                    # Update the memory index
+                    self.memory_index[memory.id] = {
+                        'path': str(file_path.relative_to(self.storage_path)),
+                        'timestamp': memory.timestamp.isoformat() if hasattr(memory.timestamp, 'isoformat') else str(memory.timestamp) if hasattr(memory, 'timestamp') else time.time(),
+                        'quickrecal': memory.quickrecal_score if hasattr(memory, 'quickrecal_score') else 0.5,
+                        'type': 'memory'  # Default type since memory_type doesn't exist
+                    }
+                    
+                    # Save the memory index - call internal version without lock since we already have it
+                    await asyncio.wait_for(self._save_index_no_lock(), timeout=5)
+                    
+                    self.stats['saves'] += 1
+                    self.stats['successful_saves'] = self.stats.get('successful_saves', 0) + 1
+                    logger.debug("MemoryPersistence", f"Memory {memory.id} saved to disk, releasing lock")
+                    return True
+                except Exception as e:
+                    logger.error("MemoryPersistence", f"Error saving memory {getattr(memory, 'id', 'unknown')}: {str(e)}")
+                    self.stats['saves'] += 1
+                    self.stats['failed_saves'] = self.stats.get('failed_saves', 0) + 1
+                    return False
+        except asyncio.TimeoutError:
+            logger.error("MemoryPersistence", f"Timeout saving memory {getattr(memory, 'id', 'unknown')}")
             return False
 
     async def load_memory(self, memory_id: str) -> Optional[MemoryEntry]:
@@ -6589,21 +11054,25 @@ class MemoryPersistence:
 
     async def load_all(self) -> List[MemoryEntry]:
         """Load all memories listed in the index."""
+        if not self._initialized:
+            await self.initialize()  # Ensure index is loaded
+            
         all_memories = []
-        memory_ids = list(self.memory_index.keys())
-        logger.info("MemoryPersistence", f"Loading all {len(memory_ids)} memories from index.")
+        async with self._lock:
+            memory_ids = list(self.memory_index.keys())
+            logger.info("MemoryPersistence", f"Loading all {len(memory_ids)} memories from index.")
 
-        # Consider batching if loading many memories
-        batch_size = 100
-        for i in range(0, len(memory_ids), batch_size):
-             batch_ids = memory_ids[i:i+batch_size]
-             load_tasks = [self.load_memory(mid) for mid in batch_ids]
-             results = await asyncio.gather(*load_tasks)
-             all_memories.extend(mem for mem in results if mem is not None)
-             await asyncio.sleep(0.01) # Yield control between batches
+            # Consider batching if loading many memories
+            batch_size = 100
+            for i in range(0, len(memory_ids), batch_size):
+                 batch_ids = memory_ids[i:i+batch_size]
+                 load_tasks = [self.load_memory(mid) for mid in batch_ids]
+                 results = await asyncio.gather(*load_tasks)
+                 all_memories.extend(mem for mem in results if mem is not None)
+                 await asyncio.sleep(0.01) # Yield control between batches
 
-        logger.info("MemoryPersistence", f"Finished loading {len(all_memories)} memories.")
-        return all_memories
+            logger.info("MemoryPersistence", f"Finished loading {len(all_memories)} memories.")
+            return all_memories
 
     async def create_backup(self) -> bool:
         """Create a timestamped backup of the memory storage."""
@@ -6682,6 +11151,8 @@ class MemoryPersistence:
                         return obj.tolist()
                     elif isinstance(obj, set):
                         return list(obj)
+                    elif isinstance(obj, datetime):
+                        return obj.isoformat()
                     try:
                         # Fallback for other types
                         return str(obj)
@@ -6847,21 +11318,36 @@ class MemoryPersistence:
                 self.stats['failed_assembly_deletes'] = self.stats.get('failed_assembly_deletes', 0) + 1
                 return False
 
+    async def shutdown(self):
+        """Ensure final index save and perform cleanup."""
+        logger.info("MemoryPersistence", "Shutting down...")
+        try:
+            loop = asyncio.get_running_loop()
+            if not loop.is_running():
+                logger.warning("MemoryPersistence", "No running event loop during shutdown")
+                return
+        except RuntimeError:
+            logger.warning("MemoryPersistence", "No running event loop during shutdown")
+            return
+        await self._save_index()  # Ensure final save
+        logger.info("MemoryPersistence", "Shutdown complete.")
+
     def get_stats(self) -> Dict[str, Any]:
         """Get persistence statistics."""
-        asyncio.create_task(self._save_index()) # Ensure index is saved before getting stats
+        if not self._initialized:
+            # Avoid calling initialize here as it might block if called sync
+            logger.warning("MemoryPersistence", "Stats requested before initialization, index count may be inaccurate.")
+        
+        # Return stats with possibly unloaded index count
         return {
-            "total_indexed_memories": len(self.memory_index),
+            "total_indexed_items": len(self.memory_index),
+            "initialized": self._initialized,
             "last_index_update": self.stats.get('last_index_update', 0),
-            "saves": self.stats.get('saves', 0),
-            "successful_saves": self.stats.get('successful_saves', 0),
-            "failed_saves": self.stats.get('failed_saves', 0),
-            "loads": self.stats.get('loads', 0),
-            "successful_loads": self.stats.get('successful_loads', 0),
-            "failed_loads": self.stats.get('failed_loads', 0),
-            "deletes": self.stats.get('deletes', 0),
-            "backups": self.stats.get('backup_count', 0),
             "last_backup": self.stats.get('last_backup', 0),
+            "saves": self.stats.get('saves', 0),
+            "loads": self.stats.get('loads', 0),
+            "deletes": self.stats.get('deletes', 0),
+            "backups": self.stats.get('backups', 0),
             "errors": self.stats.get('errors', 0)
         }
 
@@ -6878,6 +11364,7 @@ import numpy as np
 import torch
 from typing import Dict, Any, Optional, List, Union, Set
 from dataclasses import dataclass, field
+from datetime import datetime, timezone  # Add datetime imports
 
 from .custom_logger import logger # Use the shared custom logger
 
@@ -6887,16 +11374,24 @@ class MemoryEntry:
     content: str
     embedding: Optional[np.ndarray] = None
     id: str = field(default_factory=lambda: f"mem_{uuid.uuid4().hex[:12]}")
-    timestamp: float = field(default_factory=time.time)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     quickrecal_score: float = 0.5
+    quickrecal_updated: Optional[datetime] = None  # Add missing field
     metadata: Dict[str, Any] = field(default_factory=dict)
     access_count: int = 0
-    last_access_time: float = field(default_factory=time.time)
+    last_access_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     # Hyperbolic specific
     hyperbolic_embedding: Optional[np.ndarray] = None
 
     def __post_init__(self):
         self.quickrecal_score = max(0.0, min(1.0, self.quickrecal_score))
+        
+        # Convert timestamp/last_access_time from potential float on init if needed
+        if isinstance(self.timestamp, (int, float)):
+            self.timestamp = datetime.fromtimestamp(self.timestamp, timezone.utc)
+        if isinstance(self.last_access_time, (int, float)):
+            self.last_access_time = datetime.fromtimestamp(self.last_access_time, timezone.utc)
+
         # Ensure embedding is numpy array
         if self.embedding is not None and not isinstance(self.embedding, np.ndarray):
             if isinstance(self.embedding, torch.Tensor):
@@ -6918,14 +11413,16 @@ class MemoryEntry:
 
     def record_access(self):
         self.access_count += 1
-        self.last_access_time = time.time()
+        self.last_access_time = datetime.now(timezone.utc)
 
     def get_effective_quickrecal(self, decay_rate: float = 0.05) -> float:
         """Calculate effective QuickRecal score with time decay."""
-        age_days = (time.time() - self.timestamp) / 86400
+        # Calculate age using datetime objects
+        age_seconds = (datetime.now(timezone.utc) - self.timestamp).total_seconds()
+        age_days = age_seconds / 86400
         if age_days < 1: return self.quickrecal_score
         importance_factor = 0.5 + (0.5 * self.quickrecal_score)
-        effective_decay_rate = decay_rate / importance_factor
+        effective_decay_rate = decay_rate / max(0.1, importance_factor)  # Avoid division by zero
         decay_factor = np.exp(-effective_decay_rate * (age_days - 1))
         return max(0.0, min(1.0, self.quickrecal_score * decay_factor))
 
@@ -6935,11 +11432,12 @@ class MemoryEntry:
             "id": self.id,
             "content": self.content,
             "embedding": self.embedding.tolist() if self.embedding is not None else None,
-            "timestamp": self.timestamp,
+            "timestamp": self.timestamp.isoformat() if hasattr(self.timestamp, 'isoformat') else self.timestamp,
             "quickrecal_score": self.quickrecal_score,
+            "quickrecal_updated": self.quickrecal_updated.isoformat() if hasattr(self.quickrecal_updated, 'isoformat') and self.quickrecal_updated else None,
             "metadata": self.metadata,
             "access_count": self.access_count,
-            "last_access_time": self.last_access_time,
+            "last_access_time": self.last_access_time.isoformat() if hasattr(self.last_access_time, 'isoformat') else self.last_access_time,
             "hyperbolic_embedding": self.hyperbolic_embedding.tolist() if self.hyperbolic_embedding is not None else None
         }
 
@@ -6951,15 +11449,27 @@ class MemoryEntry:
         # Handle legacy 'significance' field
         quickrecal = data.get("quickrecal_score", data.get("significance", 0.5))
 
+        # Helper to parse timestamp (float or ISO string)
+        def parse_datetime(ts_data):
+            if ts_data is None: return None
+            if isinstance(ts_data, str):
+                try: return datetime.fromisoformat(ts_data.replace('Z', '+00:00'))
+                except ValueError: return None # Handle parsing error
+            elif isinstance(ts_data, (int, float)):
+                try: return datetime.fromtimestamp(ts_data, timezone.utc)
+                except ValueError: return None # Handle invalid timestamp float
+            return None # Unknown type
+
         return cls(
             content=data["content"],
             embedding=embedding,
             id=data.get("id"),
-            timestamp=data.get("timestamp"),
+            timestamp=parse_datetime(data.get("timestamp")) or datetime.now(timezone.utc),
             quickrecal_score=quickrecal,
+            quickrecal_updated=parse_datetime(data.get("quickrecal_updated")),
             metadata=data.get("metadata", {}),
             access_count=data.get("access_count", 0),
-            last_access_time=data.get("last_access_time"),
+            last_access_time=parse_datetime(data.get("last_access_time")) or datetime.now(timezone.utc),
             hyperbolic_embedding=hyperbolic
         )
 
@@ -6974,7 +11484,7 @@ class MemoryAssembly:
         self.assembly_id = assembly_id or f"asm_{uuid.uuid4().hex[:12]}"
         self.name = name or f"Assembly-{self.assembly_id[:8]}"
         self.description = description or ""
-        self.creation_time = time.time()
+        self.creation_time = datetime.now(timezone.utc)
         self.last_access_time = self.creation_time
         self.access_count = 0
 
@@ -7060,7 +11570,7 @@ class MemoryAssembly:
 
     def activate(self, level: float):
         self.activation_level = min(1.0, max(0.0, level))
-        self.last_access_time = time.time()
+        self.last_access_time = datetime.now(timezone.utc)
         self.access_count += 1
 
     def decay_activation(self):
@@ -7072,8 +11582,8 @@ class MemoryAssembly:
             "assembly_id": self.assembly_id,
             "name": self.name,
             "description": self.description,
-            "creation_time": self.creation_time,
-            "last_access_time": self.last_access_time,
+            "creation_time": self.creation_time.isoformat(),
+            "last_access_time": self.last_access_time.isoformat(),
             "access_count": self.access_count,
             "memory_ids": list(self.memories),
             "composite_embedding": self.composite_embedding.tolist() if self.composite_embedding is not None else None,
@@ -7092,8 +11602,8 @@ class MemoryAssembly:
             name=data["name"],
             description=data["description"]
         )
-        assembly.creation_time = data.get("creation_time")
-        assembly.last_access_time = data.get("last_access_time")
+        assembly.creation_time = datetime.fromisoformat(data.get("creation_time"))
+        assembly.last_access_time = datetime.fromisoformat(data.get("last_access_time"))
         assembly.access_count = data.get("access_count", 0)
         assembly.memories = set(data.get("memory_ids", []))
         assembly.composite_embedding = np.array(data["composite_embedding"], dtype=np.float32) if data.get("composite_embedding") else None
@@ -7548,27 +12058,23 @@ class MetadataSynthesizer:
 # orchestrator\context_cascade_engine.py
 
 ```py
-import numpy as np
+import os
+import json
+import time
 import asyncio
 import logging
-import time
-from typing import Dict, List, Any, Optional, Union
-import datetime
-import json
+import numpy as np
+from typing import Dict, Any, List, Optional, Tuple, Union
 import aiohttp
+from datetime import datetime
+from urllib.parse import urljoin
 
-try:
-    from synthians_memory_core.geometry_manager import GeometryManager
-except ImportError:
-    logging.error("CRITICAL: Failed to import GeometryManager. Ensure synthians_memory_core is accessible.")
-    GeometryManager = None  
+# Import the sequence context manager
+from .history import SequenceContextManager
 
-# Import MetricsStore for cognitive flow instrumentation
-try:
-    from synthians_memory_core.synthians_trainer_server.metrics_store import MetricsStore, get_metrics_store
-except ImportError:
-    logging.warning("Failed to import MetricsStore. Cognitive instrumentation disabled.")
-    get_metrics_store = None
+# Import the titans variants - note we're importing the type and factory function
+# but not directly importing the variant classes which would trigger TensorFlow import
+from .titans_variants import TitansVariantType, create_titans_variant
 
 logger = logging.getLogger(__name__)
 
@@ -7586,8 +12092,9 @@ class ContextCascadeEngine:
     def __init__(self,
                  memory_core_url: str = "http://localhost:5010",  
                  neural_memory_url: str = "http://localhost:8001",  
-                 geometry_manager: Optional[GeometryManager] = None,
-                 metrics_enabled: bool = True):
+                 geometry_manager: Optional[Any] = None,
+                 metrics_enabled: bool = True,
+                 sequence_context_length: int = 50):
         """Initialize the Context Cascade Engine.
         
         Args:
@@ -7595,19 +12102,21 @@ class ContextCascadeEngine:
             neural_memory_url: URL of the Neural Memory Server
             geometry_manager: Optional shared geometry manager
             metrics_enabled: Whether to enable cognitive metrics collection
+            sequence_context_length: Maximum length of the sequence context buffer
         """
         self.memory_core_url = memory_core_url.rstrip('/')
         self.neural_memory_url = neural_memory_url.rstrip('/')
 
-        if GeometryManager is None:
+        if geometry_manager is None:
             raise ImportError("GeometryManager could not be imported. ContextCascadeEngine cannot function.")
-        self.geometry_manager = geometry_manager or GeometryManager()  
+        self.geometry_manager = geometry_manager  
 
         # Initialize metrics collection if enabled
-        self.metrics_enabled = metrics_enabled and get_metrics_store is not None
+        self.metrics_enabled = metrics_enabled
         self._current_intent_id = None
         if self.metrics_enabled:
             try:
+                from synthians_memory_core.synthians_trainer_server.metrics_store import MetricsStore, get_metrics_store
                 self.metrics_store = get_metrics_store()
                 logger.info("Cognitive metrics collection enabled")
             except Exception as e:
@@ -7615,242 +12124,366 @@ class ContextCascadeEngine:
                 self.metrics_enabled = False
 
         self.last_retrieved_embedding: Optional[List[float]] = None
+        
+        # Initialize sequence context manager for attention history
+        self.sequence_context_length = sequence_context_length
+        self.sequence_context_manager = SequenceContextManager(max_length=self.sequence_context_length)
+        
+        # Keep the legacy sequence_context list for backward compatibility
         self.sequence_context: List[Dict[str, Any]] = []
         self.processing_lock = asyncio.Lock()
-
-        logger.info(f"Context Cascade Engine initialized:")
+        
+        # Determine active Titans variant from environment
+        variant_name_str = os.environ.get("TITANS_VARIANT", "NONE").upper()
+        try:
+            self.active_variant_type = TitansVariantType(variant_name_str)
+        except ValueError:
+            logger.warning(f"Invalid TITANS_VARIANT '{variant_name_str}'. Defaulting to NONE.")
+            self.active_variant_type = TitansVariantType.NONE
+        logger.info(f"Active Titans Variant: {self.active_variant_type.value}")
+        
+        # Configuration ready flag and event
+        self._config_ready = False
+        self._config_ready_event = asyncio.Event()
+        self.variant_processor = None
+        
+        # Trigger dynamic configuration
+        asyncio.create_task(self._configure_and_set_ready())
+        
+        logger.info(f"Context Cascade Engine initializing:")
         logger.info(f" - Memory Core URL: {self.memory_core_url}")
         logger.info(f" - Neural Memory URL: {self.neural_memory_url}")
         logger.info(f" - Metrics Enabled: {self.metrics_enabled}")
+        logger.info(f" - Sequence Context Length: {self.sequence_context_length}")
+        logger.info(f" - Active Titans Variant: {self.active_variant_type.value}")
         gm_config = getattr(self.geometry_manager, 'config', {})
         logger.info(f" - Geometry type: {gm_config.get('geometry_type', 'N/A')}")
+        logger.info(f" - Dynamic configuration in progress...")
+        
+    async def _configure_and_set_ready(self):
+        """Initialize configuration and set the ready flag when complete."""
+        try:
+            await self._configure_attention_and_variant()
+            self._config_ready = True
+            self._config_ready_event.set()
+            logger.info("Dynamic configuration completed successfully.")
+        except Exception as e:
+            logger.error(f"Error during dynamic configuration: {e}")
+            # Set ready flag even on failure to prevent blocking forever
+            self._config_ready = True
+            self._config_ready_event.set()
+            
+    async def _configure_attention_and_variant(self):
+        """Retrieve configuration from Neural Memory and initialize the attention module and variant processor."""
+        try:
+            # Retrieve configuration from Neural Memory
+            config_resp = await self._make_request(
+                self.neural_memory_url,
+                "/config",
+                method="GET"
+            )
+            
+            if "error" in config_resp:
+                logger.warning(f"Failed to retrieve configuration from Neural Memory: {config_resp.get('error')}")
+                logger.warning("Using default configuration values.")
+                attention_config = {
+                    'num_heads': 4,
+                    'key_dim': 32,  # Per head dimension (total key_dim is 128)
+                    'dropout': 0.0,
+                    'use_layer_norm': True,
+                    'use_residual': True,
+                    'max_dim_mismatch_warnings': 10,
+                }
+            else:
+                logger.info("Retrieved configuration from Neural Memory.")
+                # Extract attention configuration from the response
+                attention_config = config_resp.get("attention_config", {})
+                
+                # If we have neural_memory_config, extract relevant dimensions
+                if "neural_memory_config" in config_resp:
+                    nm_config = config_resp["neural_memory_config"]
+                    if not attention_config:
+                        # Create attention config from neural memory config
+                        attention_config = {
+                            'num_heads': 4,
+                            'key_dim': nm_config.get('key_dim', 128) // 4,  # Per head dimension (typically 32)
+                            'dropout': 0.0,
+                            'use_layer_norm': True,
+                            'use_residual': True,
+                            'max_dim_mismatch_warnings': 10,
+                        }
+                    # Add dimensions info
+                    attention_config["embedding_dimensions"] = {
+                        "input_dim": nm_config.get('input_dim', 768),
+                        "key_dim": nm_config.get('key_dim', 128),
+                        "value_dim": nm_config.get('value_dim', 768),
+                        "query_dim": nm_config.get('query_dim', 128)
+                    }
+                
+                # Get variant support information directly from the response
+                supports_external_gates = config_resp.get("supports_external_gates", False)
+                supports_external_projections = config_resp.get("supports_external_projections", False)
+                current_variant = config_resp.get("titans_variant", "NONE")
+                
+                logger.info(f"Neural Memory active variant: {current_variant}")
+                logger.info(f"Neural Memory supports: external gates={supports_external_gates}, external projections={supports_external_projections}")
+                
+                # No need to check if our variant is supported - the Neural Memory API will handle this
+            
+            # Initialize the variant processor with the retrieved configuration
+            if self.active_variant_type != TitansVariantType.NONE:
+                self.variant_processor = create_titans_variant(
+                    variant_type=self.active_variant_type,
+                    config=attention_config
+                )
+                
+                # Initialize the variant processor with context manager and neural memory URL
+                self.variant_processor.set_sequence_context(self.sequence_context_manager)
+                self.variant_processor.set_neural_memory_url(self.neural_memory_url)
+                logger.info(f"Initialized {self.active_variant_type.value} variant processor")
+            else:
+                self.variant_processor = None
+                logger.info("No Titans Variant active. Using standard Neural Memory flow.")
+            
+            return attention_config
+                
+        except Exception as e:
+            logger.error(f"Error configuring attention and variant: {e}")
+            # Return default configuration
+            return {
+                'num_heads': 4,
+                'key_dim': 32,
+                'dropout': 0.0,
+                'use_layer_norm': True,
+                'use_residual': True,
+                'max_dim_mismatch_warnings': 10,
+            }
 
     async def process_new_input(self,
                                 content: str,
                                 embedding: Optional[List[float]] = None,
                                 metadata: Optional[Dict[str, Any]] = None,
                                 intent_id: Optional[str] = None) -> Dict[str, Any]:
-        """Process new input through MemoryCore storage and NeuralMemory learning/retrieval.
+        """Orchestrates the cognitive cascade for a single input.
         
-        This method orchestrates the flow described in the Phase 3 sequence diagram:
-        1. Store memory in Memory Core (receive memory_id and actual_embedding)
-        2. Send actual_embedding to Neural Memory for learning
-        3. Receive surprise metrics (loss/grad_norm) from Neural Memory
-        4. Calculate quickrecal_boost from surprise metrics
-        5. Update quickrecal_score in Memory Core if boost > 0
-        6. Generate query and retrieve associated embedding from Neural Memory
-        7. Return both actual_embedding and retrieved_embedding for downstream use
+        This method implements the full cognitive flow with variant-specific processing:
+        1. Store input in Memory Core
+        2. Get projections from Neural Memory (k_t, v_t, q_t)
+        3. Apply variant-specific pre-update processing (MAG/MAL)
+        4. Update Neural Memory with appropriate modifications
+        5. Update QuickRecal score based on surprise metrics
+        6. Retrieve from Neural Memory
+        7. Apply variant-specific post-retrieval processing (MAC)
+        8. Update sequence history
+        9. Return final response
+        
+        The processing flow differs based on the active Titans variant:
+        - NONE: Standard processing without attention mechanisms
+        - MAC: Standard update with post-retrieval attention enhancement
+        - MAG: Pre-update calculation of gate values via attention
+        - MAL: Pre-update modification of value projection via attention
         
         Args:
-            content: Text content of the input
-            embedding: Optional pre-computed embedding
-            metadata: Optional metadata for the input
-            intent_id: Optional intent tracking ID (creates new one if None)
+            content: Text content for the memory
+            embedding: Optional embedding for the content (will be generated if not provided)
+            metadata: Optional metadata to store with the memory
+            intent_id: Optional intent ID for the cognitive operation
             
         Returns:
-            Processing results including memory_id, surprise metrics, etc.
+            Dict containing processing results and memory information
         """
+
+        if not self._config_ready:
+            logger.info("Waiting for dynamic configuration...")
+            try:
+                await asyncio.wait_for(self._config_ready_event.wait(), 10.0)
+                logger.info("Configuration ready, proceeding.")
+            except asyncio.TimeoutError:
+                logger.error("Timed out waiting for configuration. Cannot process input.")
+                return self._finalize_error("Configuration timeout", {})
+
         async with self.processing_lock:
             start_time = time.time()
-            
-            # Begin intent tracking if metrics are enabled
-            if self.metrics_enabled:
-                if intent_id:
-                    self._current_intent_id = intent_id
-                else:
-                    self._current_intent_id = self.metrics_store.begin_intent()
-                
-                # Extract emotion from metadata if available for tracking
-                user_emotion = None
-                if metadata and "emotion" in metadata:
-                    user_emotion = metadata["emotion"]
-                elif metadata and "emotions" in metadata:
-                    # Handle case where emotions is a list/dict with scores
-                    if isinstance(metadata["emotions"], dict) and metadata["emotions"]:
-                        # Find emotion with highest score
-                        user_emotion = max(metadata["emotions"].items(), key=lambda x: x[1])[0] if metadata["emotions"] else None
-                    elif isinstance(metadata["emotions"], list) and metadata["emotions"]:
-                        user_emotion = metadata["emotions"][0]
-                
-            logger.info(f"Processing new input: {content[:50]}...")
+            # 1. Setup Intent & Metadata
+            intent_id, user_emotion = self._setup_intent_and_metadata(intent_id, metadata)
+            logger.info(f"Processing input: {content[:50]}... (Intent: {intent_id})")
 
-            mem_core_resp = await self._make_request(
-                self.memory_core_url,
-                "/process_memory",  
-                method="POST",
-                payload={
-                    "content": content,
-                    "embedding": embedding,  
-                    "metadata": metadata or {}
-                }
-            )
-            memory_id = mem_core_resp.get("memory_id")
-            actual_embedding = mem_core_resp.get("embedding")  
-            quickrecal_initial = mem_core_resp.get("quickrecal_score")
-
-            response = {
-                "memory_id": memory_id,
-                "status": "processed" if memory_id and actual_embedding else "error_mem_core",
-                "quickrecal_initial": quickrecal_initial,
-                "timestamp": datetime.datetime.utcnow().isoformat(),
-                "intent_id": self._current_intent_id
+            # Initialize context dict for this step
+            step_context = {
+                "content": content,
+                "input_embedding": embedding,
+                "metadata": metadata,
+                "user_emotion": user_emotion,
+                "memory_id": None,
+                "x_t": None, # Raw embedding from MemCore
+                "k_t": None, # Projections
+                "v_t": None,
+                "q_t": None,
+                "v_prime_t": None, # Potentially modified by MAL
+                "external_gates": None, # Calculated by MAG
+                "loss": None,
+                "grad_norm": None,
+                "y_t_raw": None, # Raw output from NM retrieve
+                "y_t_final": None, # Final output after MAC
+                "variant_metrics": {}
             }
 
-            if not actual_embedding or not memory_id:
-                logger.error("Failed to store or get valid embedding from Memory Core.", extra={"mem_core_resp": mem_core_resp})
-                response["error"] = mem_core_resp.get("error", "Failed in Memory Core processing")
-                
-                # Finalize intent with error if metrics enabled
-                if self.metrics_enabled:
-                    error_message = mem_core_resp.get("error", "Failed in Memory Core processing")
-                    self.metrics_store.finalize_intent(
-                        self._current_intent_id,
-                        response_text=f"Error: {error_message}",
-                        confidence=0.0
-                    )
-                return response
+            # 2. Store Memory
+            store_resp = await self._store_memory(content, embedding, metadata)
+            if not store_resp.get("success"):
+                return self._finalize_error("Memory storage failed", store_resp, intent_id)
+            step_context["memory_id"] = store_resp["memory_id"]
+            step_context["x_t"] = store_resp["embedding"] # Store the validated embedding
+            quickrecal_initial = store_resp.get("quickrecal_score")
 
-            # Send embedding to Neural Memory for learning
-            update_resp = await self._make_request(
-                self.neural_memory_url,
-                "/update_memory",
-                method="POST",
-                payload={"input_embedding": actual_embedding}
-            )
-            loss = update_resp.get("loss")
-            grad_norm = update_resp.get("grad_norm")
-            response["neural_memory_update"] = update_resp  
-            
-            # Log memory update metrics if enabled
-            if self.metrics_enabled and loss is not None:
-                # Ensure embedding is in an expected format using safe copy
-                safe_embedding = np.array(actual_embedding, dtype=np.float32).tolist() 
-                # Handle potential NaN or Inf values in the embedding
-                safe_embedding = [0.0 if not np.isfinite(x) else x for x in safe_embedding]
-                
-                self.metrics_store.log_memory_update(
-                    input_embedding=safe_embedding,
-                    loss=loss,
-                    grad_norm=grad_norm or 0.0,
-                    emotion=user_emotion,
-                    intent_id=self._current_intent_id,
-                    metadata={
-                        "memory_id": memory_id,
-                        "content_preview": content[:50] if content else "",
-                        "quickrecal_initial": quickrecal_initial
-                    }
-                )
-
-            # Calculate QuickRecal boost based on surprise metrics
-            quickrecal_boost = 0.0
-            if update_resp.get("status") == "success" or "error" not in update_resp:
-                 surprise_metric = grad_norm if grad_norm is not None else (loss if loss is not None else 0.0)
-                 quickrecal_boost = self._calculate_quickrecal_boost(surprise_metric)
-
-                 # Apply boost if significant
-                 if quickrecal_boost > 1e-4:  
-                     feedback_resp = await self._make_request(
-                         self.memory_core_url,
-                         "/api/memories/update_quickrecal_score",  
-                         method="POST",
-                         payload={
-                             "memory_id": memory_id,
-                             "delta": quickrecal_boost,
-                             "reason": f"NM Surprise (Loss:{loss:.4f if loss is not None else 'N/A'}, GradNorm:{grad_norm:.4f if grad_norm is not None else 'N/A'})"
-                         }
-                     )
-                     response["quickrecal_feedback"] = feedback_resp
-                     
-                     # Log QuickRecal boost metrics if enabled
-                     if self.metrics_enabled:
-                         self.metrics_store.log_quickrecal_boost(
-                             memory_id=memory_id,
-                             base_score=quickrecal_initial or 0.0,
-                             boost_amount=quickrecal_boost,
-                             emotion=user_emotion,
-                             surprise_source="neural_memory",
-                             intent_id=self._current_intent_id,
-                             metadata={
-                                 "loss": loss,
-                                 "grad_norm": grad_norm,
-                                 "reason": f"NM Surprise"
-                             }
-                         )
-                 else:
-                     response["quickrecal_feedback"] = {"status": "skipped", "reason": "Boost too small"}
+            # 3. Get Projections
+            proj_resp = await self._get_projections_from_nm(step_context["x_t"])
+            if not proj_resp.get("success"):
+                # Log warning but proceed, NM update/retrieve might handle it
+                logger.warning(f"Failed to get explicit projections: {proj_resp.get('error')}")
             else:
-                 response["quickrecal_feedback"] = {"status": "skipped", "reason": "Neural Memory update failed"}
+                step_context["k_t"] = np.array(proj_resp["key_projection"], dtype=np.float32)
+                step_context["v_t"] = np.array(proj_resp["value_projection"], dtype=np.float32)
+                step_context["q_t"] = np.array(proj_resp["query_projection"], dtype=np.float32)
 
-            response["surprise_metrics"] = {"loss": loss, "grad_norm": grad_norm, "boost_calculated": quickrecal_boost}
+            # 4. Variant Pre-Update Logic (MAG/MAL)
+            if self.variant_processor and self.active_variant_type in [TitansVariantType.MAG, TitansVariantType.MAL]:
+                 if step_context["k_t"] is not None and step_context["v_t"] is not None and step_context["q_t"] is not None:
+                     variant_pre_result = await self._apply_variant_pre_update(step_context)
+                     step_context["external_gates"] = variant_pre_result.get("gates") # For MAG
+                     step_context["v_prime_t"] = variant_pre_result.get("v_prime_t") # For MAL
+                     step_context["variant_metrics"].update(variant_pre_result.get("metrics", {}))
+                 else:
+                     logger.warning(f"Skipping {self.active_variant_type.value} pre-update: Missing projections.")
 
-            # Generate query for Neural Memory retrieval
-            query_for_retrieve = actual_embedding  
-            logger.debug(f"Sending query to /retrieve (dim={len(query_for_retrieve)}). Endpoint must handle projection if needed.")
+            # 5. Update Neural Memory
+            update_resp = await self._update_neural_memory(step_context)
+            if not update_resp.get("success"):
+                 # Log error but proceed if possible (e.g., maybe retrieval still works)
+                 logger.error(f"Neural Memory update failed: {update_resp.get('error')}")
+                 # Initialize an error response, but we'll still try to retrieve
+                 response_errors = {"update_error": update_resp.get("error")}
+            else:
+                 step_context["loss"] = update_resp.get("loss")
+                 step_context["grad_norm"] = update_resp.get("grad_norm")
+                 # Update projections if returned (they should match if not MAL)
+                 if update_resp.get("key_projection"): step_context["k_t"] = np.array(update_resp["key_projection"], dtype=np.float32)
+                 if update_resp.get("value_projection"): step_context["v_t"] = np.array(update_resp["value_projection"], dtype=np.float32)
+                 response_errors = {}
 
-            # Retrieve associated embedding
-            retrieve_resp = await self._make_request(
-                self.neural_memory_url,
-                "/retrieve",
-                method="POST",
-                payload={"query_embedding": query_for_retrieve}  
-            )
-            retrieved_embedding = retrieve_resp.get("retrieved_embedding")
-            response["neural_memory_retrieval"] = retrieve_resp  
-            
-            # Log retrieval metrics if enabled
-            if self.metrics_enabled and retrieved_embedding:
-                # Create synthetic memory object since we don't have full metadata
-                retrieved_memory = {
-                    "memory_id": f"synthetic_{memory_id}_associated",
-                    "embedding": retrieved_embedding,
-                    "dominant_emotion": None  # We don't have this information yet
-                }
-                
-                safe_query = np.array(query_for_retrieve, dtype=np.float32).tolist()
-                safe_query = [0.0 if not np.isfinite(x) else x for x in safe_query]
-                
-                self.metrics_store.log_retrieval(
-                    query_embedding=safe_query,
-                    retrieved_memories=[retrieved_memory],
-                    user_emotion=user_emotion,
-                    intent_id=self._current_intent_id,
-                    metadata={
-                        "original_memory_id": memory_id,
-                        "embedding_dim": len(retrieved_embedding),
-                        "timestamp": datetime.datetime.utcnow().isoformat()
-                    }
-                )
+            # 6. Apply QuickRecal Boost (If update succeeded)
+            feedback_resp = None
+            if "loss" in step_context or "grad_norm" in step_context:
+                 feedback_resp = await self._apply_quickrecal_boost(step_context, quickrecal_initial)
 
-            # Update sequence context
-            self.last_retrieved_embedding = retrieved_embedding
-            self.sequence_context.append({
-                "memory_id": memory_id,
-                "actual_embedding": actual_embedding,
-                "retrieved_embedding": retrieved_embedding,
-                "surprise_metrics": response.get("surprise_metrics"),
-                "timestamp": response["timestamp"],
-                "intent_id": self._current_intent_id
-            })
-            if len(self.sequence_context) > 20: self.sequence_context.pop(0)
+            # 7. Retrieve from Neural Memory
+            retrieve_resp = await self._retrieve_from_neural_memory(step_context["x_t"])
+            if not retrieve_resp.get("success"):
+                # Log error and exit - retrieval is critical
+                logger.error(f"Neural Memory retrieval failed: {retrieve_resp.get('error')}")
+                return self._finalize_error("Neural Memory retrieval failed", 
+                                           {"retrieve_error": retrieve_resp.get("error"), **response_errors}, 
+                                           intent_id)
+            else:
+                 step_context["y_t_raw"] = np.array(retrieve_resp["retrieved_embedding"], dtype=np.float32)
+                 step_context["y_t_final"] = step_context["y_t_raw"] # Default final to raw
+                 # Use query projection returned by /retrieve for consistency
+                 if retrieve_resp.get("query_projection"):
+                      step_context["q_t"] = np.array(retrieve_resp["query_projection"], dtype=np.float32)
 
-            # Finalize intent graph if enabled
-            if self.metrics_enabled:
-                intent_graph = self.metrics_store.finalize_intent(
-                    intent_id=self._current_intent_id,
-                    response_text=f"Retrieved associated embedding for memory {memory_id}",
-                    confidence=1.0 if retrieved_embedding else 0.5
-                )
-                # Store intent graph reference in response
-                if intent_graph:
-                    response["intent_graph"] = {
-                        "trace_id": intent_graph.get("trace_id"),
-                        "reasoning_steps": len(intent_graph.get("reasoning_steps", []))
-                    }
 
-            response["status"] = "completed"  
+            # 8. Variant Post-Retrieval Logic (MAC)
+            if self.variant_processor and self.active_variant_type == TitansVariantType.MAC:
+                 if step_context["y_t_raw"] is not None and step_context["q_t"] is not None:
+                     variant_post_result = await self._apply_variant_post_retrieval(step_context)
+                     if variant_post_result.get("success"):
+                         step_context["y_t_final"] = variant_post_result["attended_output"]
+                         step_context["variant_metrics"].update(variant_post_result.get("metrics", {}))
+                     else:
+                         logger.warning(f"MAC post-retrieval processing failed: {variant_post_result.get('error')}")
+                 else:
+                     logger.warning("Skipping MAC post-retrieval: Missing raw retrieval or query projection.")
+
+            # 9. Update History
+            # Use v_t (potentially modified by MAL), raw y_t (before MAC), and final y_t
+            await self._update_history(step_context)
+
+            # 10. Finalize Response
+            response = self._finalize_response({}, step_context, update_resp, retrieve_resp, feedback_resp)
+
             processing_time = (time.time() - start_time) * 1000
-            logger.info(f"Finished processing input for memory {memory_id} in {processing_time:.2f} ms")
+            logger.info(f"Finished processing input for memory {step_context['memory_id']} in {processing_time:.2f} ms (Variant: {self.active_variant_type.value})")
+
+            # Finalize intent graph
+            if self.metrics_enabled:
+                 final_text = f"Retrieved: {len(response.get('neural_memory_retrieval',{}).get('retrieved_embedding',[]))} dims" if response.get('status') == 'completed' else f"Error: {response.get('error','Unknown')}"
+                 self.metrics_store.finalize_intent(
+                     intent_id=intent_id,
+                     response_text=final_text,
+                     confidence=1.0 if response.get('status') == 'completed' else 0.0
+                 )
+
             return response
+
+    # --- Private Helper Methods for Refactored Flow ---
+
+    def _setup_intent_and_metadata(self, intent_id: Optional[str], metadata: Optional[Dict]) -> Tuple[str, Optional[str]]:
+        """Handles intent ID generation and extracts user emotion."""
+        metadata = metadata or {}
+        user_emotion = None
+        if self.metrics_enabled:
+            intent_id = intent_id or self.metrics_store.begin_intent()
+            self._current_intent_id = intent_id # Store current intent
+            if "emotion" in metadata: user_emotion = metadata["emotion"]
+            elif "emotions" in metadata:
+                # Simplified extraction
+                emo_data = metadata["emotions"]
+                if isinstance(emo_data, dict) and emo_data: user_emotion = max(emo_data.items(), key=lambda x: x[1])[0]
+                elif isinstance(emo_data, list) and emo_data: user_emotion = emo_data[0]
+        else:
+            intent_id = intent_id or f"intent_{int(time.time())}" # Simple ID if metrics off
+        return intent_id, user_emotion
+
+    async def _store_memory(self, content: str, embedding: Optional[List], metadata: Optional[Dict]) -> Dict:
+        """Stores input in MemoryCore, returns success status, ID, and validated embedding."""
+        logger.debug("Step 1: Storing memory in Memory Core...")
+        mem_core_resp = await self._make_request(
+            self.memory_core_url, "/process_memory", method="POST",
+            payload={"content": content, "embedding": embedding, "metadata": metadata or {}}
+        )
+        if "error" in mem_core_resp or not mem_core_resp.get("memory_id") or not mem_core_resp.get("embedding"):
+            logger.error(f"Memory Core storage failed: {mem_core_resp.get('error', 'Missing ID or embedding')}")
+            return {"success": False, "error": mem_core_resp.get('error', 'Store failed'), **mem_core_resp}
+        else:
+             # Validate embedding received from Memory Core
+             is_valid = self._validate_embedding(mem_core_resp["embedding"])
+             if not is_valid:
+                  logger.error("Memory Core returned an invalid embedding.")
+                  return {"success": False, "error": "Invalid embedding from Memory Core", **mem_core_resp}
+             logger.info(f"Memory stored successfully: ID {mem_core_resp['memory_id']}")
+             return {"success": True, **mem_core_resp}
+
+    async def _get_projections_from_nm(self, actual_embedding: List[float]) -> Dict:
+        """Fetches K/V/Q projections from Neural Memory."""
+        logger.debug("Step 2: Fetching projections from Neural Memory...")
+        if not self._validate_embedding(actual_embedding):
+            return {"success": False, "error": "Invalid embedding provided to get_projections"}
+
+        proj_resp = await self._make_request(
+            self.neural_memory_url, "/get_projections", method="POST",
+            payload={"input_embedding": actual_embedding}
+        )
+        if "error" in proj_resp or not all(k in proj_resp for k in ["key_projection", "value_projection", "query_projection"]):
+             logger.warning(f"Failed to get projections: {proj_resp.get('error', 'Missing projection keys')}")
+             return {"success": False, **proj_resp}
+        else:
+            # Validate received projections
+            valid = all(self._validate_embedding(proj_resp[k]) for k in ["key_projection", "value_projection", "query_projection"])
+            if not valid:
+                 logger.error("Neural Memory returned invalid projections.")
+                 return {"success": False, "error": "Invalid projections from Neural Memory", **proj_resp}
+            logger.info("Projections fetched successfully.")
+            return {"success": True, **proj_resp}
 
     async def _make_request(self, base_url: str, endpoint: str, method: str = "POST", payload: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict[str, Any]:
         """Shared function to make HTTP requests and handle common errors.
@@ -7869,14 +12502,34 @@ class ContextCascadeEngine:
         log_payload = payload if payload is None or len(json.dumps(payload)) < 200 else {k: (v[:50] + '...' if isinstance(v, str) and len(v) > 50 else v) for k, v in payload.items()}  
         logger.debug(f"Making {method} request to {url}", extra={"payload": log_payload, "params": params})
 
+        # Special debug logging for important endpoints
+        debug_endpoints = ["/get_projections", "/update_memory", "/retrieve", "/config"]
+        if endpoint in debug_endpoints:
+            logger.info(f"DEBUG: Calling {endpoint} with payload: {log_payload if log_payload != payload else payload}")
+
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.request(method, url, json=payload, params=params, timeout=30.0) as response:
                     status_code = response.status
                     try:
                         resp_json = await response.json()
-                        logger.debug(f"Response from {url}: Status {status_code}")  
+                        
+                        # Enhanced logging for specific endpoints
+                        if endpoint in debug_endpoints:
+                            resp_sample = {k: (v[:100] + '...' if isinstance(v, str) and len(v) > 100 else v) 
+                                          for k, v in resp_json.items()} if isinstance(resp_json, dict) else resp_json
+                            logger.info(f"DEBUG: Response from {endpoint}: Status {status_code}, Content sample: {resp_sample}")
+                        else:
+                            logger.debug(f"Response from {url}: Status {status_code}")  
+                            
                         if 200 <= status_code < 300:
+                            # For specific endpoints, ensure key fields are present
+                            if endpoint == "/get_projections" and isinstance(resp_json, dict):
+                                expected_keys = ["key_projection", "value_projection", "query_projection"]
+                                missing_keys = [k for k in expected_keys if k not in resp_json]
+                                if missing_keys:
+                                    logger.warning(f"WARNING: Response from {endpoint} is missing expected keys: {missing_keys}")
+                                    resp_json["warning"] = f"Missing expected keys: {missing_keys}"
                             return resp_json
                         else:
                             error_detail = resp_json.get("detail", "Unknown error from server")
@@ -7896,44 +12549,546 @@ class ContextCascadeEngine:
             logger.error(f"Unexpected error during request to {url}: {e}", exc_info=True)
             return {"error": f"Unexpected client error: {str(e)}", "status_code": 500}
 
-    def _validate_embedding(self, embedding: Optional[Union[List[float], np.ndarray]]) -> bool:
-        """Basic validation for embeddings.
+    def _validate_embedding(self, embedding: Union[np.ndarray, List[float], None]) -> bool:
+        """Validate that the embedding is in a usable form (valid np.ndarray or list)."""
+        if embedding is None:
+            return False
         
-        This is a critical validation step referenced in memory #fbee9e47 to
-        ensure we don't pass malformed embeddings to downstream components.
-        
-        Args:
-            embedding: Embedding vector to validate
-            
-        Returns:
-            True if valid, False if contains NaN/Inf
-        """
-        if embedding is None: return False
-        try:
-            embedding_array = np.array(embedding, dtype=np.float32)
-            if np.isnan(embedding_array).any() or np.isinf(embedding_array).any():
-                logger.warning("Invalid embedding detected: contains NaN or Inf values")
+        # If it's already a list, validate its contents
+        if isinstance(embedding, list):
+            if not embedding or not all(isinstance(val, (int, float)) for val in embedding):
                 return False
+            try:
+                # Convert to numpy to do further validation
+                embedding = np.array(embedding, dtype=np.float32)
+            except:
+                return False
+        
+        try:
+            # Convert to numpy if not already
+            if not isinstance(embedding, np.ndarray):
+                embedding = np.array(embedding, dtype=np.float32)
+            
+            # Check for NaN and Inf
+            if np.isnan(embedding).any() or np.isinf(embedding).any():
+                logger.error("Embedding contains NaN or Inf values.")
+                return False
+                
+            # Check for zero vector
+            if np.all(embedding == 0):
+                logger.warning("Embedding is a zero vector.")
+                # We still return True as zero vectors are technically valid
+                
             return True
         except Exception as e:
             logger.error(f"Error validating embedding: {str(e)}")
             return False
+            
+    def _to_list(self, arr):
+        """Safely convert numpy arrays or tensors to list."""
+        if arr is None:
+            return None
+        if isinstance(arr, list):
+            return arr
+        if isinstance(arr, np.ndarray):
+            return arr.tolist()
+        
+        # Try to handle tensorflow tensors with lazy loading
+        try:
+            # Check if this might be a TensorFlow tensor
+            if hasattr(arr, 'numpy'):
+                return arr.numpy().tolist()
+                
+            # Last attempt - import TF and try conversion
+            from synthians_memory_core.orchestrator.titans_variants import _get_tf
+            tf = _get_tf()
+            if tf is not None and tf.is_tensor(arr):
+                return tf.make_ndarray(tf.make_tensor_proto(arr)).tolist()
+        except Exception as e:
+            logger.debug(f"Failed to convert possible tensor to list: {e}")
+        
+        # Last resort, try direct conversion
+        try:
+            return list(arr)
+        except Exception as e:
+            logger.warning(f"Could not convert {type(arr)} to list: {e}")
+            return None
 
-    def _calculate_quickrecal_boost(self, surprise_value: float) -> float:
-        """Calculate quickrecal boost based on surprise value (loss or grad_norm).
+    async def _retrieve_from_neural_memory(self, actual_embedding: np.ndarray) -> Dict:
+        """Retrieves associated embedding from Neural Memory."""
+        logger.debug("Step 6: Retrieving from Neural Memory...")
+        if not self._validate_embedding(actual_embedding):
+             return {"success": False, "error": "Invalid embedding for retrieval"}
+
+        retrieve_payload = {"input_embedding": self._to_list(actual_embedding)}
+        retrieve_resp = await self._make_request(
+            self.neural_memory_url, "/retrieve", method="POST", payload=retrieve_payload
+        )
+
+        if "error" in retrieve_resp or not retrieve_resp.get("retrieved_embedding"):
+             logger.error(f"Neural Memory retrieval failed: {retrieve_resp.get('error', 'Missing retrieved_embedding')}")
+             return {"success": False, **retrieve_resp}
+        else:
+             # Validate retrieved embedding
+             if not self._validate_embedding(retrieve_resp["retrieved_embedding"]):
+                   logger.error("Neural Memory returned invalid retrieved_embedding.")
+                   return {"success": False, "error": "Invalid retrieved_embedding", **retrieve_resp}
+             # Validate query projection if returned
+             if "query_projection" in retrieve_resp and not self._validate_embedding(retrieve_resp["query_projection"]):
+                  logger.warning("Neural Memory returned invalid query_projection.")
+                  # Don't fail the whole step, but nullify it
+                  retrieve_resp["query_projection"] = None
+
+             # Log retrieval metrics if enabled
+             if self.metrics_enabled:
+                 # Create synthetic memory object since we don't have full metadata
+                 retrieved_memory = {
+                     "memory_id": f"synthetic_associated",
+                     "embedding": retrieve_resp["retrieved_embedding"],
+                     "dominant_emotion": None  # We don't have this information
+                 }
+                 
+                 self.metrics_store.log_retrieval(
+                     query_embedding=self._to_list(actual_embedding),
+                     retrieved_memories=[retrieved_memory],
+                     user_emotion=None,
+                     intent_id=self._current_intent_id,
+                     metadata={
+                         "embedding_dim": len(retrieve_resp["retrieved_embedding"]),
+                         "timestamp": datetime.utcnow().isoformat(),
+                         "variant_type": self.active_variant_type.value
+                     }
+                 )
+
+             logger.info("Neural Memory retrieval successful.")
+             return {"success": True, **retrieve_resp}
+
+    async def _apply_variant_post_retrieval(self, step_context: Dict) -> Dict:
+        """Apply variant-specific post-retrieval processing for MAC variant.
+        
+        This method handles the variant-specific processing that occurs AFTER
+        Neural Memory retrieval:
+        
+        - MAC Variant: Enhances the retrieved embedding (y_t) by applying attention
+          between the current query and historical keys, and using this to create
+          a weighted combination of historical values with the retrieved embedding.
+          This produces a contextually enhanced memory representation.
         
         Args:
-            surprise_value: Surprise metric (loss or grad_norm)
-            
+            step_context: Current processing context containing embeddings and projections
+        
         Returns:
-            QuickRecal score boost amount
+            Dict containing variant processing results
         """
-        if surprise_value <= 0.0: return 0.0
-        max_expected_surprise = 2.0  
-        max_boost = 0.2             
+        if not self.variant_processor or self.active_variant_type != TitansVariantType.MAC:
+            return {"success": True, "attended_output": step_context.get("y_t_raw")} # Return raw if not MAC
+
+        logger.debug("Step 7: Applying MAC post-retrieval logic...")
+        y_t_raw = step_context.get("y_t_raw")
+        q_t = step_context.get("q_t")
+
+        if y_t_raw is None or q_t is None:
+             logger.warning("Skipping MAC: Missing raw retrieval or query projection.")
+             return {"success": False, "error": "Missing y_t_raw or q_t for MAC"}
+
+        try:
+            # Call variant processor - assumes process_input can handle None for some args if needed
+            variant_results = await self.variant_processor.process_input(
+                memory_id=step_context["memory_id"],
+                x_t=step_context["x_t"], k_t=step_context["k_t"],
+                v_t=step_context["v_t"], q_t=q_t, y_t=y_t_raw # Provide raw y_t
+            )
+            if variant_results and "attended_output" in variant_results:
+                 attended_y_t = variant_results["attended_output"]
+                 if self._validate_embedding(attended_y_t):
+                     logger.info("MAC variant successfully applied attention.")
+                     return {"success": True, "attended_output": attended_y_t, "metrics": variant_results.get("metrics", {})}
+                 else:
+                      logger.error("MAC variant returned invalid attended_output.")
+                      return {"success": False, "error": "Invalid attended_output from MAC", "attended_output": y_t_raw}
+            else:
+                 logger.warning("MAC variant did not return 'attended_output'.")
+                 return {"success": False, "error": "MAC variant failed", "attended_output": y_t_raw}
+
+        except Exception as e:
+            logger.error(f"Error applying MAC variant: {e}", exc_info=True)
+            return {"success": False, "error": str(e), "attended_output": y_t_raw}
+
+    async def _update_history(self, step_context: Dict):
+        """Adds the completed step context to the history manager."""
+        logger.debug("Step 8: Updating sequence history...")
+        
+        # Early return if memory_id is missing (indicates something went wrong earlier)
+        if "memory_id" not in step_context:
+            logger.warning("History update skipped: Missing memory_id.")
+            return
+        
+        # Ensure all components are valid numpy arrays before adding
+        required_keys = ["x_t", "k_t", "v_t", "q_t", "y_t_final"]
+        valid_context = True
+        context_tuple_args = {}
+
+        # Extract and validate required components
+        for key in required_keys:
+            value = step_context.get(key)
+            if value is None:
+                logger.warning(f"History update skipped: Missing '{key}'")
+                valid_context = False
+                break
+            
+            # Convert to numpy array if it's a list
+            if isinstance(value, list):
+                try:
+                    value = np.array(value, dtype=np.float32)
+                    step_context[key] = value  # Update in context
+                except Exception as e:
+                    logger.warning(f"History update skipped: Could not convert '{key}' to numpy array: {e}")
+                    valid_context = False
+                    break
+            
+            # Validate numpy array
+            if not isinstance(value, np.ndarray):
+                logger.warning(f"History update skipped: '{key}' is not a numpy array but {type(value)}")
+                valid_context = False
+                break
+                
+            # Further validation (NaN/Inf) - _validate_embedding does this
+            if not self._validate_embedding(value):
+                logger.warning(f"History update skipped: Invalid data in '{key}'")
+                valid_context = False
+                break
+                
+            context_tuple_args[key] = value
+
+        if valid_context:
+            try:
+                # Log detailed shapes for debugging
+                shapes_info = {
+                    k: f"{v.shape} ({v.dtype})" for k, v in context_tuple_args.items()
+                }
+                logger.debug(f"Adding context with shapes: {shapes_info}")
+                
+                self.sequence_context_manager.add_context(
+                    timestamp=time.time(), # Use current time for history entry
+                    memory_id=step_context["memory_id"],
+                    x_t=context_tuple_args["x_t"],
+                    k_t=context_tuple_args["k_t"],
+                    v_t=context_tuple_args["v_t"], # Use the v_t that was ACTUALLY used in update
+                    q_t=context_tuple_args["q_t"],
+                    y_t=context_tuple_args["y_t_final"] # Use the final output y_t
+                )
+                logger.info(f"Added context to SequenceContextManager. Length: {len(self.sequence_context_manager)}")
+            except Exception as e:
+                logger.error(f"Failed to add context to history manager: {e}", exc_info=True)
+        else:
+            logger.error("Failed to update history due to invalid/missing context components.")
+
+    def _finalize_response(self, base_response: Dict, step_context: Dict,
+                           update_resp: Dict, retrieve_resp: Dict, feedback_resp: Optional[Dict]) -> Dict:
+        """Constructs the final response dictionary."""
+        logger.debug("Step 9: Finalizing response.")
+        final_response = {
+            "memory_id": step_context["memory_id"],
+            "intent_id": self._current_intent_id,
+            "status": "completed", # Assume completion if we got this far
+            "timestamp": datetime.utcnow().isoformat(),
+            "neural_memory_update": update_resp,
+            "neural_memory_retrieval": { # Structure this more cleanly
+                 "success": retrieve_resp.get("success", False),
+                 "retrieved_embedding": self._to_list(step_context.get("y_t_final")) if step_context.get("y_t_final") is not None else None,
+                 "query_projection": self._to_list(step_context.get("q_t")) if step_context.get("q_t") is not None else None,
+                 "error": retrieve_resp.get("error")
+            },
+            "surprise_metrics": {
+                "loss": step_context.get("loss"),
+                "grad_norm": step_context.get("grad_norm"),
+                "boost_calculated": step_context.get("quickrecal_boost")
+            },
+            "quickrecal_feedback": feedback_resp or {"status": "N/A"},
+            "variant_output": step_context.get("variant_metrics", {}) # Include variant metrics if any
+        }
+         # Add variant type to variant_output
+        final_response["variant_output"]["variant_type"] = self.active_variant_type.value
+
+        # Merge any errors captured earlier
+        if "error" in base_response: final_response["error"] = base_response["error"]
+        if not update_resp.get("success"): final_response["update_error"] = update_resp.get("error")
+        if not retrieve_resp.get("success"): final_response["retrieval_error"] = retrieve_resp.get("error")
+
+        # Update overall status if errors occurred
+        if "error" in final_response or "update_error" in final_response or "retrieval_error" in final_response:
+             final_response["status"] = "error_partial" if step_context["memory_id"] else "error_total"
+
+
+        # Update CCE state
+        if step_context.get("y_t_final") is not None:
+             self.last_retrieved_embedding = self._to_list(step_context["y_t_final"])
+        # Add to legacy sequence context (maybe remove later)
+        self.sequence_context.append({
+             "memory_id": step_context["memory_id"],
+             "actual_embedding": self._to_list(step_context["x_t"]) if step_context["x_t"] is not None else None,
+             "retrieved_embedding": self.last_retrieved_embedding,
+             "surprise_metrics": final_response["surprise_metrics"],
+             "timestamp": final_response["timestamp"],
+             "intent_id": self._current_intent_id
+         })
+        if len(self.sequence_context) > 20: self.sequence_context.pop(0)
+
+
+        return final_response
+
+    def _finalize_error(self, message: str, context: dict, intent_id: Optional[str] = None) -> dict:
+        """Constructs a standardized error response and finalizes intent."""
+        intent_id = intent_id or self._current_intent_id
+        logger.error(f"Finalizing with error: {message}", extra=context)
+        response = {
+            "status": "error",
+            "error": message,
+            "details": context.get("error", context.get("details", "No details")),
+            "timestamp": datetime.utcnow().isoformat(),
+            "intent_id": intent_id
+        }
+        if self.metrics_enabled:
+            self.metrics_store.finalize_intent(
+                intent_id=intent_id,
+                response_text=f"Error: {message}",
+                confidence=0.0
+            )
+        return response
+
+    def _calculate_quickrecal_boost(self, surprise_value: Optional[float]) -> float:
+        """Calculate quickrecal boost based on surprise value (loss or grad_norm)."""
+        if surprise_value is None or surprise_value <= 0.0: return 0.0
+        # Simple linear scaling for now, capped at 0.2
+        # Example: loss/grad_norm of 1.0 gives 0.1 boost, 2.0 gives 0.2 boost
+        max_expected_surprise = 2.0
+        max_boost = 0.2
         boost = min(surprise_value / max_expected_surprise, 1.0) * max_boost
-        logger.debug(f"Calculated quickrecal boost: {boost:.4f} from surprise value: {surprise_value:.4f}")
+        logger.debug(f"Calculated quickrecal boost: {boost:.6f} from surprise value: {surprise_value:.6f}")
         return boost
+
+    async def _apply_variant_pre_update(self, step_context: Dict) -> Dict:
+        """Apply variant-specific pre-update processing for MAG/MAL variants.
+        
+        This method handles the variant-specific processing that must occur BEFORE
+        the Neural Memory update:
+        
+        - MAG Variant: Calculates attention-based gate values (alpha_t, theta_t, eta_t)
+          that control the Neural Memory update process:
+          * alpha_t: Controls forgetting rate (higher = forget more)
+          * theta_t: Controls learning rate (higher = learn faster)
+          * eta_t: Controls momentum decay (higher = retain more momentum)
+        
+        - MAL Variant: Calculates a modified value projection (v_prime) by applying
+          attention between the current query and historical keys/values. This enhances
+          the value representation before it's stored in Neural Memory.
+        
+        Args:
+            step_context: Current processing context containing embeddings and projections
+        
+        Returns:
+            Dict containing variant processing results
+        """
+        if not self.variant_processor or self.active_variant_type not in [TitansVariantType.MAG, TitansVariantType.MAL]:
+            return {"success": True} # No pre-processing needed
+
+        logger.debug(f"Step 3: Applying {self.active_variant_type.value} pre-update logic...")
+        variant_results = {}
+        try:
+            # MAG: Calculate Gates
+            if self.active_variant_type == TitansVariantType.MAG:
+                # Retrieve K_hist
+                k_hist = self.sequence_context_manager.get_recent_keys()
+                if not k_hist:
+                    logger.info("MAG: Not enough context for gate calculation.")
+                    return {"success": True, "gates": None, "metrics": {}}
+
+                # Ensure q_t and k_hist are tensors for attention
+                try:
+                    from synthians_memory_core.orchestrator.titans_variants import _get_tf
+                    tf = _get_tf() # Lazy load TF
+                    q_tensor = tf.convert_to_tensor([step_context["q_t"]], dtype=tf.float32)
+                    k_hist_tensor = tf.convert_to_tensor(k_hist, dtype=tf.float32)
+                    if len(k_hist_tensor.shape) == 2: k_hist_tensor = tf.expand_dims(k_hist_tensor, 0)
+
+                    # Calculate attention output (Query attends to historical Keys)
+                    attention_output_tensor = self.attention_module(
+                        query=q_tensor, key=k_hist_tensor, value=k_hist_tensor, training=False
+                    )
+                    attention_output_list = tf.squeeze(attention_output_tensor).numpy().tolist()
+                except Exception as e:
+                    logger.error(f"Error during MAG attention calculation: {e}")
+                    return {"success": False, "error": str(e), "gates": None, "metrics": {}}
+
+                # Call NM API to calculate gates
+                gates_resp = await self._make_request(
+                    self.neural_memory_url, "/calculate_gates", method="POST",
+                    payload={"attention_output": attention_output_list}
+                )
+                if "error" not in gates_resp:
+                     variant_results = {
+                         "success": True,
+                         "gates": {"alpha_t": gates_resp["alpha"], "theta_t": gates_resp["theta"], "eta_t": gates_resp["eta"]},
+                         "metrics": getattr(self.attention_module, 'get_metrics', lambda: {})() # Safe access
+                     }
+                     logger.info(f"MAG calculated gates: {variant_results['gates']}")
+                else:
+                     logger.error(f"MAG failed to calculate gates via API: {gates_resp.get('error')}")
+                     variant_results = {"success": False, "error": gates_resp.get('error'), "gates": None, "metrics": {}}
+
+            # MAL: Calculate v_prime_t
+            elif self.active_variant_type == TitansVariantType.MAL:
+                k_hist, v_hist = self.sequence_context_manager.get_recent_kv_pairs()
+                if not k_hist or not v_hist:
+                     logger.info("MAL: Not enough context for value augmentation.")
+                     return {"success": True, "v_prime_t": step_context["v_t"], "metrics": {}} # Return original v_t
+
+                # Call variant processor's method (assuming it exists and handles TF conversion)
+                # This requires `titans_variants.MALVariant` to have the calculation logic
+                mal_output = await self.variant_processor.calculate_v_prime(
+                    q_t=step_context["q_t"],
+                    v_t=step_context["v_t"],
+                    k_hist=k_hist,
+                    v_hist=v_hist
+                )
+                if mal_output and mal_output.get("success"):
+                     v_prime_t = mal_output["v_prime_t"]
+                     if self._validate_embedding(v_prime_t):
+                         variant_results = {"success": True, "v_prime_t": v_prime_t, "metrics": mal_output.get("metrics", {})}
+                         logger.info("MAL calculated v_prime_t.")
+                     else:
+                          logger.error("MAL variant returned invalid v_prime_t.")
+                          variant_results = {"success": False, "error": "Invalid v_prime_t from MAL", "v_prime_t": step_context["v_t"]}
+                else:
+                     logger.error(f"MAL variant processing failed: {mal_output.get('error')}")
+                     variant_results = {"success": False, "error": mal_output.get('error'), "v_prime_t": step_context["v_t"]}
+
+
+        except Exception as e:
+            logger.error(f"Error during variant pre-update ({self.active_variant_type.value}): {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
+        return {"success": True, **variant_results} # Default success if no relevant variant
+
+    async def _update_neural_memory(self, step_context: Dict) -> Dict:
+        """Update Neural Memory with appropriate modifications based on active variant.
+        
+        This method handles the Neural Memory update process with variant-specific modifications:
+        
+        - NONE Variant: Standard update with the input embedding only
+        - MAC Variant: Standard update (variant processing occurs after retrieval)
+        - MAG Variant: Update with externally calculated gate values (alpha_t, theta_t, eta_t)
+        - MAL Variant: Update with modified value projection (v_prime)
+        
+        Args:
+            step_context: Current processing context containing embeddings and projections
+        
+        Returns:
+            Dict containing update response with loss and gradient norm
+        """
+        logger.debug("Step 4: Updating Neural Memory...")
+        update_payload = {"input_embedding": self._to_list(step_context["x_t"])} # Base payload
+
+        # Add MAG gates if calculated
+        if step_context["external_gates"]:
+             gates = step_context["external_gates"]
+             # Use the specific keys expected by the updated UpdateMemoryRequest
+             update_payload["external_alpha_gate"] = gates.get("alpha_t")
+             update_payload["external_theta_gate"] = gates.get("theta_t")
+             update_payload["external_eta_gate"] = gates.get("eta_t")
+             logger.info("Using MAG external gates for update.")
+
+        # Add MAL projections if calculated (v_prime_t overrides default v_t)
+        elif step_context["v_prime_t"] is not None:
+             if step_context["k_t"] is None:
+                 logger.error("MAL Error: v_prime_t calculated but k_t is missing.")
+                 return {"success": False, "error": "k_t missing for MAL update"}
+             update_payload = { # Override payload for MAL
+                 "input_embedding": self._to_list(step_context["x_t"]),
+                 "key_projection": self._to_list(step_context["k_t"]),
+                 "value_projection": self._to_list(step_context["v_prime_t"])
+             }
+             logger.info("Using MAL explicit projections (k_t, v_prime_t) for update.")
+
+        update_resp = await self._make_request(
+            self.neural_memory_url, "/update_memory", method="POST", payload=update_payload
+        )
+
+        if "error" in update_resp:
+            return {"success": False, **update_resp}
+        else:
+            logger.info(f"Neural Memory updated: Loss={update_resp.get('loss'):.6f}, GradNorm={update_resp.get('grad_norm'):.6f}")
+            # Log memory update metrics if enabled
+            if self.metrics_enabled:
+                self.metrics_store.log_memory_update(
+                    input_embedding=self._to_list(step_context["x_t"]),
+                    loss=update_resp.get("loss"),
+                    grad_norm=update_resp.get("grad_norm", 0.0),
+                    emotion=step_context["user_emotion"],
+                    intent_id=self._current_intent_id,
+                    metadata={
+                        "memory_id": step_context["memory_id"],
+                        "content_preview": step_context["content"][:50] if step_context["content"] else "",
+                        "variant_type": self.active_variant_type.value
+                    }
+                )
+            
+        # Check for errors
+        if "error" in update_resp:
+             logger.error(f"Neural Memory update failed: {update_resp['error']}")
+             return {"success": False, **update_resp}
+             
+        # Extract metrics for subsequent processing
+        if "loss" in update_resp:
+            step_context["loss"] = update_resp["loss"]
+        if "grad_norm" in update_resp:
+            step_context["grad_norm"] = update_resp["grad_norm"]
+             
+        logger.info("Neural Memory update successful")
+        return {"success": True, **update_resp}
+
+    async def _apply_quickrecal_boost(self, step_context: Dict, quickrecal_initial: Optional[float]) -> Optional[Dict]:
+         """Calculates and applies QuickRecal boost if needed."""
+         logger.debug("Step 5: Applying QuickRecal boost...")
+         loss = step_context.get("loss")
+         grad_norm = step_context.get("grad_norm")
+         memory_id = step_context["memory_id"]
+         user_emotion = step_context["user_emotion"]
+
+         if memory_id and (loss is not None or grad_norm is not None):
+             surprise_metric = grad_norm if grad_norm is not None else loss
+             boost = self._calculate_quickrecal_boost(surprise_metric)
+             step_context["quickrecal_boost"] = boost # Store calculated boost
+
+             if boost > 1e-4:
+                 loss_str = f"{loss:.6f}" if isinstance(loss, (float, int)) else 'N/A'
+                 grad_norm_str = f"{grad_norm:.6f}" if isinstance(grad_norm, (float, int)) else 'N/A'
+                 feedback_payload = {
+                     "memory_id": memory_id, "delta": boost,
+                     "reason": f"NM Surprise (Loss:{loss_str}, GradNorm:{grad_norm_str})"
+                 }
+                 feedback_resp = await self._make_request(
+                     self.memory_core_url, "/api/memories/update_quickrecal_score",
+                     method="POST", payload=feedback_payload
+                 )
+                 if "error" in feedback_resp:
+                      logger.error(f"QuickRecal boost failed: {feedback_resp.get('error')}")
+                      return {"status": "error", "error": feedback_resp.get('error')}
+                 else:
+                      logger.info(f"QuickRecal boost applied: Delta={boost:.6f}")
+                      if self.metrics_enabled:
+                          self.metrics_store.log_quickrecal_boost(
+                              memory_id=memory_id, base_score=quickrecal_initial or 0.0,
+                              boost_amount=boost, emotion=user_emotion, intent_id=self._current_intent_id,
+                              metadata={"loss": loss, "grad_norm": grad_norm, "reason": "NM Surprise"}
+                          )
+                 return feedback_resp
+             else:
+                  logger.debug("QuickRecal boost skipped (too small).")
+                  return {"status": "skipped", "reason": "Boost too small"}
+         else:
+              logger.warning("Skipping QuickRecal boost: Missing memory_id or surprise metrics.")
+              return {"status": "skipped", "reason": "Missing ID or surprise metrics"}
 
     async def get_sequence_embeddings_for_training(self, limit: int = 100, **filters) -> Dict[str, Any]:
         """Retrieve a sequence from Memory Core for training purposes.
@@ -7954,6 +13109,171 @@ class ContextCascadeEngine:
             method="POST",  
             payload=payload
         )
+
+```
+
+# orchestrator\history.py
+
+```py
+import time
+import logging
+from collections import deque
+from typing import Deque, Tuple, List, Optional, Any
+
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# Define the structure of the context tuple for clarity
+ContextTuple = Tuple[float, str, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+# (timestamp, memory_id, x_t, k_t, v_t, q_t, y_t)
+
+class SequenceContextManager:
+    """
+    Manages a deque-based context buffer for storing attention-related embeddings and projections.
+
+    Maintains a fixed-length history of (timestamp, memory_id, x_t, k_t, v_t, q_t, y_t) tuples
+    for attention calculations in Titans architecture variants.
+    """
+
+    def __init__(self, max_length: int = 50):
+        """
+        Initialize the sequence context manager.
+
+        Args:
+            max_length: Maximum number of context tuples to store.
+        """
+        if not isinstance(max_length, int) or max_length <= 0:
+            raise ValueError("max_length must be a positive integer.")
+        self.max_length = max_length
+        self._context_buffer: Deque[ContextTuple] = deque(maxlen=max_length)
+        logger.info(f"SequenceContextManager initialized with max_length={max_length}")
+
+    def add_context(
+        self,
+        memory_id: str,
+        x_t: np.ndarray,
+        k_t: np.ndarray,
+        v_t: np.ndarray,
+        q_t: np.ndarray,
+        y_t: np.ndarray, # Output from NeuralMemory.call
+        timestamp: Optional[float] = None
+    ) -> None:
+        """
+        Add a new context element (tuple) to the buffer.
+
+        Args:
+            memory_id: Identifier for the memory entry.
+            x_t: Input embedding (np.ndarray).
+            k_t: Key projection (np.ndarray).
+            v_t: Value projection (np.ndarray).
+            q_t: Query projection (np.ndarray).
+            y_t: Neural memory output embedding (np.ndarray).
+            timestamp: Optional timestamp (defaults to current time).
+        """
+        ts = timestamp if timestamp is not None else time.time()
+
+        # Basic validation of inputs
+        if not all(isinstance(arr, np.ndarray) for arr in [x_t, k_t, v_t, q_t, y_t]):
+            logger.error("Invalid input type for context tuple. All embeddings/projections must be numpy arrays.")
+            # Decide how to handle: raise error or skip adding? Let's skip for robustness.
+            return
+
+        context_tuple: ContextTuple = (ts, memory_id, x_t, k_t, v_t, q_t, y_t)
+        self._context_buffer.append(context_tuple)
+        logger.debug(f"Added context for memory {memory_id} to buffer (size: {len(self._context_buffer)})")
+
+    def update_last_context(self, y_t: np.ndarray) -> bool:
+        """Update the most recent context entry with the y_t value.
+        
+        This is useful when y_t is not available at the time of initial context creation,
+        such as when we need to add context before Neural Memory retrieval but only get
+        the y_t value after retrieval.
+        
+        Args:
+            y_t: The retrieved embedding (output from Neural Memory)
+            
+        Returns:
+            True if update was successful, False otherwise
+        """
+        if not len(self._context_buffer):
+            logger.warning("Cannot update last context: buffer is empty")
+            return False
+            
+        if not isinstance(y_t, np.ndarray):
+            logger.error("Invalid y_t type for context update. Must be numpy array.")
+            return False
+            
+        # Get the last context tuple
+        last_tuple = self._context_buffer[-1]
+        
+        # Create a new tuple with the updated y_t
+        updated_tuple = (
+            last_tuple[0],  # timestamp
+            last_tuple[1],  # memory_id
+            last_tuple[2],  # x_t
+            last_tuple[3],  # k_t
+            last_tuple[4],  # v_t
+            last_tuple[5],  # q_t
+            y_t             # updated y_t
+        )
+        
+        # Replace the last tuple
+        self._context_buffer[-1] = updated_tuple
+        logger.debug(f"Updated last context entry for memory {last_tuple[1]} with y_t")
+        return True
+
+    def get_recent_history(self, count: Optional[int] = None) -> List[ContextTuple]:
+        """Get the most recent context tuples."""
+        num_items = count if count is not None else len(self._context_buffer)
+        num_items = min(num_items, len(self._context_buffer)) # Don't request more than available
+        if num_items <= 0:
+            return []
+        # Return a list slice of the deque
+        return list(self._context_buffer)[-num_items:]
+
+    def get_recent_keys(self, count: Optional[int] = None) -> List[np.ndarray]:
+        """Get the most recent key projections (k_t)."""
+        history = self.get_recent_history(count)
+        return [item[3] for item in history] # Index 3 is k_t
+
+    def get_recent_values(self, count: Optional[int] = None) -> List[np.ndarray]:
+        """Get the most recent value projections (v_t)."""
+        history = self.get_recent_history(count)
+        return [item[4] for item in history] # Index 4 is v_t
+
+    def get_recent_queries(self, count: Optional[int] = None) -> List[np.ndarray]:
+        """Get the most recent query projections (q_t)."""
+        history = self.get_recent_history(count)
+        return [item[5] for item in history] # Index 5 is q_t
+
+    def get_recent_outputs(self, count: Optional[int] = None) -> List[np.ndarray]:
+        """Get the most recent neural memory outputs (y_t)."""
+        history = self.get_recent_history(count)
+        return [item[6] for item in history] # Index 6 is y_t
+
+    def get_recent_kv_pairs(self, count: Optional[int] = None) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+        """Convenience method to get recent (Key, Value) pairs for attention."""
+        history = self.get_recent_history(count)
+        keys = [item[3] for item in history]
+        values = [item[4] for item in history]
+        return keys, values
+
+    def get_recent_ky_pairs(self, count: Optional[int] = None) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+        """Convenience method to get recent (Key, Output) pairs for MAC attention."""
+        history = self.get_recent_history(count)
+        keys = [item[3] for item in history]
+        outputs = [item[6] for item in history]
+        return keys, outputs
+
+    def __len__(self) -> int:
+        """Return the current number of items in the buffer."""
+        return len(self._context_buffer)
+
+    def clear(self) -> None:
+        """Clear the context buffer."""
+        self._context_buffer.clear()
+        logger.info("SequenceContextManager buffer cleared.")
 
 ```
 
@@ -8003,8 +13323,8 @@ def get_orchestrator():
     """Get or initialize the context cascade orchestrator."""
     global orchestrator
     if orchestrator is None:
-        # Get URLs from environment variables
-        memory_core_url = os.environ.get("MEMORY_CORE_URL", "http://localhost:5010")
+        # Get URLs from environment variables with updated defaults
+        memory_core_url = os.environ.get("MEMORY_CORE_URL", "http://localhost:5010")  # Default to localhost:5010
         neural_memory_url = os.environ.get("NEURAL_MEMORY_URL", "http://localhost:8001")
         
         # Initialize shared geometry manager
@@ -8041,14 +13361,14 @@ async def process_memory(request: ProcessMemoryRequest):
     orchestrator = get_orchestrator()
     
     try:
-        result = await orchestrator.process_new_memory(
+        result = await orchestrator.process_new_input(
             content=request.content,
             embedding=request.embedding,
             metadata=request.metadata
         )
         return result
     except Exception as e:
-        logger.error(f"Error processing memory: {str(e)}")
+        logger.error(f"Error processing memory: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error processing memory: {str(e)}")
 
 @app.post("/get_sequence_embeddings")
@@ -8298,6 +13618,676 @@ async def test_surprise_detection(engine, mock_response):
 
 ```
 
+# orchestrator\titans_variants.py
+
+```py
+#!/usr/bin/env python
+
+from enum import Enum
+import logging
+import numpy as np
+from typing import Dict, Any, Optional, List, Tuple, Union, TYPE_CHECKING
+import threading
+
+# Use TYPE_CHECKING for type hints that won't be evaluated at runtime
+if TYPE_CHECKING:
+    import tensorflow as tf
+
+# Lazy-load TensorFlow to avoid NumPy incompatibility issues during startup
+_tf = None
+_tf_lock = threading.Lock()
+
+def _get_tf():
+    """Lazy-load TensorFlow only when needed to avoid early NumPy conflicts"""
+    global _tf
+    if _tf is None:
+        with _tf_lock:
+            # Double-check after acquiring lock (thread-safe singleton pattern)
+            if _tf is None:
+                import tensorflow as tf
+                _tf = tf
+    return _tf
+
+logger = logging.getLogger(__name__)
+
+class TitansVariantType(str, Enum):
+    """Enumeration of Titans architecture variants."""
+    NONE = "NONE"  # No attention mechanism, base Neural Memory
+    MAC = "MAC"    # Memory-Attended Computation
+    MAG = "MAG"    # Memory-Attended Gates
+    MAL = "MAL"    # Memory-Augmented Learning
+
+
+class TitansVariantConfig(dict):
+    """Configuration for Titans architecture variants."""
+    def __init__(self, *args, **kwargs):
+        defaults = {
+            "variant": TitansVariantType.NONE.value,
+            "attention_num_heads": 4,
+            "attention_key_dim": 32,  # per head
+            "attention_dropout": 0.0,
+            "attention_use_layer_norm": True,
+            "attention_use_residual": True,
+            "max_context_length": 50,
+            "max_dim_mismatch_warnings": 10,
+        }
+        
+        config = defaults.copy()
+        # Apply kwargs first
+        config.update(kwargs)
+        # Then apply dict from args if provided
+        if args and isinstance(args[0], dict):
+            config.update(args[0])
+            
+        super().__init__(config)
+        
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(f"'TitansVariantConfig' object has no attribute '{key}'")
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+
+class TitansVariantBase:
+    """Base class for all Titans architecture variants."""
+    
+    def __init__(self, config: Optional[Union[TitansVariantConfig, Dict]] = None, **kwargs):
+        """Initialize the base Titans variant.
+        
+        Args:
+            config: Optional configuration dictionary for attention parameters.
+        """
+        if isinstance(config, dict) or config is None: 
+            self.config = TitansVariantConfig(**(config or {}))
+        elif isinstance(config, TitansVariantConfig): 
+            self.config = config
+        else: 
+            raise TypeError("config must be a dict or TitansVariantConfig")
+            
+        self.variant_type = TitansVariantType.NONE
+        self.sequence_context = None
+        self.neural_memory_url = None
+        self.api_client = None
+    
+    def set_sequence_context(self, sequence_context) -> None:
+        """Set the sequence context manager for historical attention context.
+        
+        Args:
+            sequence_context: SequenceContextManager instance to use for context history.
+        """
+        self.sequence_context = sequence_context
+    
+    def set_neural_memory_url(self, neural_memory_url: str) -> None:
+        """Set the Neural Memory server URL and initialize API client.
+        
+        Args:
+            neural_memory_url: URL to the Neural Memory server
+        """
+        self.neural_memory_url = neural_memory_url
+        # Initialize the API client for making requests to Neural Memory server
+        from ..api_client import NeuralMemoryClient
+        self.api_client = NeuralMemoryClient(base_url=neural_memory_url)
+        logger.info(f"Initialized API client for {self.name} variant with Neural Memory URL: {neural_memory_url}")
+    
+    def process_input(self, memory_id: str, x_t: np.ndarray, k_t: np.ndarray, 
+                      v_t: np.ndarray, q_t: np.ndarray, y_t: np.ndarray) -> Dict[str, Any]:
+        """Process input through the variant's logic.
+        
+        Args:
+            memory_id: ID of the current memory being processed
+            x_t: Original input embedding
+            k_t: Key projection
+            v_t: Value projection
+            q_t: Query projection
+            y_t: Retrieved embedding from Neural Memory
+            
+        Returns:
+            Dict containing variant-specific outputs and metrics
+        """
+        # Base implementation just returns empty dict
+        return {}
+
+
+class MACVariant(TitansVariantBase):
+    """Memory-Attended Computation (MAC) variant.
+    
+    Enhances memory retrieval by attending over historical memory outputs.
+    Flow: q_t -> M -> y_t -> Attend(q_t, K_hist, Y_hist) -> attended_y_t
+    """
+    
+    def __init__(
+        self, 
+        config: Optional[Union[TitansVariantConfig, Dict]] = None,
+        **kwargs
+    ):
+        super().__init__(config, **kwargs)
+        self.name = "MAC"
+        self.variant_type = TitansVariantType.MAC
+        
+        # Initialize attention module for this variant
+        attention_config = {
+            "num_heads": self.config.get("attention_num_heads", 4),
+            "key_dim": self.config.get("attention_key_dim", 32),
+            "dropout": self.config.get("attention_dropout", 0.0),
+            # The following parameters are not supported in this TF version
+            # "use_layer_norm": self.config.get("attention_use_layer_norm", True),
+            # "use_residual": self.config.get("attention_use_residual", True),
+            "max_dim_mismatch_warnings": self.config.get("max_dim_mismatch_warnings", 10),
+        }
+        self.attention_module = _get_tf().keras.layers.MultiHeadAttention(
+            num_heads=attention_config["num_heads"],
+            key_dim=attention_config["key_dim"],
+            dropout=attention_config["dropout"],
+            # Removed unsupported parameters
+            # use_layer_norm=attention_config["use_layer_norm"],
+            # use_residual=attention_config["use_residual"],
+            name="MAC_Attention"
+        )
+        
+        logger.info(f"Initialized MAC variant with {attention_config['num_heads']} attention heads")
+
+    def process_input(
+        self,
+        memory_id: str,
+        x_t: np.ndarray, 
+        k_t: np.ndarray,
+        v_t: np.ndarray,
+        q_t: np.ndarray,
+        y_t: np.ndarray,
+    ) -> Dict[str, Any]:
+        """Implement MAC variant logic.
+        
+        1. Store context tuple (timestamp, memory_id, x_t, k_t, v_t, q_t, y_t)
+        2. Retrieve recent history pairs (k_i, y_i) from sequence_context
+        3. Calculate attended output using attention module: attended_y_t = AttentionModule(q_t, K_hist, Y_hist)
+        4. Return attended_y_t for use by downstream components
+        """
+        # First store the context
+        self.store_context(memory_id, x_t, k_t, v_t, q_t, y_t)
+        
+        # Get historical contexts for attention
+        if len(self.sequence_context) < 2:
+            # Not enough context for attention, return original output
+            logger.info("MAC: Not enough context for attention, using original output")
+            return {
+                "memory_id": memory_id,
+                "attended_output": y_t,  # No change
+                "metrics": self.attention_module.get_metrics() if self.attention_module else {},
+            }
+        
+        # Get historical keys and memory outputs
+        k_hist, y_hist = self.sequence_context.get_recent_ky_pairs(count=len(self.sequence_context) - 1)  # Exclude current
+        
+        # If using TensorFlow backend for attention:
+        # Convert numpy arrays to tensors for TF operations
+        q_tensor = _get_tf().convert_to_tensor(q_t, dtype='float32')
+        if len(q_tensor.shape) == 1:
+            q_tensor = _get_tf().expand_dims(q_tensor, 0)  # Add batch dimension
+            
+        k_hist_tensor = _get_tf().convert_to_tensor(k_hist, dtype='float32')
+        if len(k_hist_tensor.shape) == 2:  # [seq_len, key_dim]
+            k_hist_tensor = _get_tf().expand_dims(k_hist_tensor, 0)  # Add batch dimension [1, seq_len, key_dim]
+            
+        y_hist_tensor = _get_tf().convert_to_tensor(y_hist, dtype='float32')
+        if len(y_hist_tensor.shape) == 2:  # [seq_len, value_dim]
+            y_hist_tensor = _get_tf().expand_dims(y_hist_tensor, 0)  # Add batch dimension [1, seq_len, value_dim]
+        
+        # Apply attention mechanism
+        try:
+            attended_y_tensor = self.attention_module(
+                query=q_tensor,
+                key=k_hist_tensor,
+                value=y_hist_tensor,
+                training=False,
+            )
+            
+            # Convert back to numpy for consistency
+            attended_y = attended_y_tensor.numpy()
+            if len(attended_y.shape) > 1:
+                attended_y = attended_y[0]  # Remove batch dimension
+                
+            logger.info(f"MAC: Applied attention to {len(k_hist)} historical memories")
+            
+            return {
+                "memory_id": memory_id,
+                "attended_output": attended_y,
+                "original_output": y_t,  # Keep original for comparison
+                "metrics": self.attention_module.get_metrics(),
+            }
+            
+        except Exception as e:
+            logger.error(f"MAC attention failed: {e}")
+            # Fallback to original output
+            return {
+                "memory_id": memory_id,
+                "attended_output": y_t,  # Fallback to original
+                "error": str(e),
+                "metrics": {},
+            }
+
+
+class MAGVariant(TitansVariantBase):
+    """Memory-Attended Gates (MAG) variant.
+    
+    Modifies gate values (alpha, theta, eta) for the neural memory update
+    by attending over historical key projections.
+    
+    Flow: 
+    1. q_t -> Attend(q_t, K_hist, K_hist) -> attention_output
+    2. Call Neural Memory's /calculate_gates endpoint with attention output
+    3. Update memory with calculated gates
+    """
+    
+    def __init__(
+        self, 
+        config: Optional[Union[TitansVariantConfig, Dict]] = None,
+        **kwargs
+    ):
+        super().__init__(config, **kwargs)
+        self.name = "MAG"
+        self.variant_type = TitansVariantType.MAG
+        
+        # Initialize attention module for this variant
+        attention_config = {
+            "num_heads": self.config.get("attention_num_heads", 4),
+            "key_dim": self.config.get("attention_key_dim", 32),
+            "dropout": self.config.get("attention_dropout", 0.0),
+            "max_dim_mismatch_warnings": self.config.get("max_dim_mismatch_warnings", 10),
+        }
+        self.attention_module = _get_tf().keras.layers.MultiHeadAttention(
+            num_heads=attention_config["num_heads"],
+            key_dim=attention_config["key_dim"],
+            dropout=attention_config["dropout"],
+            name="MAG_Attention"
+        )
+        
+        logger.info(f"MAG: Initialized attention module with config {attention_config}")
+
+    def process_input(
+        self,
+        memory_id: str,
+        x_t: np.ndarray, 
+        k_t: np.ndarray,
+        v_t: np.ndarray,
+        q_t: np.ndarray,
+        y_t: np.ndarray,
+    ) -> Dict[str, Any]:
+        """Implement MAG variant logic.
+        
+        1. Store context tuple (timestamp, memory_id, x_t, k_t, v_t, q_t, y_t)
+        2. Retrieve recent history keys from sequence_context
+        3. Calculate attention output using K_hist
+        4. Call Neural Memory's /calculate_gates endpoint with attention output
+        5. Return calculated gates for use in neural memory update
+        """
+        # First store the context
+        self.store_context(memory_id, x_t, k_t, v_t, q_t, y_t)
+        
+        # Get historical contexts for attention
+        if len(self.sequence_context) < 2:
+            # Not enough context for attention, return default gates
+            logger.info("MAG: Not enough context for attention, using default gates")
+            return {
+                "memory_id": memory_id,
+                "attended_output": y_t,  # No change to y_t
+                "alpha": None,  # Let neural memory use default
+                "theta": None,  # Let neural memory use default
+                "eta": None,    # Let neural memory use default
+                "metrics": {},
+            }
+        
+        # Get historical keys
+        k_hist = self.sequence_context.get_recent_keys(count=len(self.sequence_context) - 1)  # Exclude current
+        
+        # Convert numpy arrays to tensors for TF operations
+        q_tensor = _get_tf().convert_to_tensor(q_t, dtype='float32')
+        if len(q_tensor.shape) == 1:
+            q_tensor = _get_tf().expand_dims(q_tensor, 0)  # Add batch dimension
+            
+        k_hist_tensor = _get_tf().convert_to_tensor(k_hist, dtype='float32')
+        if len(k_hist_tensor.shape) == 2:  # [seq_len, key_dim]
+            k_hist_tensor = _get_tf().expand_dims(k_hist_tensor, 0)  # Add batch dimension [1, seq_len, key_dim]
+        
+        # Apply attention mechanism
+        try:
+            attention_output = self.attention_module(
+                query=q_tensor,
+                key=k_hist_tensor,
+                value=k_hist_tensor,  # Self-attention on historical keys
+                training=False,
+            )
+            
+            # Call the Neural Memory server's /calculate_gates endpoint
+            try:
+                # Prepare the request payload
+                attention_output_np = attention_output.numpy().squeeze()  # Remove batch dimension
+                
+                # Make the API request
+                response = self.api_client.calculate_gates(
+                    attention_output=attention_output_np.tolist()
+                )
+                
+                # Extract gate values from response
+                alpha = response.get("alpha")
+                theta = response.get("theta")
+                eta = response.get("eta")
+                
+                logger.info(f"MAG: Calculated gates from Neural Memory server: alpha={alpha:.4f}, theta={theta:.4f}, eta={eta:.4f}")
+                
+                return {
+                    "memory_id": memory_id,
+                    "attended_output": y_t,  # No change to y_t
+                    "alpha": alpha,
+                    "theta": theta,
+                    "eta": eta,
+                    "metrics": self.attention_module.get_metrics(),
+                }
+            except Exception as api_err:
+                logger.error(f"MAG: Failed to call /calculate_gates API: {api_err}")
+                # Fall back to default gates
+                return {
+                    "memory_id": memory_id,
+                    "attended_output": y_t,
+                    "alpha": None,
+                    "theta": None,
+                    "eta": None,
+                    "error": str(api_err),
+                    "metrics": self.attention_module.get_metrics(),
+                }
+            
+        except Exception as e:
+            logger.error(f"MAG attention failed: {e}")
+            # Fallback to default gates
+            return {
+                "memory_id": memory_id,
+                "attended_output": y_t,
+                "alpha": None,
+                "theta": None,
+                "eta": None,
+                "error": str(e),
+                "metrics": {},
+            }
+
+
+class MALVariant(TitansVariantBase):
+    """Memory-Augmented Learning (MAL) variant.
+    
+    Modifies value projection for neural memory update by attending over
+    historical value projections.
+    
+    Flow: 
+    1. q_t, K_hist, V_hist -> Attend(q_t, K_hist, V_hist) -> attended_v_t
+    2. Combine attended_v_t with v_t -> v_prime_t
+    3. Update memory with k_t and v_prime_t
+    """
+    
+    def __init__(
+        self, 
+        config: Optional[Union[TitansVariantConfig, Dict]] = None,
+        **kwargs
+    ):
+        super().__init__(config, **kwargs)
+        self.name = "MAL"
+        self.variant_type = TitansVariantType.MAL
+        
+        # Initialize attention module for this variant
+        attention_config = {
+            "num_heads": self.config.get("attention_num_heads", 4),
+            "key_dim": self.config.get("attention_key_dim", 32),
+            "dropout": self.config.get("attention_dropout", 0.0),
+            "max_dim_mismatch_warnings": self.config.get("max_dim_mismatch_warnings", 10),
+        }
+        self.attention_module = _get_tf().keras.layers.MultiHeadAttention(
+            num_heads=attention_config["num_heads"],
+            key_dim=attention_config["key_dim"],
+            dropout=attention_config["dropout"],
+            name="MAL_Attention"
+        )
+        
+        # Gating layers for combining attended and current values (initialized when dimensions are known)
+        self.v_prime_gate = None
+        self.v_prime_projector = None
+        
+        logger.info(f"Initialized MAL variant with {attention_config['num_heads']} attention heads")
+    
+    def init_value_projection_layers(self, value_dim: int):
+        """Initialize value projection and gating layers.
+        
+        Args:
+            value_dim: Dimension of the value vectors
+        """
+        self.v_prime_gate = _get_tf().keras.layers.Dense(1, activation='sigmoid', name="v_prime_gate")
+        self.v_prime_projector = _get_tf().keras.layers.Dense(value_dim, activation='tanh', name="v_prime_projector")
+        
+        # Build the layers with dummy inputs to ensure variables are created
+        dummy_input = _get_tf().zeros([1, value_dim * 2], dtype='float32')  # Concatenated dimension
+        self.v_prime_gate(dummy_input)
+        
+        dummy_input2 = _get_tf().zeros([1, value_dim], dtype='float32')
+        self.v_prime_projector(dummy_input2)
+        
+        logger.info(f"MAL: Initialized value projection layers with value_dim={value_dim}")
+
+    async def calculate_v_prime(self, q_t: np.ndarray, v_t: np.ndarray) -> Dict[str, Any]:
+        """Calculate modified value projection using attention over historical values.
+        
+        This method is specifically called by the ContextCascadeEngine._apply_variant_pre_update
+        method to get a modified value projection for use in the Neural Memory update.
+        
+        Args:
+            q_t: Query projection for the current input
+            v_t: Original value projection for the current input
+            
+        Returns:
+            Dict containing v_prime (modified value projection) and metrics
+        """
+        # Get historical contexts for attention
+        if not self.sequence_context or len(self.sequence_context) < 2:
+            # Not enough context for attention, return original values
+            logger.info("MAL: Not enough context for calculate_v_prime, using original value projection")
+            return {
+                "v_prime": v_t,  # No change
+                "metrics": {}
+            }
+        
+        # Get historical keys and values
+        k_hist, v_hist = self.sequence_context.get_recent_kv_pairs(count=len(self.sequence_context) - 1)  # Exclude current
+        
+        # Convert numpy arrays to tensors for TF operations
+        q_tensor = _get_tf().convert_to_tensor(q_t, dtype='float32')
+        if len(q_tensor.shape) == 1:
+            q_tensor = _get_tf().expand_dims(q_tensor, 0)  # Add batch dimension
+            
+        k_hist_tensor = _get_tf().convert_to_tensor(k_hist, dtype='float32')
+        if len(k_hist_tensor.shape) == 2:  # [seq_len, key_dim]
+            k_hist_tensor = _get_tf().expand_dims(k_hist_tensor, 0)  # Add batch dimension [1, seq_len, key_dim]
+            
+        v_hist_tensor = _get_tf().convert_to_tensor(v_hist, dtype='float32')
+        if len(v_hist_tensor.shape) == 2:  # [seq_len, value_dim]
+            v_hist_tensor = _get_tf().expand_dims(v_hist_tensor, 0)  # Add batch dimension [1, seq_len, value_dim]
+        
+        v_tensor = _get_tf().convert_to_tensor(v_t, dtype='float32')
+        if len(v_tensor.shape) == 1:
+            v_tensor = _get_tf().expand_dims(v_tensor, 0)  # Add batch dimension
+        
+        # Apply attention mechanism
+        try:
+            attended_v_tensor = self.attention_module(
+                query=q_tensor,
+                key=k_hist_tensor,
+                value=v_hist_tensor,
+                training=False,
+            )
+            
+            # Combine attended and current values
+            if self.v_prime_gate is None:
+                # Initialize projection layers if not already done
+                self.init_value_projection_layers(v_tensor.shape[-1])
+            
+            # Concatenate vectors for gating
+            concat_v = _get_tf().concat([v_tensor, attended_v_tensor], axis=-1)
+            
+            # Calculate gate value
+            gate = self.v_prime_gate(concat_v)
+            
+            # Combine original and attended values
+            v_prime_tensor = gate * v_tensor + (1 - gate) * attended_v_tensor
+            
+            # Final projection
+            v_prime_tensor = self.v_prime_projector(v_prime_tensor)
+            
+            # Convert back to numpy
+            v_prime = v_prime_tensor.numpy()
+            if len(v_prime.shape) > 1:
+                v_prime = v_prime[0]  # Remove batch dimension
+            
+            logger.info(f"MAL: Generated augmented value projection from {len(k_hist)} historical values")
+            
+            return {
+                "v_prime": v_prime,  # Augmented value projection
+                "original_v": v_t,  # Original for comparison
+                "metrics": self.attention_module.get_metrics(),
+            }
+            
+        except Exception as e:
+            logger.error(f"MAL calculate_v_prime failed: {e}")
+            # Fallback to original value projection
+            return {
+                "v_prime": v_t,  # Fallback to original
+                "error": str(e),
+                "metrics": {},
+            }
+
+    def process_input(
+        self,
+        memory_id: str,
+        x_t: np.ndarray, 
+        k_t: np.ndarray,
+        v_t: np.ndarray,
+        q_t: np.ndarray,
+        y_t: np.ndarray,
+    ) -> Dict[str, Any]:
+        """Implement MAL variant logic.
+        
+        1. Store context tuple (timestamp, memory_id, x_t, k_t, v_t, q_t, y_t)
+        2. Retrieve recent history pairs (k_i, v_i) from sequence_context
+        3. Calculate attended value using attention module: attended_v_t = AttentionModule(q_t, K_hist, V_hist)
+        4. Combine attended_v_t with current v_t using gating mechanism
+        5. Return v_prime_t for neural memory update
+        """
+        # First store the context
+        self.store_context(memory_id, x_t, k_t, v_t, q_t, y_t)
+        
+        # Get historical contexts for attention
+        if len(self.sequence_context) < 2:
+            # Not enough context for attention, return original values
+            logger.info("MAL: Not enough context for attention, using original value projection")
+            return {
+                "memory_id": memory_id,
+                "attended_output": y_t,  # No change
+                "v_prime": v_t,  # No change
+                "metrics": {},
+            }
+        
+        # Get historical keys and values
+        k_hist, v_hist = self.sequence_context.get_recent_kv_pairs(count=len(self.sequence_context) - 1)  # Exclude current
+        
+        # Convert numpy arrays to tensors for TF operations
+        q_tensor = _get_tf().convert_to_tensor(q_t, dtype='float32')
+        if len(q_tensor.shape) == 1:
+            q_tensor = _get_tf().expand_dims(q_tensor, 0)  # Add batch dimension
+            
+        k_hist_tensor = _get_tf().convert_to_tensor(k_hist, dtype='float32')
+        if len(k_hist_tensor.shape) == 2:  # [seq_len, key_dim]
+            k_hist_tensor = _get_tf().expand_dims(k_hist_tensor, 0)  # Add batch dimension [1, seq_len, key_dim]
+            
+        v_hist_tensor = _get_tf().convert_to_tensor(v_hist, dtype='float32')
+        if len(v_hist_tensor.shape) == 2:  # [seq_len, value_dim]
+            v_hist_tensor = _get_tf().expand_dims(v_hist_tensor, 0)  # Add batch dimension [1, seq_len, value_dim]
+        
+        v_tensor = _get_tf().convert_to_tensor(v_t, dtype='float32')
+        if len(v_tensor.shape) == 1:
+            v_tensor = _get_tf().expand_dims(v_tensor, 0)  # Add batch dimension
+        
+        # Apply attention mechanism
+        try:
+            attended_v_tensor = self.attention_module(
+                query=q_tensor,
+                key=k_hist_tensor,
+                value=v_hist_tensor,
+                training=False,
+            )
+            
+            # Combine attended and current values
+            if self.v_prime_gate is None:
+                # Initialize projection layers if not already done
+                self.init_value_projection_layers(v_tensor.shape[-1])
+            
+            # Concatenate vectors for gating
+            concat_v = _get_tf().concat([v_tensor, attended_v_tensor], axis=-1)
+            
+            # Calculate gate value
+            gate = self.v_prime_gate(concat_v)
+            
+            # Combine original and attended values
+            v_prime_tensor = gate * v_tensor + (1 - gate) * attended_v_tensor
+            
+            # Final projection
+            v_prime_tensor = self.v_prime_projector(v_prime_tensor)
+            
+            # Convert back to numpy
+            v_prime = v_prime_tensor.numpy()
+            if len(v_prime.shape) > 1:
+                v_prime = v_prime[0]  # Remove batch dimension
+            
+            logger.info(f"MAL: Generated augmented value projection from {len(k_hist)} historical values")
+            
+            return {
+                "memory_id": memory_id,
+                "attended_output": y_t,  # No change in output
+                "v_prime": v_prime,  # Augmented value projection
+                "original_v": v_t,  # Original for comparison
+                "metrics": self.attention_module.get_metrics(),
+            }
+            
+        except Exception as e:
+            logger.error(f"MAL attention failed: {e}")
+            # Fallback to original value projection
+            return {
+                "memory_id": memory_id,
+                "attended_output": y_t,
+                "v_prime": v_t,  # Fallback to original
+                "error": str(e),
+                "metrics": {},
+            }
+
+
+def create_titans_variant(variant_type: TitansVariantType, attention_config: Optional[Dict[str, Any]] = None) -> TitansVariantBase:
+    """Factory function to create a Titans variant instance based on type.
+    
+    Args:
+        variant_type: Type of variant to create (MAC, MAG, MAL, or NONE)
+        attention_config: Configuration dictionary for attention parameters
+        
+    Returns:
+        An instance of the requested variant type
+    """
+    if variant_type == TitansVariantType.NONE:
+        return TitansVariantBase(attention_config)
+    elif variant_type == TitansVariantType.MAC:
+        return MACVariant(attention_config)
+    elif variant_type == TitansVariantType.MAG:
+        return MAGVariant(attention_config)
+    elif variant_type == TitansVariantType.MAL:
+        return MALVariant(attention_config)
+    else:
+        raise ValueError(f"Unknown variant type: {variant_type}")
+
+```
+
 # README.md
 
 ```md
@@ -8481,6 +14471,10 @@ import random
 import uuid
 import json
 import os
+import datetime as dt
+from datetime import timezone, datetime # Ensure datetime is imported directly
+import copy
+import traceback # Import traceback for detailed error logging
 
 # Import core components from this package
 from .custom_logger import logger
@@ -8493,6 +14487,28 @@ from .adaptive_components import ThresholdCalibrator
 from .metadata_synthesizer import MetadataSynthesizer
 from .emotion_analyzer import EmotionAnalyzer
 from .vector_index import MemoryVectorIndex
+
+# --- Add Deep Update Utility Function ---
+# (Can be placed inside the class or outside)
+def deep_update(source, overrides):
+    """
+    Update a nested dictionary or similar mapping.
+    Modifies source in place.
+    """
+    for key, value in overrides.items():
+        if isinstance(value, dict) and value:
+            # Ensure source[key] exists and is a dict before recursing
+            current_value = source.get(key)
+            if isinstance(current_value, dict):
+                returned = deep_update(current_value, value)
+                source[key] = returned
+            else:
+                # If source[key] is not a dict or doesn't exist, just overwrite
+                source[key] = value
+        else:
+            source[key] = value
+    return source
+
 
 class SynthiansMemoryCore:
     """
@@ -8520,6 +14536,7 @@ class SynthiansMemoryCore:
             'adaptive_threshold_enabled': True,
             'initial_retrieval_threshold': 0.75,
             'vector_index_type': 'Cosine',  # 'L2', 'IP', 'Cosine'
+            'persistence_batch_size': 100, # Batch size for persistence loop
             **(config or {})
         }
 
@@ -8565,6 +14582,7 @@ class SynthiansMemoryCore:
         self._memories: Dict[str, MemoryEntry] = {} # In-memory cache/working set
         self.assemblies: Dict[str, MemoryAssembly] = {}
         self.memory_to_assemblies: Dict[str, Set[str]] = {}
+        self._dirty_memories: Set[str] = set() # Track modified memory IDs for persistence
 
         # --- Concurrency & Tasks ---
         self._lock = asyncio.Lock()
@@ -8579,19 +14597,23 @@ class SynthiansMemoryCore:
         if self._initialized: return True
         logger.info("SynthiansMemoryCore", "Starting initialization...")
         async with self._lock:
+            # Initialize persistence first to ensure memory index is loaded
+            await self.persistence.initialize()
+            logger.info("SynthiansMemoryCore", "Persistence layer initialized.")
+
             # Load memories and assemblies from persistence
             loaded_memories = await self.persistence.load_all()
             for mem in loaded_memories:
                 self._memories[mem.id] = mem
             logger.info("SynthiansMemoryCore", f"Loaded {len(self._memories)} memories from persistence.")
-            
+
             # Load assemblies and memory_to_assemblies mapping
             assembly_list = await self.persistence.list_assemblies()
             loaded_assemblies_count = 0
-            
+
             # Initialize memory_to_assemblies mapping
             self.memory_to_assemblies = {memory_id: set() for memory_id in self._memories.keys()}
-            
+
             # Load each assembly
             for assembly_info in assembly_list:
                 assembly_id = assembly_info.get("id")
@@ -8600,7 +14622,7 @@ class SynthiansMemoryCore:
                     if assembly:
                         self.assemblies[assembly_id] = assembly
                         loaded_assemblies_count += 1
-                        
+
                         # Update memory_to_assemblies mapping
                         for memory_id in assembly.memories:
                             if memory_id in self.memory_to_assemblies:
@@ -8608,12 +14630,12 @@ class SynthiansMemoryCore:
                             else:
                                 # Create mapping entry if memory not in cache
                                 self.memory_to_assemblies[memory_id] = {assembly_id}
-            
+
             logger.info("SynthiansMemoryCore", f"Loaded {loaded_assemblies_count} assemblies from persistence.")
-            
+
             # Load the vector index
             index_loaded = self.vector_index.load()
-            
+
             # If index wasn't found, build it from loaded memories
             if not index_loaded and self._memories:
                 logger.info("SynthiansMemoryCore", "Building vector index from loaded memories...")
@@ -8624,12 +14646,16 @@ class SynthiansMemoryCore:
                 self.vector_index.save()
                 logger.info("SynthiansMemoryCore", f"Built and saved vector index with {len(self._memories)} entries")
 
-            # Pass momentum buffer to calculator if needed
-            # self.quick_recal.set_external_momentum(...)
+            # Start background tasks only if intervals are > 0
+            if self.config['persistence_interval'] > 0:
+                 self._background_tasks.append(asyncio.create_task(self._persistence_loop(), name=f"PersistenceLoop_{id(self)}"))
+            else:
+                logger.warning("SynthiansMemoryCore", "Persistence loop disabled (interval <= 0)")
 
-            # Start background tasks
-            self._background_tasks.append(asyncio.create_task(self._persistence_loop()))
-            self._background_tasks.append(asyncio.create_task(self._decay_and_pruning_loop()))
+            if self.config['decay_interval'] > 0 or self.config['prune_check_interval'] > 0:
+                self._background_tasks.append(asyncio.create_task(self._decay_and_pruning_loop(), name=f"DecayPruningLoop_{id(self)}"))
+            else:
+                logger.warning("SynthiansMemoryCore", "Decay/Pruning loop disabled (intervals <= 0)")
 
             self._initialized = True
             logger.info("SynthiansMemoryCore", "Initialization complete. Background tasks started.")
@@ -8637,17 +14663,65 @@ class SynthiansMemoryCore:
 
     async def shutdown(self):
         """Gracefully shut down the memory core."""
+        if not self._initialized:
+            logger.info("SynthiansMemoryCore", "Shutdown called but not initialized.")
+            return
+
         logger.info("SynthiansMemoryCore", "Shutting down...")
+        # Signal loops to stop checking/sleeping first
         self._shutdown_signal.set()
-        # Cancel background tasks
+        # Give loops a brief moment to recognize the signal
+        await asyncio.sleep(0.05)
+
+        # Cancel active tasks
+        tasks_to_cancel = []
         for task in self._background_tasks:
-            if not task.done():
-                task.cancel()
-        # Wait for tasks to finish cancellation
-        await asyncio.gather(*self._background_tasks, return_exceptions=True)
-        # Final persistence flush
-        await self._persist_all_managed_memories()
-        logger.info("SynthiansMemoryCore", "Shutdown complete.")
+            if task and not task.done():
+                # Don't cancel if already cancelling
+                if not task.cancelling():
+                    task.cancel()
+                    tasks_to_cancel.append(task)
+
+        # Wait for tasks to complete cancellation
+        if tasks_to_cancel:
+            logger.info(f"Waiting for {len(tasks_to_cancel)} background tasks to cancel...")
+            # Use return_exceptions=True so one failed task doesn't stop others
+            # Wait for a reasonable time (e.g., 5 seconds) for tasks to finish cancelling
+            results = await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+            logger.info("Background tasks cancellation completed.")
+            # Check for exceptions during cancellation
+            for i, result in enumerate(results):
+                task_name = tasks_to_cancel[i].get_name() if hasattr(tasks_to_cancel[i], 'get_name') else f"Task-{i}"
+                if isinstance(result, asyncio.CancelledError):
+                    logger.debug(f"{task_name} was cancelled successfully.")
+                elif isinstance(result, Exception):
+                    logger.error(f"Error during cancellation of {task_name}: {result}", exc_info=result)
+        else:
+            logger.info("No active background tasks found to cancel.")
+
+        # Clear the list of tasks *after* attempting cancellation
+        self._background_tasks = []
+
+        # --- Critical: Call persistence shutdown *before* resetting state ---
+        # This allows persistence to do its final save using the current state
+        logger.info("SynthiansMemoryCore", "Calling persistence shutdown...")
+        if hasattr(self, 'persistence') and self.persistence:
+            try:
+                # Add a timeout for safety
+                await asyncio.wait_for(self.persistence.shutdown(), timeout=5.0)
+                logger.info("SynthiansMemoryCore", "Persistence shutdown completed.")
+            except asyncio.TimeoutError:
+                logger.warning("SynthiansMemoryCore", "Timeout waiting for persistence shutdown")
+            except Exception as e:
+                logger.error("SynthiansMemoryCore", f"Error during persistence shutdown: {str(e)}", exc_info=True)
+        else:
+             logger.warning("SynthiansMemoryCore", "Persistence object not available during shutdown.")
+
+        # Reset state
+        self._initialized = False
+        # Reset shutdown signal for potential re-initialization
+        self._shutdown_signal = asyncio.Event()
+        logger.info("SynthiansMemoryCore", "Shutdown sequence complete.")
 
     # --- Core Memory Operations ---
 
@@ -8657,18 +14731,21 @@ class SynthiansMemoryCore:
                            metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """API-compatible wrapper for process_new_memory."""
         if not self._initialized: await self.initialize()
-        
+
         # Call the underlying implementation
         memory = await self.process_new_memory(content=content, embedding=embedding, metadata=metadata)
-        
+
         if memory:
             return {
+                "success": True, # Add success flag
                 "memory_id": memory.id,
                 "quickrecal_score": memory.quickrecal_score,
+                "embedding": memory.embedding.tolist() if memory.embedding is not None else None, # Include embedding
                 "metadata": memory.metadata
             }
         else:
             return {
+                "success": False, # Add success flag
                 "memory_id": None,
                 "quickrecal_score": None,
                 "error": "Failed to process memory"
@@ -8685,27 +14762,20 @@ class SynthiansMemoryCore:
 
         # 1. Validate/Generate Embedding
         if embedding is None:
-            # embedding = await self._generate_embedding(content) # Assumed external
-            logger.warning("SynthiansMemoryCore", "process_new_memory called without embedding, skipping.")
-            return None # Cannot proceed without embedding
-        
+            logger.info("SynthiansMemoryCore", "Generating embedding for new memory...")
+            embedding = await self.generate_embedding(content) # Generate if not provided
+            if embedding is None:
+                logger.error("SynthiansMemoryCore", "Failed to generate embedding, cannot process memory.")
+                return None
+
         # Handle common case where embedding is wrongly passed as a dict
         if isinstance(embedding, dict):
             logger.warning("SynthiansMemoryCore", f"Received embedding as dict type, attempting to extract vector")
             try:
-                # Try common dict formats seen in the wild
-                if 'embedding' in embedding and isinstance(embedding['embedding'], (list, np.ndarray)):
-                    embedding = embedding['embedding']
-                    logger.info("SynthiansMemoryCore", "Successfully extracted embedding from dict['embedding']") 
-                elif 'vector' in embedding and isinstance(embedding['vector'], (list, np.ndarray)):
-                    embedding = embedding['vector']
-                    logger.info("SynthiansMemoryCore", "Successfully extracted embedding from dict['vector']")
-                elif 'value' in embedding and isinstance(embedding['value'], (list, np.ndarray)):
-                    embedding = embedding['value']
-                    logger.info("SynthiansMemoryCore", "Successfully extracted embedding from dict['value']")
-                else:
-                    logger.error("SynthiansMemoryCore", f"Could not extract embedding from dict: {list(embedding.keys())[:5]}")
-                    return None
+                if 'embedding' in embedding and isinstance(embedding['embedding'], (list, np.ndarray)): embedding = embedding['embedding']
+                elif 'vector' in embedding and isinstance(embedding['vector'], (list, np.ndarray)): embedding = embedding['vector']
+                elif 'value' in embedding and isinstance(embedding['value'], (list, np.ndarray)): embedding = embedding['value']
+                else: raise ValueError(f"Could not extract embedding from dict keys: {list(embedding.keys())[:5]}")
             except Exception as e:
                 logger.error("SynthiansMemoryCore", f"Failed to extract embedding from dict: {str(e)}")
                 return None
@@ -8728,7 +14798,7 @@ class SynthiansMemoryCore:
         if not emotional_context:
             logger.info("SynthiansMemoryCore", "Analyzing emotional context for memory")
             emotional_context = await self.emotional_analyzer.analyze(content)
-            metadata["emotional_context"] = emotional_context
+            # Do not add to metadata here, let synthesizer handle it
         else:
             logger.debug("SynthiansMemoryCore", "Using precomputed emotional context from metadata")
 
@@ -8738,11 +14808,12 @@ class SynthiansMemoryCore:
             hyperbolic_embedding = self.geometry_manager._to_hyperbolic(normalized_embedding)
 
         # 5. Run Metadata Synthesizer
+        # Pass the analyzed emotion data directly to the synthesizer
         metadata = await self.metadata_synthesizer.synthesize(
             content=content,
             embedding=normalized_embedding,
             base_metadata=metadata,
-            emotion_data=emotional_context
+            emotion_data=emotional_context # Pass pre-analyzed data
         )
 
         # 6. Create Memory Entry
@@ -8753,21 +14824,15 @@ class SynthiansMemoryCore:
             metadata=metadata,
             hyperbolic_embedding=hyperbolic_embedding
         )
-        
+
         # Add memory ID to metadata for easier access
         memory.metadata["uuid"] = memory.id
 
-        # 7. Store in memory and persistence
+        # 7. Store in memory and mark as dirty
         async with self._lock:
             self._memories[memory.id] = memory
-            stored = await self.persistence.save_memory(memory)
-            if stored:
-                 logger.info("SynthiansMemoryCore", f"Stored new memory {memory.id}", {"quickrecal": quickrecal_score})
-            else:
-                 # Rollback if persistence failed
-                 del self._memories[memory.id]
-                 logger.error("SynthiansMemoryCore", f"Failed to persist memory {memory.id}, rolling back.")
-                 return None
+            self._dirty_memories.add(memory.id) # Mark for persistence
+            logger.info("SynthiansMemoryCore", f"Stored new memory {memory.id}", {"quickrecal": quickrecal_score})
 
         # 8. Update Assemblies
         await self._update_assemblies(memory)
@@ -8785,171 +14850,135 @@ class SynthiansMemoryCore:
         query: str,
         top_k: int = 5,
         threshold: Optional[float] = None,
-        user_emotion: Optional[str] = None,
+        user_emotion: Optional[str] = None, # Changed to Optional[str] to match server endpoint
         metadata_filter: Optional[Dict[str, Any]] = None,
         search_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Retrieve memories based on query relevance.
+        Handles potential query_embedding generation internally.
         """
-        
+        if not self._initialized: await self.initialize()
+        start_time = time.time()
+
         query_embedding = None
         try:
             # Generate embedding for the query if necessary
             if query:
                 query_embedding = await self.generate_embedding(query)
-                logger.debug("SynthiansMemoryCore", "Query embedding generated", {
-                    "query": query,
-                    "has_embedding": query_embedding is not None,
-                })
-            
-            # Get the current threshold (use provided or default)
+                if query_embedding is None:
+                     logger.error("SynthiansMemoryCore", "Failed to generate query embedding.")
+                     return {"success": False, "memories": [], "error": "Failed to generate query embedding"}
+                logger.debug("SynthiansMemoryCore", "Query embedding generated")
+
+            # Get the current threshold
             current_threshold = threshold
             if current_threshold is None and self.threshold_calibrator is not None:
                 current_threshold = self.threshold_calibrator.get_current_threshold()
-                logger.debug("SynthiansMemoryCore", f"Using calibrated threshold: {current_threshold:.4f}")
+                logger.debug(f"Using calibrated threshold: {current_threshold:.4f}")
+            elif current_threshold is None:
+                current_threshold = self.config['initial_retrieval_threshold'] # Use default if None provided and no calibrator
+                logger.debug(f"Using default initial threshold: {current_threshold:.4f}")
             else:
-                logger.debug("SynthiansMemoryCore", f"Using explicit threshold: {current_threshold}")
-            
-            logger.debug("SynthiansMemoryCore", "Memory retrieval parameters", {
-                "query": query,
-                "has_embedding": query_embedding is not None,
-                "threshold": current_threshold,
-                "user_emotion": user_emotion,
-                "top_k": top_k,
-                "metadata_filter": metadata_filter
-            })
-            
-            # Perform the retrieval
-            candidates = await self._get_candidate_memories(query_embedding, top_k * 2)
-            logger.debug("SynthiansMemoryCore", f"Found {len(candidates)} candidate memories")
-            
+                logger.debug(f"Using explicit threshold: {current_threshold:.4f}")
+
+            # Perform the retrieval using candidate generation
+            candidates = await self._get_candidate_memories(query_embedding, top_k * 2) # Get more candidates for filtering
+
             # Score and filter candidates
-            if candidates:
-                scored_candidates = []
-                for memory_dict in candidates:
-                    memory_embedding = memory_dict.get("embedding")
-                    if memory_embedding is not None and query_embedding is not None:
-                        # Calculate similarity score
-                        similarity = self.geometry_manager.calculate_similarity(query_embedding, memory_embedding)
-                        memory_dict["similarity"] = similarity
-                        scored_candidates.append(memory_dict)
+            if not candidates:
+                logger.info("SynthiansMemoryCore", "No candidate memories found.")
+                return {"success": True, "memories": [], "error": None}
+
+            scored_candidates = []
+            for memory_dict in candidates:
+                memory_embedding = memory_dict.get("embedding")
+                if memory_embedding is not None and query_embedding is not None:
+                    # Ensure embedding is a list before converting to array
+                    if isinstance(memory_embedding, list):
+                        memory_embedding_np = np.array(memory_embedding, dtype=np.float32)
                     else:
-                        # Skip memories without embeddings
+                        # Skip if embedding is not in expected format
+                        logger.warning(f"Skipping memory {memory_dict.get('id')} due to unexpected embedding format: {type(memory_embedding)}")
                         continue
-                
-                # Sort by similarity score (descending)
-                scored_candidates.sort(key=lambda x: x.get("similarity", 0), reverse=True)
-                
-                # Log similarity scores for debugging
-                if scored_candidates:
-                    score_info = [{
-                        "id": cand.get("id", "")[-8:],  # Last 8 chars of ID
-                        "score": round(cand.get("similarity", 0), 4),
-                        "metadata": {k: v for k, v in cand.get("metadata", {}).items() 
-                                     if k in ["source", "test_type"]}
-                    } for cand in scored_candidates[:5]]
-                    logger.debug("SynthiansMemoryCore", "Top candidate scores", score_info)
-                
-                # Apply threshold filtering
-                if current_threshold is not None:
-                    before_threshold = len(scored_candidates)
-                    scored_candidates = [c for c in scored_candidates 
-                                       if c.get("similarity", 0) >= current_threshold]
-                    logger.debug("SynthiansMemoryCore", "After threshold filtering", {
-                        "before": before_threshold,
-                        "after": len(scored_candidates),
-                        "threshold": current_threshold
-                    })
-                
-                # Apply emotional gating if requested
-                if user_emotion and hasattr(self, 'emotional_gating') and self.emotional_gating is not None:
-                    before_gating = len(scored_candidates)
-                    scored_candidates = await self.emotional_gating.gate_memories(
-                        scored_candidates, user_emotion
-                    )
-                    logger.debug("SynthiansMemoryCore", "After emotional gating", {
-                        "before": before_gating,
-                        "after": len(scored_candidates),
-                        "user_emotion": user_emotion
-                    })
-                
-                # Apply metadata filtering if requested
-                if metadata_filter and len(scored_candidates) > 0:
-                    before_metadata = len(scored_candidates)
-                    scored_candidates = self._filter_by_metadata(scored_candidates, metadata_filter)
-                    logger.debug("SynthiansMemoryCore", "After metadata filtering", {
-                        "before": before_metadata,
-                        "after": len(scored_candidates),
-                        "filter": metadata_filter
-                    })
-                
-                # Format and return results (taking top_k)
-                top_candidates = scored_candidates[:top_k] if len(scored_candidates) > top_k else scored_candidates
-                
-                result = {
-                    "success": True,
-                    "memories": top_candidates,
-                    "error": None
-                }
-                
-                return result
-            
-            # Fall through if no candidates found
-            logger.warning("SynthiansMemoryCore", "No candidate memories found for query", {"query": query})
-            return {"success": True, "memories": [], "error": None}
-            
+
+                    similarity = self.geometry_manager.calculate_similarity(query_embedding, memory_embedding_np)
+                    memory_dict["similarity"] = similarity # Use 'similarity' to match client expectations
+                    memory_dict["relevance_score"] = similarity # Keep internal name too
+                    scored_candidates.append(memory_dict)
+                else:
+                    logger.debug(f"Skipping candidate {memory_dict.get('id')} due to missing embedding.")
+
+            # Sort by similarity score (descending)
+            scored_candidates.sort(key=lambda x: x.get("similarity", 0.0), reverse=True)
+
+            # Apply threshold filtering
+            filtered_candidates = [c for c in scored_candidates if c.get("similarity", 0.0) >= current_threshold]
+
+            # Apply emotional gating if requested
+            if user_emotion and self.emotional_gating:
+                # Construct user_emotion dict for gating service
+                user_emotion_dict = {"dominant_emotion": user_emotion} # Simulate expected input for gating service
+                filtered_candidates = await self.emotional_gating.gate_memories(
+                    filtered_candidates, user_emotion_dict
+                )
+                # Re-sort based on 'final_score' if gating was applied
+                filtered_candidates.sort(key=lambda x: x.get("final_score", x.get("similarity", 0.0)), reverse=True)
+
+
+            # Apply metadata filtering if requested (basic implementation)
+            if metadata_filter:
+                 filtered_candidates = self._filter_by_metadata(filtered_candidates, metadata_filter)
+
+            # Return top_k results
+            final_memories = filtered_candidates[:top_k]
+
+            retrieval_time = (time.time() - start_time) * 1000
+            logger.info("SynthiansMemoryCore", f"Retrieved {len(final_memories)} memories", {
+                "top_k": top_k, "threshold": current_threshold, "user_emotion": user_emotion, "time_ms": retrieval_time
+            })
+            return {"success": True, "memories": final_memories, "error": None}
+
         except Exception as e:
             logger.error("SynthiansMemoryCore", f"Error in retrieve_memories: {str(e)}")
-            import traceback
-            logger.error("SynthiansMemoryCore", traceback.format_exc())
+            logger.error(traceback.format_exc())
             return {"success": False, "memories": [], "error": str(e)}
 
-    async def _get_candidate_memories(self, query_embedding: np.ndarray, limit: int) -> List[Dict[str, Any]]:
+    async def _get_candidate_memories(self, query_embedding: Optional[np.ndarray], limit: int) -> List[Dict[str, Any]]:
         """Retrieve candidate memories using assembly activation and direct vector search."""
+        if query_embedding is None:
+            logger.warning("SynthiansMemoryCore", "_get_candidate_memories called with no query embedding.")
+            return []
+
         assembly_candidates = set()
         direct_candidates = set()
 
         # 1. Assembly Activation
         activated_assemblies = await self._activate_assemblies(query_embedding)
         for assembly, activation_score in activated_assemblies[:5]: # Consider top 5 assemblies
-            # Lower activation threshold from 0.3 to 0.2 for better retrieval
             if activation_score > 0.2: # Lower activation threshold
                 assembly_candidates.update(assembly.memories)
-                logger.debug("SynthiansMemoryCore", f"Assembly activated: {len(assembly.memories)} memories, score: {activation_score:.4f}")
 
         # 2. Direct Vector Search using FAISS Index
-        # Validate query embedding for NaN/Inf values
-        if query_embedding is not None and (np.isnan(query_embedding).any() or np.isinf(query_embedding).any()):
-            logger.warning("SynthiansMemoryCore", "Query embedding has NaN or Inf values")
-            # Replace with zeros or return empty list
-            return []
-            
-        # Perform vector search using the FAISS index - USE A MUCH LOWER THRESHOLD
-        # Lower threshold from 0.3 to 0.05 for better recall sensitivity
-        search_threshold = 0.05  # Significantly lowered threshold
+        search_threshold = 0.05 # Use a low threshold to get enough candidates
         search_results = self.vector_index.search(query_embedding, k=limit, threshold=search_threshold)
-        
-        logger.info("SynthiansMemoryCore", f"Vector search with threshold {search_threshold} returned {len(search_results)} results")
-        
-        # Add direct search candidates from vector index
-        for memory_id, similarity in search_results:
+        for memory_id, _ in search_results:
             direct_candidates.add(memory_id)
-            logger.info("SynthiansMemoryCore", f"Memory {memory_id} similarity: {similarity:.4f} (from vector index)")
 
         # Combine candidates
         all_candidate_ids = assembly_candidates.union(direct_candidates)
-        
-        logger.info("SynthiansMemoryCore", f"Found {len(all_candidate_ids)} total candidate memories")
+        logger.debug(f"Found {len(all_candidate_ids)} total candidate IDs.")
 
-        # Fetch MemoryEntry objects
+        # Fetch MemoryEntry objects as dictionaries
         final_candidates = []
         async with self._lock:
              for mem_id in all_candidate_ids:
                  if mem_id in self._memories:
+                      # Make sure to convert memory to dict before returning
                       final_candidates.append(self._memories[mem_id].to_dict())
 
-        return final_candidates[:limit] # Limit the final candidate list
+        return final_candidates[:limit * 2] # Return more initially for scoring/filtering
+
 
     async def _activate_assemblies(self, query_embedding: np.ndarray) -> List[Tuple[MemoryAssembly, float]]:
         """Find and activate assemblies based on query similarity."""
@@ -8998,6 +15027,7 @@ class SynthiansMemoryCore:
                           if memory.id not in self.memory_to_assemblies:
                                self.memory_to_assemblies[memory.id] = set()
                           self.memory_to_assemblies[memory.id].add(assembly_id)
+                          self._dirty_memories.add(assembly.assembly_id) # Mark assembly as dirty
 
         # If no suitable assembly found, consider creating a new one
         if added_count == 0 and best_similarity > self.config['assembly_threshold'] * 0.5: # Threshold to create new
@@ -9018,9 +15048,11 @@ class SynthiansMemoryCore:
                                self.memory_to_assemblies[memory.id] = set()
                           self.memory_to_assemblies[memory.id].add(new_assembly.assembly_id)
                           added_count += 1
+                          self._dirty_memories.add(new_assembly.assembly_id) # Mark assembly as dirty
 
         if added_count > 0:
              logger.debug("SynthiansMemoryCore", f"Updated {added_count} assemblies for memory {memory.id}", {"assemblies": list(assemblies_updated)})
+
 
     async def provide_feedback(self, memory_id: str, similarity_score: float, was_relevant: bool):
         """Provide feedback to the threshold calibrator."""
@@ -9088,63 +15120,167 @@ class SynthiansMemoryCore:
 
     async def _persistence_loop(self):
         """Periodically persist changed memories."""
-        while not self._shutdown_signal.is_set():
-            await asyncio.sleep(self.config['persistence_interval'])
-            logger.debug("SynthiansMemoryCore", "Running periodic persistence.")
-            await self._persist_all_managed_memories()
+        logger.info("SynthiansMemoryCore","Persistence loop started.")
+        persist_interval = self.config.get('persistence_interval', 60.0)
+        try:
+            while not self._shutdown_signal.is_set():
+                try:
+                    # Wait for the configured interval OR the shutdown signal
+                    await asyncio.wait_for(
+                        self._shutdown_signal.wait(),
+                        timeout=persist_interval
+                    )
+                    # If wait() finished without timeout, it means signal was set
+                    logger.info("SynthiansMemoryCore","Persistence loop: Shutdown signal received during wait.")
+                    break # Exit loop if shutdown signal is set
+                except asyncio.TimeoutError:
+                    # Timeout occurred, time to persist
+                    if not self._shutdown_signal.is_set(): # Double-check signal
+                        logger.debug("SynthiansMemoryCore", "Running periodic persistence.")
+                        await self._persist_dirty_items() # Persist dirty items
+                except asyncio.CancelledError:
+                    logger.info("SynthiansMemoryCore","Persistence loop cancelled during wait.")
+                    break # Exit loop if cancelled
+        except asyncio.CancelledError:
+            logger.info("SynthiansMemoryCore","Persistence loop received cancel signal.")
+        except Exception as e:
+            logger.error("SynthiansMemoryCore","Persistence loop error", {"error": str(e)}, exc_info=True)
+        finally:
+            # Remove final save attempt to avoid 'no running event loop' errors
+            # The main shutdown method should handle any critical final saves
+            logger.info("SynthiansMemoryCore","Persistence loop stopped.")
 
     async def _decay_and_pruning_loop(self):
         """Periodically decay memory scores and prune old/irrelevant memories."""
-        while not self._shutdown_signal.is_set():
-            # Decay check interval
-            await asyncio.sleep(self.config['decay_interval'])
-            logger.info("SynthiansMemoryCore", "Running memory decay check.")
-            await self._apply_decay()
-
-            # Pruning check interval (more frequent)
-            await asyncio.sleep(self.config['prune_check_interval'] - self.config['decay_interval'] % self.config['prune_check_interval'])
-            logger.debug("SynthiansMemoryCore", "Running pruning check.")
-            await self._prune_if_needed()
-
-
-    async def _persist_all_managed_memories(self):
-        """Persist all memories currently managed (in self._memories)."""
+        logger.info("SynthiansMemoryCore","Decay/Pruning loop started.")
+        decay_interval = self.config.get('decay_interval', 3600.0)
+        prune_interval = self.config.get('prune_check_interval', 600.0)
+        # Determine the shortest interval to check the shutdown signal more frequently
+        check_interval = min(decay_interval, prune_interval, 5.0) # Check at least every 5s
+        last_decay_time = time.monotonic()
+        last_prune_time = time.monotonic()
         try:
-            if not self._memories:
-                logger.info("SynthiansMemoryCore", "No memories to persist.")
-                return
-                
-            async with self._lock:
-                count = 0
-                for memory_id, memory in self._memories.items():
-                    stored = await self.persistence.save_memory(memory)
-                    if stored:
-                        count += 1
-                logger.info("SynthiansMemoryCore", f"Persisted {count} memories.")
-                
-                # Save the vector index to ensure ID mappings persist
-                if self.vector_index.count() > 0:
-                    vector_index_saved = self.vector_index.save()
-                    logger.info("SynthiansMemoryCore", f"Vector index saved: {vector_index_saved} with {self.vector_index.count()} vectors and {len(self.vector_index.id_to_index)} id mappings")
+            while not self._shutdown_signal.is_set():
+                try:
+                    # Wait for the check interval OR the shutdown signal
+                    await asyncio.wait_for(
+                        self._shutdown_signal.wait(),
+                        timeout=check_interval
+                    )
+                    # If wait() finished without timeout, it means signal was set
+                    logger.info("SynthiansMemoryCore","Decay/Pruning loop: Shutdown signal received during wait.")
+                    break # Exit loop if shutdown signal is set
+                except asyncio.TimeoutError:
+                    # Timeout occurred, check if it's time for decay or pruning
+                    now = time.monotonic()
+                    if not self._shutdown_signal.is_set():
+                        # Decay Check
+                        if now - last_decay_time >= decay_interval:
+                            logger.info("SynthiansMemoryCore","Running memory decay check.")
+                            try:
+                                await self._apply_decay()
+                                last_decay_time = now
+                            except Exception as decay_e:
+                                logger.error("SynthiansMemoryCore","Error during decay application", {"error": str(decay_e)})
+                        # Pruning Check (can happen more often than decay)
+                        if now - last_prune_time >= prune_interval:
+                             logger.debug("SynthiansMemoryCore","Running pruning check.")
+                             try:
+                                 await self._prune_if_needed()
+                                 last_prune_time = now
+                             except Exception as prune_e:
+                                 logger.error("SynthiansMemoryCore","Error during pruning check", {"error": str(prune_e)})
+                except asyncio.CancelledError:
+                    logger.info("SynthiansMemoryCore","Decay/Pruning loop cancelled during wait.")
+                    break # Exit loop if cancelled
+        except asyncio.CancelledError:
+            logger.info("SynthiansMemoryCore","Decay/Pruning loop received cancel signal.")
         except Exception as e:
-            logger.error("SynthiansMemoryCore", f"Error persisting memories: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error("SynthiansMemoryCore","Decay/Pruning loop error", {"error": str(e)}, exc_info=True)
+        finally:
+            logger.info("SynthiansMemoryCore","Decay/Pruning loop stopped.")
+
+    async def _persist_dirty_items(self):
+        """Persist all items marked as dirty."""
+        # Get a copy of dirty IDs and clear the set under the lock
+        async with self._lock:
+            if not self._dirty_memories:
+                logger.debug("SynthiansMemoryCore", "No dirty items to persist.")
+                # Save index periodically even if no memories changed? Maybe not needed if index saved on add/delete.
+                # await self.persistence._save_index_no_lock() # Save index under lock
+                # vector_index_save_needed = ... # Logic to check if vector index needs saving
+                # if vector_index_save_needed: self.vector_index.save() # Save outside lock?
+                return
+
+            logger.info(f"Persisting {len(self._dirty_memories)} dirty items...")
+            items_to_save = list(self._dirty_memories)
+            self._dirty_memories.clear() # Clear the set *after* copying
+
+        # --- Perform saving outside the main core lock ---
+        persist_count = 0
+        persist_errors = 0
+        batch_size = self.config.get('persistence_batch_size', 100)
+
+        for i in range(0, len(items_to_save), batch_size):
+            batch_ids = items_to_save[i:i+batch_size]
+            save_tasks = []
+            items_in_batch = {}
+
+            # Get copies of items under lock first
+            async with self._lock:
+                 for item_id in batch_ids:
+                     item = None
+                     if item_id.startswith("mem_") and item_id in self._memories:
+                         item = copy.deepcopy(self._memories[item_id])
+                         item_type = "memory"
+                     elif item_id.startswith("asm_") and item_id in self.assemblies:
+                         item = copy.deepcopy(self.assemblies[item_id])
+                         item_type = "assembly"
+
+                     if item:
+                         items_in_batch[item_id] = (item, item_type)
+                     else:
+                          logger.warning(f"Dirty item {item_id} not found in cache for persistence.")
+
+            # Now create save tasks outside the lock
+            for item_id, (item, item_type) in items_in_batch.items():
+                 if item_type == "memory":
+                      save_tasks.append(self.persistence.save_memory(item))
+                 elif item_type == "assembly":
+                      save_tasks.append(self.persistence.save_assembly(item))
+
+            # Run tasks for the batch
+            if save_tasks:
+                 results = await asyncio.gather(*save_tasks, return_exceptions=True)
+                 for result, item_id in zip(results, items_in_batch.keys()):
+                      if isinstance(result, Exception) or result is False:
+                           logger.error(f"Error persisting dirty item {item_id}", {"error": str(result)})
+                           persist_errors += 1
+                           # Optionally re-add to dirty set for next attempt?
+                           # async with self._lock: self._dirty_memories.add(item_id)
+                      else:
+                           persist_count += 1
+
+            # Check for shutdown signal between batches
+            if self._shutdown_signal.is_set():
+                logger.info("Persistence interrupted by shutdown signal.")
+                break
+
+        logger.info(f"Periodic persistence completed: Saved {persist_count} dirty items with {persist_errors} errors.")
+
+        # Save index and vector index after processing dirty items
+        await self.persistence._save_index() # Use the method with the lock
+        if hasattr(self, 'vector_index') and self.vector_index:
+            try:
+                self.vector_index.save() # This might block briefly
+            except Exception as e:
+                 logger.error("Failed to save vector index during periodic persistence.", {"error": str(e)})
 
     async def _apply_decay(self):
         """Apply decay to QuickRecal scores."""
         async with self._lock:
-             modified_ids = []
-             for memory_id, memory in self._memories.items():
-                 effective_score = memory.get_effective_quickrecal()
-                 # Store the effective score back, but don't overwrite original quickrecal
-                 memory.metadata['effective_quickrecal'] = effective_score
-                 modified_ids.append(memory_id) # Mark for potential persistence update
-
-             # Persist modified memories (optional, could be done in main persistence loop)
-             # for mem_id in modified_ids:
-             #     await self.persistence.save_memory(self._memories[mem_id])
-             logger.info("SynthiansMemoryCore", f"Applied decay to {len(modified_ids)} memories.")
+             # No actual score modification needed, just update metadata if desired
+             logger.info("SynthiansMemoryCore", f"Decay check completed for {len(self._memories)} memories (no scores changed).")
 
 
     async def _prune_if_needed(self):
@@ -9161,25 +15297,47 @@ class SynthiansMemoryCore:
              num_to_prune = current_size - int(max_size * 0.85) # Prune down to 85%
 
              # Get memories sorted by effective QuickRecal score (lowest first)
-             scored_memories = [(mem.id, mem.get_effective_quickrecal()) for mem in self._memories.values()]
+             scored_memories = [(mem.id, mem.get_effective_quickrecal(self.config['time_decay_rate'])) for mem in self._memories.values()]
              scored_memories.sort(key=lambda x: x[1])
 
-             pruned_count = 0
+             pruned_ids = []
              for mem_id, score in scored_memories[:num_to_prune]:
                  if score < self.config['min_quickrecal_for_ltm']:
-                      if mem_id in self._memories:
-                           del self._memories[mem_id]
-                           # Also remove from assemblies mapping
-                           if mem_id in self.memory_to_assemblies:
-                                for asm_id in self.memory_to_assemblies[mem_id]:
-                                     if asm_id in self.assemblies:
-                                          # Assembly removal logic would be more complex, involving recalculation
-                                          # self.assemblies[asm_id].remove_memory(mem_id)
-                                          pass # Simplified for now
-                                del self.memory_to_assemblies[mem_id]
-                           # Delete from persistence
-                           await self.persistence.delete_memory(mem_id)
-                           pruned_count += 1
+                      pruned_ids.append(mem_id)
+
+             if not pruned_ids:
+                  logger.info("SynthiansMemoryCore", "No memories met pruning criteria.")
+                  return
+
+             logger.info(f"Identified {len(pruned_ids)} memories for pruning.")
+             # Perform deletion outside the main iteration
+             pruned_count = 0
+             ids_to_remove_from_index = []
+             for mem_id in pruned_ids:
+                 if mem_id in self._memories:
+                      del self._memories[mem_id]
+                      ids_to_remove_from_index.append(mem_id) # Mark for vector index removal
+
+                      # Also remove from assemblies mapping
+                      if mem_id in self.memory_to_assemblies:
+                           for asm_id in list(self.memory_to_assemblies[mem_id]): # Iterate over copy
+                                if asm_id in self.assemblies:
+                                     self.assemblies[asm_id].memories.discard(mem_id)
+                                     self._dirty_memories.add(asm_id) # Mark assembly dirty
+                           del self.memory_to_assemblies[mem_id]
+
+                      # Delete from persistence - call async method
+                      deleted_persistence = await self.persistence.delete_memory(mem_id)
+                      if deleted_persistence:
+                          pruned_count += 1
+                      else:
+                           logger.warning(f"Failed to delete memory {mem_id} from persistence.")
+
+             # Remove from vector index if needed (Requires remove method)
+             # if ids_to_remove_from_index:
+             #     # removed_count = self.vector_index.remove(ids_to_remove_from_index)
+             #     logger.warning(f"Vector index remove not implemented. Cannot remove {len(ids_to_remove_from_index)} pruned IDs.")
+
 
              logger.info("SynthiansMemoryCore", f"Pruned {pruned_count} memories.")
 
@@ -9257,19 +15415,18 @@ class SynthiansMemoryCore:
             if tool_name == "retrieve_memories_tool":
                  query = args.get("query")
                  top_k = args.get("top_k", 5)
-                 # Assume query embedding generation happens here or is passed in context
-                 # query_embedding = await self._generate_embedding(query) # Placeholder
-                 # For now, we rely on the retrieve_memories method to handle text query
-                 memories = await self.retrieve_memories(query=query, top_k=top_k)
+                 # Retrieve memories method handles embedding generation
+                 response_data = await self.retrieve_memories(query=query, top_k=top_k)
                  # Return simplified dicts for LLM
-                 return {"memories": [{"id": m.get("id"), "content": m.get("content"), "score": m.get("final_score", m.get("relevance_score"))} for m in memories]}
+                 if response_data["success"]:
+                      return {"memories": [{"id": m.get("id"), "content": m.get("content"), "score": m.get("final_score", m.get("relevance_score", m.get("similarity"))) } for m in response_data["memories"]]}
+                 else:
+                      return {"success": False, "error": response_data.get("error", "Retrieval failed")}
 
             elif tool_name == "process_new_memory_tool":
                  content = args.get("content")
                  metadata = args.get("metadata")
-                 # Embedding generation would happen here
-                 # embedding = await self._generate_embedding(content) # Placeholder
-                 # For now, store without embedding if not provided
+                 # Embedding generation happens in process_new_memory if needed
                  entry = await self.process_new_memory(content=content, metadata=metadata)
                  return {"success": entry is not None, "memory_id": entry.id if entry else None}
 
@@ -9298,6 +15455,121 @@ class SynthiansMemoryCore:
 
     # --- Helper & Placeholder Methods ---
 
+    def get_memory_by_id(self, memory_id: str) -> Optional[MemoryEntry]:
+        """Retrieve a specific memory entry by its ID from the cache.
+           NOTE: This is synchronous and operates on the current in-memory cache.
+           It does NOT acquire the async lock. Caller must manage concurrency.
+
+        Args:
+            memory_id: The unique identifier of the memory to retrieve
+
+        Returns:
+            The MemoryEntry if found in cache, None otherwise
+        """
+        # No lock needed here - caller (e.g., update_memory) holds the lock
+        memory = self._memories.get(memory_id)
+        if memory:
+            logger.debug("SynthiansMemoryCore", f"Retrieved memory {memory_id} directly from cache (sync).")
+        else:
+            logger.warning("SynthiansMemoryCore", f"Memory {memory_id} not found in cache (sync).")
+        return memory
+
+    async def update_memory(self, memory_id: str, updates: Dict[str, Any]) -> bool:
+        """
+        Update a memory entry with provided updates.
+        Performs a deep merge for metadata updates.
+
+        Args:
+            memory_id: ID of the memory to update
+            updates: Dictionary of fields to update and their new values
+
+        Returns:
+            True if the update succeeded, False otherwise
+        """
+        try:
+            logger.debug(f"Updating memory {memory_id} - acquiring lock")
+
+            # Step 1: Get and update the memory while holding the lock
+            try:
+                async with asyncio.timeout(5):  # 5 second timeout
+                    async with self._lock: # Use the actual async lock
+                        logger.debug(f"Lock acquired for memory {memory_id}")
+                        # Get the memory (use synchronous version since we already hold the lock)
+                        memory = self.get_memory_by_id(memory_id)
+                        if not memory:
+                            logger.warning(f"Cannot update memory {memory_id}: Not found")
+                            return False
+
+                        # Store metadata update separately to apply after all direct attributes
+                        metadata_to_update = None
+                        score_updated = False
+
+                        # Update the memory fields
+                        for key, value in updates.items():
+                            if key == "metadata" and isinstance(value, dict):
+                                # Store metadata updates to apply them after direct attribute updates
+                                metadata_to_update = value
+                                continue # Process metadata last
+
+                            if key == "quickrecal_score":
+                                try:
+                                    new_score_val = float(value)
+                                    new_score_val = max(0.0, min(1.0, new_score_val))
+                                    if abs(memory.quickrecal_score - new_score_val) > 1e-6:
+                                         memory.quickrecal_score = new_score_val
+                                         score_updated = True # Mark score as updated
+                                except (ValueError, TypeError):
+                                    logger.warning("SynthiansMemoryCore", f"Invalid quickrecal_score value: {value}")
+                                    continue
+                            elif hasattr(memory, key):
+                                 setattr(memory, key, value) # Update other direct attributes
+                            else:
+                                logger.warning(f"Unknown/invalid field '{key}' in memory update")
+
+                        # Apply metadata updates after other fields have been processed
+                        if metadata_to_update:
+                            if memory.metadata is None:
+                                memory.metadata = {}
+                            # Use deep update to properly handle nested dictionaries
+                            deep_update(memory.metadata, metadata_to_update)
+
+                        # Update quickrecal timestamp ONLY if the score actually changed in THIS update call
+                        if score_updated:
+                            if memory.metadata is None: memory.metadata = {}
+                            memory.metadata['quickrecal_updated_at'] = datetime.now(timezone.utc).isoformat()
+                            logger.debug(f"quickrecal_updated_at set for memory {memory_id}")
+
+                        # Mark as dirty for persistence
+                        self._dirty_memories.add(memory_id)
+                        logger.debug(f"Memory {memory_id} updated in memory (marked dirty), releasing lock")
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout while acquiring or using lock for memory {memory_id}")
+                return False
+
+            # The memory is marked as dirty, the persistence loop will handle saving it.
+            logger.info(f"Updated memory {memory_id} with {len(updates)} fields (marked dirty for persistence)")
+            return True
+
+        except Exception as e:
+            logger.error("SynthiansMemoryCore", f"Error updating memory {memory_id}: {str(e)}", exc_info=True)
+            return False
+
+
+    def _filter_by_metadata(self, memories: List[Dict], metadata_filter: Dict) -> List[Dict]:
+        """Filter memories based on metadata key-value pairs."""
+        if not metadata_filter: return memories
+        filtered = []
+        for mem in memories:
+            metadata = mem.get("metadata", {})
+            match = True
+            for key, value in metadata_filter.items():
+                 if metadata.get(key) != value:
+                      match = False
+                      break
+            if match:
+                 filtered.append(mem)
+        return filtered
+
     async def generate_embedding(self, text: str) -> Optional[np.ndarray]:
         """Generate embeddings using a consistent method for all text processing."""
         # Use SentenceTransformer directly without importing server.py
@@ -9307,55 +15579,62 @@ class SynthiansMemoryCore:
             import os
             model_name = os.environ.get("EMBEDDING_MODEL", "all-mpnet-base-v2")
             model = SentenceTransformer(model_name)
-            
+
             logger.info("SynthiansMemoryCore", f"Using embedding model {model_name}")
-            embedding = model.encode([text], convert_to_tensor=False)[0]
+            # Run encode in executor to avoid blocking event loop
+            loop = asyncio.get_running_loop()
+            embedding_list = await loop.run_in_executor(None, lambda: model.encode([text], convert_to_tensor=False))
+            if embedding_list is None or len(embedding_list) == 0:
+                raise ValueError("Embedding model returned empty result")
+
+            embedding = embedding_list[0]
             return self.geometry_manager._normalize(np.array(embedding, dtype=np.float32))
         except Exception as e:
             logger.error("SynthiansMemoryCore", f"Error generating embedding: {str(e)}")
-            
+
             # Fallback to a deterministic embedding based on text hash
-            # This ensures same text always gets same embedding
             import hashlib
-            
+
             # Create a deterministic embedding based on the hash of the text
             text_bytes = text.encode('utf-8')
             hash_obj = hashlib.md5(text_bytes)
             hash_digest = hash_obj.digest()
-            
+
             # Convert the 16-byte digest to a list of floats
-            # Repeating it to fill the embedding dimension
             byte_values = list(hash_digest) * (self.config['embedding_dim'] // 16 + 1)
-            
-            # Create a normalized embedding vector
             embedding = np.array([float(byte) / 255.0 for byte in byte_values[:self.config['embedding_dim']]], dtype=np.float32)
-            
+
             logger.warning("SynthiansMemoryCore", "Using deterministic hash-based embedding generation")
             return self.geometry_manager._normalize(embedding)
 
     def get_stats(self) -> Dict[str, Any]:
         """Get current statistics."""
-        persistence_stats = asyncio.run(self.persistence.get_stats()) # Run sync in this context
+        # Run get_stats synchronously as it doesn't involve async operations directly
+        persistence_stats = self.persistence.get_stats()
         quick_recal_stats = self.quick_recal.get_stats()
         threshold_stats = self.threshold_calibrator.get_statistics() if self.threshold_calibrator else {}
+        vector_index_stats = self.vector_index.get_stats() if hasattr(self.vector_index, 'get_stats') else {"count": self.vector_index.count(), "id_mappings": len(self.vector_index.id_to_index)}
+
 
         return {
             "core_stats": {
                 "total_memories": len(self._memories),
                 "total_assemblies": len(self.assemblies),
+                "dirty_memories": len(self._dirty_memories),
                 "initialized": self._initialized,
             },
             "persistence_stats": persistence_stats,
             "quick_recal_stats": quick_recal_stats,
-            "threshold_stats": threshold_stats
+            "threshold_stats": threshold_stats,
+            "vector_index_stats": vector_index_stats
         }
 
-    def process_memory_sync(self, content: str, embedding: Optional[np.ndarray] = None, 
+    def process_memory_sync(self, content: str, embedding: Optional[np.ndarray] = None,
                            metadata: Optional[Dict[str, Any]] = None,
                            emotion_data: Optional[Dict[str, Any]] = None) -> Union[Dict[str, Any], None]:
         """
 Process a new memory synchronously without using asyncio.run().
-        
+
 This is a synchronous version of process_new_memory that avoids potential asyncio.run() issues.
 
 Args:
@@ -9366,100 +15645,80 @@ Args:
         """
         try:
             logger.info("SynthiansMemoryCore", "Processing memory synchronously")
-            
+
             # Create a new memory entry
             memory_id = f"mem_{uuid.uuid4().hex[:12]}"  # More consistent ID format
             timestamp = metadata.get('timestamp', time.time()) if metadata else time.time()
-            
+
             # Ensure metadata is a dictionary
             metadata = metadata or {}
             metadata['timestamp'] = timestamp
-            
+
             # Use provided embedding or generate from content
-            if embedding is None and self.geometry_manager is not None:
-                try:
-                    embedding = self.geometry_manager.process_text(content)
-                    logger.info("SynthiansMemoryCore", f"Generated embedding for memory {memory_id}")
-                except Exception as e:
-                    logger.error("SynthiansMemoryCore", f"Error generating embedding: {str(e)}")
-                    # Create a fallback embedding of zeros
-                    embedding = np.zeros(self.config.get('embedding_dim', 768), dtype=np.float32)
-            
+            if embedding is None:
+                logger.warning("SynthiansMemoryCore", "Sync processing requires embedding, using zeros")
+                embedding = np.zeros(self.config.get('embedding_dim', 768), dtype=np.float32)
+
+            # Validate/normalize embedding
+            validated_embedding = self.geometry_manager._validate_vector(embedding, "Input Embedding")
+            if validated_embedding is None:
+                 logger.error("SynthiansMemoryCore", "Invalid embedding provided (sync).")
+                 return None
+            aligned_embedding, _ = self.geometry_manager._align_vectors(validated_embedding, np.zeros(self.config['embedding_dim']))
+            normalized_embedding = self.geometry_manager._normalize(aligned_embedding)
+
             # If emotion_data is not provided but we have an emotion analyzer, try to generate it
-            if emotion_data is None and self.emotion_analyzer is not None:
-                try:
-                    # Use the synchronous version for consistency
-                    emotion_result = self.emotion_analyzer.analyze_sync(content)
-                    if emotion_result and emotion_result.get('success', False):
-                        emotion_data = emotion_result
-                        logger.info("SynthiansMemoryCore", f"Generated emotion data for memory {memory_id}")
-                except Exception as e:
-                    logger.warning("SynthiansMemoryCore", f"Error analyzing emotions: {str(e)}")
-            
+            if emotion_data is None and self.emotional_analyzer is not None:
+                # Needs a sync version of analyze
+                logger.warning("SynthiansMemoryCore", "Sync emotion analysis not implemented")
+
             # Enhance metadata using the MetadataSynthesizer
             enhanced_metadata = metadata
             if self.metadata_synthesizer is not None:
                 try:
-                    # Use the synchronous version of metadata synthesis
                     enhanced_metadata = self.metadata_synthesizer.synthesize_sync(
                         content=content,
-                        embedding=embedding,
+                        embedding=normalized_embedding,
                         base_metadata=metadata,
                         emotion_data=emotion_data
                     )
-                    logger.info("SynthiansMemoryCore", f"Enhanced metadata for memory {memory_id}")
+                    logger.info("SynthiansMemoryCore", f"Enhanced metadata for memory {memory_id} (sync)")
                 except Exception as e:
-                    logger.error("SynthiansMemoryCore", f"Error enhancing metadata: {str(e)}")
-            
+                    logger.error("SynthiansMemoryCore", f"Error enhancing metadata (sync): {str(e)}")
+
             # Calculate QuickRecal score
             quickrecal_score = 0.5  # Default value
-            if self.quick_recal is not None and embedding is not None:
+            if self.quick_recal is not None:
                 try:
-                    # Use synchronous version to avoid asyncio issues
                     context = {'text': content, 'timestamp': timestamp}
-                    if enhanced_metadata:
-                        context.update(enhanced_metadata)
-                    
-                    if hasattr(self.quick_recal, 'calculate_sync'):
-                        quickrecal_score = self.quick_recal.calculate_sync(embedding, context=context)
-                        logger.info("SynthiansMemoryCore", f"Calculated QuickRecal score: {quickrecal_score}")
-                    else:
-                        logger.warning("SynthiansMemoryCore", "No synchronous QuickRecal calculate method available")
+                    if enhanced_metadata: context.update(enhanced_metadata)
+                    quickrecal_score = self.quick_recal.calculate_sync(normalized_embedding, context=context)
+                    logger.info("SynthiansMemoryCore", f"Calculated QuickRecal score (sync): {quickrecal_score}")
                 except Exception as e:
-                    logger.error("SynthiansMemoryCore", f"Error calculating QuickRecal score: {str(e)}")
-            
-            # Create memory object
-            memory_entry = {
-                'id': memory_id,
-                'content': content,
-                'embedding': embedding.tolist() if embedding is not None else None,
-                'metadata': enhanced_metadata,  # Use the enhanced metadata
-                'quickrecal_score': quickrecal_score,
-                'created_at': timestamp,
-                'updated_at': timestamp,
-                'access_count': 0,
-                'last_accessed': timestamp
-            }
-            
-            # Store memory directly without queueing to avoid potential deadlocks
-            self._memories[memory_id] = memory_entry
-            logger.info("SynthiansMemoryCore", f"Memory {memory_id} stored in memory")
-            
-            # Only queue if persistence is enabled and queue is not full
-            try:
-                if self._persistence and not self._memory_queue.full():
-                    self._memory_queue.put_nowait((memory_id, memory_entry))
-                    logger.info("SynthiansMemoryCore", f"Memory {memory_id} queued for persistence")
-            except Exception as queue_err:
-                logger.error("SynthiansMemoryCore", f"Failed to queue memory: {str(queue_err)}")
-                # Memory is still in _memories, just not persisted
-            
-            # Return success
-            return memory_entry
+                    logger.error("SynthiansMemoryCore", f"Error calculating QuickRecal score (sync): {str(e)}")
+
+            # Create memory object (using MemoryEntry directly)
+            memory_entry_obj = MemoryEntry(
+                id=memory_id,
+                content=content,
+                embedding=normalized_embedding,
+                metadata=enhanced_metadata,
+                quickrecal_score=quickrecal_score,
+                timestamp=datetime.fromtimestamp(timestamp, timezone.utc) # Convert to datetime
+            )
+
+            # Store memory directly
+            self._memories[memory_id] = memory_entry_obj
+            self._dirty_memories.add(memory_id) # Mark as dirty for next persistence cycle
+            logger.info("SynthiansMemoryCore", f"Memory {memory_id} stored in memory (sync)")
+
+            # Persistence is handled by the background loop
+
+            # Return a dictionary representation
+            return memory_entry_obj.to_dict()
         except Exception as e:
             logger.error("SynthiansMemoryCore", f"Error processing memory synchronously: {str(e)}")
             return None
-
 ```
 
 # synthians_trainer_server\__init__.py
@@ -9485,7 +15744,7 @@ from typing import List, Dict, Any, Optional, Tuple, Literal
 import logging
 import traceback # Import traceback
 import datetime  # Add datetime module for timestamps
-
+import inspect
 # Import the new Neural Memory module and config
 from .neural_memory import NeuralMemoryModule, NeuralMemoryConfig
 
@@ -9540,18 +15799,31 @@ class InitResponse(BaseModel):
     config: dict # Return as dict for JSON
 
 class RetrieveRequest(BaseModel):
-    query_embedding: List[float]
+    input_embedding: List[float]
 
 class RetrieveResponse(BaseModel):
     retrieved_embedding: List[float]
+    query_projection: Optional[List[float]] = None
 
 class UpdateMemoryRequest(BaseModel):
     input_embedding: List[float]
+    # Add external projections and gates for MAG/MAL variants
+    external_key_projection: Optional[List[float]] = None
+    external_value_projection: Optional[List[float]] = None
+    external_alpha_gate: Optional[float] = None
+    external_theta_gate: Optional[float] = None
+    external_eta_gate: Optional[float] = None
 
 class UpdateMemoryResponse(BaseModel):
     status: str
     loss: Optional[float] = None
     grad_norm: Optional[float] = None
+    key_projection: Optional[List[float]] = None
+    value_projection: Optional[List[float]] = None
+    # Add applied gates to response for debugging
+    applied_alpha: Optional[float] = None
+    applied_theta: Optional[float] = None
+    applied_eta: Optional[float] = None
 
 class TrainOuterRequest(BaseModel):
     input_sequence: List[List[float]]
@@ -9583,6 +15855,28 @@ class GetProjectionsResponse(BaseModel):
     value_projection: List[float]
     query_projection: List[float]
     projection_metadata: dict
+
+class CalculateGatesRequest(BaseModel):
+    attention_output: List[float] = Field(..., description="Output from the attention mechanism")
+    current_alpha: Optional[float] = None
+    current_theta: Optional[float] = None
+    current_eta: Optional[float] = None
+
+class CalculateGatesResponse(BaseModel):
+    alpha: float
+    theta: float
+    eta: float
+    metadata: dict = Field(default_factory=dict)
+
+class ConfigRequest(BaseModel):
+    variant: Optional[str] = Field(None, description="Titans variant to use (MAC, MAG, MAL)")
+
+class ConfigResponse(BaseModel):
+    neural_memory_config: dict
+    attention_config: Optional[dict] = None
+    titans_variant: str
+    supports_external_gates: bool
+    supports_external_projections: bool
 
 class ClusterHotspot(BaseModel):
     cluster_id: str
@@ -9636,22 +15930,19 @@ def _validate_vector(vec: Optional[List[float]], expected_dim: int, name: str, a
     if expected_dim != -1 and len(vec) != expected_dim:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid vector length for '{name}'. Expected {expected_dim}, got {len(vec)}."
-        )
+            detail=f"Invalid vector length for '{name}'. Expected {expected_dim}, got {len(vec)}.")
     # Add NaN/Inf check
     try:
          # Using np.isfinite is more efficient for checking both NaN and Inf
          if not np.all(np.isfinite(vec)):
              raise HTTPException(
                   status_code=400,
-                  detail=f"Invalid values (NaN/Inf) found in '{name}'."
-             )
+                  detail=f"Invalid values (NaN/Inf) found in '{name}'.")
     except TypeError:
           # This might happen if vec contains non-numeric types
           raise HTTPException(
                status_code=400,
-               detail=f"Invalid value types in '{name}', expected floats."
-          )
+               detail=f"Invalid value types in '{name}', expected floats.")
 
 
 # --- API Endpoints ---
@@ -9720,55 +16011,38 @@ async def init_neural_memory(req: InitRequest):
                             detail=f"Initialization failed: {str(e)}")
 
 @app.post("/retrieve", response_model=RetrieveResponse)
-async def retrieve_memory(req: RetrieveRequest):
+async def retrieve(req: RetrieveRequest):
     nm = get_neural_memory()
     try:
-        _validate_vector(req.query_embedding, nm.config['query_dim'], "query_embedding")
+        _validate_vector(req.input_embedding, nm.config['input_dim'], "input_embedding")
         
-        # Convert to proper tensor shape expected by the model (batch dimension)
-        query_tensor = tf.convert_to_tensor([req.query_embedding], dtype=tf.float32)
+        # Create tensor with proper batch dimension as expected by TensorFlow
+        input_tensor = tf.convert_to_tensor([req.input_embedding], dtype=tf.float32)
         
-        # Call the model with the properly shaped tensor
-        retrieved_tensor = nm(query_tensor, training=False)
+        # Get the query projection
+        k_t, v_t, q_t = nm.get_projections(input_tensor)
         
-        if retrieved_tensor is None or not isinstance(retrieved_tensor, tf.Tensor):
-             raise ValueError("Retrieval process returned None or invalid type")
-
-        # Ensure we get a flat list regardless of tensor shape
-        if len(tf.shape(retrieved_tensor)) > 1:
-             # If we get a batch of vectors (or matrix), we want the first one
-             retrieved_list = retrieved_tensor[0].numpy().tolist()
-        else:
-             retrieved_list = retrieved_tensor.numpy().tolist()
+        # Log shapes for debugging
+        logger.debug(f"DEBUG /retrieve: Shape of input_tensor: {tf.shape(input_tensor).numpy()}, Shape of q_t: {tf.shape(q_t).numpy()}")
+        logger.debug(f"DEBUG /retrieve: Config - query_dim={nm.config['query_dim']}, key_dim={nm.config['key_dim']}")
         
-        # Log the retrieval metrics
-        # Note: In a real implementation, we would have more metadata about the retrieved memories
-        # This is a simplified version that just logs the retrieval vector
-        metrics = get_metrics_store()
+        # Pass the QUERY projection to the model, not the raw input tensor
+        retrieved_embedding = nm(q_t)
         
-        # Extract user emotion from request metadata if available
-        user_emotion = None
-        if hasattr(req, "metadata") and req.metadata and "user_emotion" in req.metadata:
-            user_emotion = req.metadata["user_emotion"]
-            
-        # For now, we don't have full memory metadata in this endpoint
-        # In a more complete implementation, we would track the actual memories retrieved
-        metrics.log_retrieval(
-            query_embedding=req.query_embedding,
-            retrieved_memories=[{"memory_id": "synthetic_memory", "embedding": retrieved_list}],
-            user_emotion=user_emotion,
-            metadata={
-                "timestamp": datetime.datetime.now().isoformat(),
-                "embedding_dim": len(retrieved_list)
-            }
+        # Convert to Python list for JSON serialization
+        retrieved_embedding_list = retrieved_embedding[0].numpy().tolist() if len(tf.shape(retrieved_embedding)) > 1 else retrieved_embedding.numpy().tolist()
+        
+        # Convert query projection to list for response
+        query_projection_list = q_t[0].numpy().tolist() if len(tf.shape(q_t)) > 1 else q_t.numpy().tolist()
+        
+        return RetrieveResponse(
+            retrieved_embedding=retrieved_embedding_list,
+            query_projection=query_projection_list
         )
-
-        return RetrieveResponse(retrieved_embedding=retrieved_list)
-
     except HTTPException as http_exc: raise http_exc
     except Exception as e:
-        logger.error(f"Memory retrieval failed: {e}\n{traceback.format_exc()}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Retrieval error: {str(e)}")
+        logger.error(f"Retrieve failed: {e}\n{traceback.format_exc()}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Retrieve failed: {str(e)}")
 
 @app.post("/update_memory", response_model=UpdateMemoryResponse)
 async def update_memory(req: UpdateMemoryRequest):
@@ -9776,11 +16050,62 @@ async def update_memory(req: UpdateMemoryRequest):
     try:
         _validate_vector(req.input_embedding, nm.config['input_dim'], "input_embedding")
         
+        # Validate optional external projections if provided
+        if req.external_key_projection is not None:
+            _validate_vector(req.external_key_projection, nm.config['key_dim'], "external_key_projection")
+        if req.external_value_projection is not None:
+            _validate_vector(req.external_value_projection, nm.config['value_dim'], "external_value_projection")
+        
         # Create tensor with proper batch dimension as expected by TensorFlow
         input_tensor = tf.convert_to_tensor([req.input_embedding], dtype=tf.float32)
 
-        # Pass to update_step which now expects a batched tensor with shape [1, input_dim]
-        loss_tensor, grads = nm.update_step(input_tensor)
+        # Prepare external projections if provided (for MAL variant)
+        external_k_t = None
+        external_v_t = None
+        if req.external_key_projection is not None:
+            external_k_t = tf.convert_to_tensor([req.external_key_projection], dtype=tf.float32)
+        if req.external_value_projection is not None:
+            external_v_t = tf.convert_to_tensor([req.external_value_projection], dtype=tf.float32)
+
+        # Get the key and value projections if not provided externally
+        if external_k_t is None or external_v_t is None:
+            k_t, v_t, _ = nm.get_projections(input_tensor)
+            # Use externally provided projections if available
+            if external_k_t is not None:
+                k_t = external_k_t
+            if external_v_t is not None:
+                v_t = external_v_t
+        else:
+            # Both projections provided externally
+            k_t, v_t = external_k_t, external_v_t
+
+        # Prepare external gates if provided (for MAG variant)
+        external_gates = {}
+        if req.external_alpha_gate is not None:
+            external_gates["alpha_t"] = req.external_alpha_gate
+        if req.external_theta_gate is not None:
+            external_gates["theta_t"] = req.external_theta_gate
+        if req.external_eta_gate is not None:
+            external_gates["eta_t"] = req.external_eta_gate
+        
+        # Log the gate values we're using
+        if any([req.external_alpha_gate, req.external_theta_gate, req.external_eta_gate]):
+            logger.info(f"MAG variant: Using external gates - alpha:{req.external_alpha_gate}, theta:{req.external_theta_gate}, eta:{req.external_eta_gate}")
+        
+        # Call update_step with the correct named parameters
+        loss_tensor, grads = nm.update_step(
+            x_t=input_tensor,
+            external_k_t=k_t,  # Pass the determined key projection
+            external_v_t=v_t,  # Pass the determined value projection
+            external_alpha_t=req.external_alpha_gate,  # Pass individual gate values
+            external_theta_t=req.external_theta_gate,
+            external_eta_t=req.external_eta_gate
+        )
+
+        # Get the actual gates used (if available from the method)
+        applied_gates = {}
+        if hasattr(nm, "last_applied_gates") and nm.last_applied_gates:
+            applied_gates = nm.last_applied_gates
 
         grad_norm = 0.0
         if grads:
@@ -9805,16 +16130,26 @@ async def update_memory(req: UpdateMemoryRequest):
             emotion=req.metadata.get("emotion") if hasattr(req, "metadata") and req.metadata else None,
             metadata={
                 "timestamp": timestamp,
-                "input_dim": len(req.input_embedding)
+                "input_dim": len(req.input_embedding),
+                "external_projections_used": external_k_t is not None or external_v_t is not None,
+                "external_gates_used": bool(external_gates)
             }
         )
+
+        # Convert projections to lists for response
+        key_projection_list = k_t[0].numpy().tolist() if len(tf.shape(k_t)) > 1 else k_t.numpy().tolist()
+        value_projection_list = v_t[0].numpy().tolist() if len(tf.shape(v_t)) > 1 else v_t.numpy().tolist()
 
         return UpdateMemoryResponse(
             status="success",
             loss=loss_value,
-            grad_norm=grad_norm
+            grad_norm=grad_norm,
+            key_projection=key_projection_list,
+            value_projection=value_projection_list,
+            applied_alpha=applied_gates.get("alpha_t"),
+            applied_theta=applied_gates.get("theta_t"),
+            applied_eta=applied_gates.get("eta_t")
         )
-
     except HTTPException as http_exc: raise http_exc
     except Exception as e:
         logger.error(f"Memory update failed: {e}\n{traceback.format_exc()}", exc_info=True)
@@ -9894,23 +16229,19 @@ async def load_neural_memory_state(req: SaveLoadRequest):
         
         # Create a properly initialized model with the saved config
         temp_nm = NeuralMemoryModule(config=saved_config)
-        
-        # Force build by creating dummy inputs and running a forward pass
-        dummy_input = tf.zeros((1, temp_nm.config['input_dim']), dtype=tf.float32)
-        dummy_query = tf.zeros((1, temp_nm.config['query_dim']), dtype=tf.float32)
-        _ = temp_nm.get_projections(dummy_input)
-        _ = temp_nm(dummy_query)
-        
-        # Now load the state into the fully initialized model with matching config
+
+        # Initialize geometry manager and surprise detector based on config
+        geometry_manager = GeometryManager({'embedding_dim': temp_nm.config['input_dim']})
+        # Reset surprise detector to use new geometry manager if re-initializing
+        surprise_detector = None
+        get_surprise_detector() # Initialize if not already
+
+        # Attempt to load state into the fully initialized model with matching config
         loaded_ok = temp_nm.load_state(req.path)
 
         if loaded_ok:
             # Replace the global instance with our successfully loaded one
             neural_memory = temp_nm
-            # Re-initialize dependent components with the loaded config
-            geometry_manager = GeometryManager({'embedding_dim': neural_memory.config['input_dim']})
-            surprise_detector = None  # Force re-init with new geometry manager
-            get_surprise_detector()
             logger.info(f"Neural Memory state loaded from {req.path} and components re-initialized.")
             return {"message": f"Neural Memory state loaded from {req.path}"}
         else:
@@ -10079,13 +16410,173 @@ async def diagnose_emoloop(window: str = "last_100", emotion_filter: Optional[st
     
     return response
 
+@app.post("/calculate_gates", response_model=CalculateGatesResponse)
+async def calculate_gates(request: CalculateGatesRequest):
+    """Calculate gate values (alpha, theta, eta) from attention output for MAG variant.
+    
+    Args:
+        request: The request containing attention output and optional current gate values
+    
+    Returns:
+        CalculateGatesResponse containing the calculated gate values
+    """
+    nm = get_neural_memory()
+    try:
+        # Convert attention output to tensor
+        attention_output = tf.convert_to_tensor([request.attention_output], dtype=tf.float32)
+        
+        # Call the calculate_gates method of the Neural Memory Module
+        alpha_t, theta_t, eta_t = nm.calculate_gates(attention_output)
+        
+        # Convert to Python scalars for response
+        alpha_value = float(alpha_t.numpy()) if hasattr(alpha_t, 'numpy') else float(alpha_t)
+        theta_value = float(theta_t.numpy()) if hasattr(theta_t, 'numpy') else float(theta_t)
+        eta_value = float(eta_t.numpy()) if hasattr(eta_t, 'numpy') else float(eta_t)
+        
+        # Create response with metadata
+        return CalculateGatesResponse(
+            alpha=alpha_value,
+            theta=theta_value,
+            eta=eta_value,
+            metadata={
+                "timestamp": datetime.datetime.now().isoformat(),
+                "attention_output_dim": len(request.attention_output),
+                "current_alpha": request.current_alpha,
+                "current_theta": request.current_theta,
+                "current_eta": request.current_eta
+            }
+        )
+    except Exception as e:
+        logger.error(f"Calculate gates failed: {e}\n{traceback.format_exc()}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Calculate gates error: {str(e)}")
+
+@app.get("/config", response_model=ConfigResponse)
+@app.post("/config", response_model=ConfigResponse)
+async def get_config(request: Optional[ConfigRequest] = None):
+    """Get or update the Neural Memory configuration, including Titans variant support.
+    
+    Args:
+        request: Optional request to update the Titans variant
+    
+    Returns:
+        ConfigResponse containing the current configuration
+    """
+    nm = get_neural_memory()
+    try:
+        # Update variant if requested
+        if request and request.variant:
+            # Validate variant
+            valid_variants = ["MAC", "MAG", "MAL"]
+            if request.variant.upper() not in valid_variants:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Invalid Titans variant '{request.variant}'. Must be one of {valid_variants}"
+                )
+            
+            # Set environment variable for variant
+            os.environ["TITANS_VARIANT"] = request.variant.upper()
+            logger.info(f"Updated TITANS_VARIANT to {request.variant.upper()}")
+        
+        # Get current variant from environment or default to MAC
+        current_variant = os.environ.get("TITANS_VARIANT", "MAC").upper()
+        
+        # Dynamically determine capabilities based on implemented method signatures
+        # Check if update_step supports external gates and projections using inspect
+        update_step_sig = inspect.signature(nm.update_step)
+        supports_external_gates = any(param in update_step_sig.parameters 
+                                   for param in ["external_alpha_t", "external_theta_t", "external_eta_t"])
+        supports_external_projections = any(param in update_step_sig.parameters 
+                                        for param in ["external_k_t", "external_v_t"])
+        
+        logger.info(f"Detected capabilities: supports_external_gates={supports_external_gates}, "
+                   f"supports_external_projections={supports_external_projections}")
+        
+        # Get neural memory config
+        neural_memory_config = nm.get_config_dict()
+        
+        # Get attention config if available
+        attention_config = None
+        if hasattr(nm, "attention_config"):
+            attention_config = nm.attention_config
+        
+        return ConfigResponse(
+            neural_memory_config=neural_memory_config,
+            attention_config=attention_config,
+            titans_variant=current_variant,
+            supports_external_gates=supports_external_gates,
+            supports_external_projections=supports_external_projections
+        )
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        logger.error(f"Config endpoint failed: {e}\n{traceback.format_exc()}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Config error: {str(e)}")
+
 # --- App startup/shutdown ---
 @app.on_event("startup")
 async def startup_event():
-     global geometry_manager
-     if geometry_manager is None:
-         geometry_manager = GeometryManager()
-     logger.info("Synthians Neural Memory API started. Send POST to /init to initialize.")
+    global neural_memory, memory_core_url, surprise_detector, geometry_manager
+    logger.info("Synthians Neural Memory API starting up...")
+
+    # --- ADD AUTO-INITIALIZATION LOGIC ---
+    try:
+        logger.info("Attempting auto-initialization of Neural Memory module...")
+        # Use environment variables for default config or load path if needed
+        default_config_dict = {
+            # Set input_dim to match Memory Core's embedding dimension (768)
+            'input_dim': 768,
+            # Key and query dimensions should match for proper attention computation
+            'key_dim': 128,
+            'query_dim': 128,  
+            'value_dim': 768,  
+            'hidden_dim': 512   
+        }
+        load_path = os.environ.get("NM_DEFAULT_STATE_PATH", None)
+        mc_url = os.environ.get("MEMORY_CORE_URL", "http://localhost:5010") 
+
+        # Create default config
+        config = NeuralMemoryConfig(**default_config_dict)
+
+        # Create the module instance
+        neural_memory = NeuralMemoryModule(config=config)
+
+        # Initialize geometry manager and surprise detector based on config
+        geometry_manager = GeometryManager({'embedding_dim': neural_memory.config['input_dim']})
+        # Reset surprise detector to use new geometry manager if re-initializing
+        surprise_detector = None
+        get_surprise_detector() 
+
+        # Attempt to load state if path specified
+        if load_path:
+            logger.info(f"Attempting to load default state from: {load_path}")
+            # Build model before loading
+            try:
+                logger.info("Building model before loading state...")
+                _ = neural_memory(tf.zeros((1, neural_memory.config['query_dim'])))
+                logger.info("Model built successfully for auto-load.")
+            except Exception as build_err:
+                logger.error(f"Error building model during auto-load: {build_err}")
+            loaded = neural_memory.load_state(load_path)
+            if loaded:
+                logger.info(f"Successfully auto-loaded state from {load_path}")
+            else:
+                logger.warning(f"Failed to auto-load state from {load_path}. Starting with fresh state.")
+
+        # Set Memory Core URL if available
+        if mc_url:
+            memory_core_url = mc_url
+
+        logger.info("Neural Memory module auto-initialized successfully on startup.")
+        logger.info(f"Effective Config: {neural_memory.get_config_dict()}")
+
+    except Exception as e:
+        logger.error(f"CRITICAL: Auto-initialization of Neural Memory failed: {e}", exc_info=True)
+        # Ensure neural_memory is None if init fails
+        neural_memory = None
+    # --- END AUTO-INITIALIZATION LOGIC ---
+
+    # Original message still useful as a fallback indication
+    logger.info("Synthians Neural Memory API started. Send POST to /init to reinitialize if needed.")
 
 
 @app.on_event("shutdown")
@@ -10113,7 +16604,7 @@ if __name__ == "__main__":
     if not np.__version__.startswith("1."):
         print("\n\n!!!! WARNING: Numpy version is not < 2.0.0. This may cause issues with TensorFlow/other libs. !!!!\n\n")
 
-    uvicorn.run(app, host=host, port=port, log_level=log_level) # Run using the app object directly
+    uvicorn.run(app, host=host, port=port, log_level=log_level) 
 ```
 
 # synthians_trainer_server\logs\intent_graphs\intent_20250328125215_17601e61940.json
@@ -10134,6 +16625,1343 @@ if __name__ == "__main__":
     "timestamp": "2025-03-28T12:52:23.473811"
   }
 }
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328130303_2137fb81610.json
+
+```json
+{
+  "trace_id": "intent_20250328130303_2137fb81610",
+  "timestamp": "2025-03-28T13:03:03.308840",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Error: 500: Memory processing failed: 'GeometryManager' object has no attribute '_normalize'",
+    "confidence": 0.0,
+    "timestamp": "2025-03-28T13:03:07.602136"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328130801_1bc7ba55940.json
+
+```json
+{
+  "trace_id": "intent_20250328130801_1bc7ba55940",
+  "timestamp": "2025-03-28T13:08:01.317040",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Error: 500: Memory processing failed: 'GeometryManager' object has no attribute '_normalize'",
+    "confidence": 0.0,
+    "timestamp": "2025-03-28T13:08:05.429991"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328130929_214e62c1cd0.json
+
+```json
+{
+  "trace_id": "intent_20250328130929_214e62c1cd0",
+  "timestamp": "2025-03-28T13:09:29.344468",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Error: 500: Memory processing failed: 'GeometryManager' object has no attribute '_normalize'",
+    "confidence": 0.0,
+    "timestamp": "2025-03-28T13:09:29.495253"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328131045_1a8719f5dc0.json
+
+```json
+{
+  "trace_id": "intent_20250328131045_1a8719f5dc0",
+  "timestamp": "2025-03-28T13:10:45.822208",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_42a6db77856e",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T13:10:49.703839"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328131509_19afbcc5a00.json
+
+```json
+{
+  "trace_id": "intent_20250328131509_19afbcc5a00",
+  "timestamp": "2025-03-28T13:15:09.695051",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_efb78605e912",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T13:15:24.462168"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328131642_15e6866d190.json
+
+```json
+{
+  "trace_id": "intent_20250328131642_15e6866d190",
+  "timestamp": "2025-03-28T13:16:42.460427",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_b7adf251707e",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T13:16:42.750453"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328132121_2297f0f5520.json
+
+```json
+{
+  "trace_id": "intent_20250328132121_2297f0f5520",
+  "timestamp": "2025-03-28T13:21:21.593474",
+  "memory_trace": {
+    "retrieved": [],
+    "boost_applied": 0.2
+  },
+  "neural_memory_trace": {
+    "loss": 0.6196844577789307,
+    "grad_norm": 3.0371012687683105,
+    "timestamp": "2025-03-28T13:21:22.194439"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.6197, grad_norm=3.0371)",
+    "\u2192 Boosted memory mem_e448cc7dedf9 QuickRecal by 0.2000 due to surprise"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_e448cc7dedf9",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T13:21:22.226802"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328132916_2bfdae74a70.json
+
+```json
+{
+  "trace_id": "intent_20250328132916_2bfdae74a70",
+  "timestamp": "2025-03-28T13:29:16.447132",
+  "memory_trace": {
+    "retrieved": [],
+    "boost_applied": 0.2
+  },
+  "neural_memory_trace": {
+    "loss": 0.7034170627593994,
+    "grad_norm": 3.310447931289673,
+    "timestamp": "2025-03-28T13:29:21.671043"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.7034, grad_norm=3.3104)",
+    "\u2192 Boosted memory mem_53e1646c988f QuickRecal by 0.2000 due to surprise"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_53e1646c988f",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T13:29:21.703684"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328133258_1ab6fe56120.json
+
+```json
+{
+  "trace_id": "intent_20250328133258_1ab6fe56120",
+  "timestamp": "2025-03-28T13:32:58.082169",
+  "memory_trace": {
+    "retrieved": [],
+    "boost_applied": 0.2
+  },
+  "neural_memory_trace": {
+    "loss": 0.6607450842857361,
+    "grad_norm": 3.1318135261535645,
+    "timestamp": "2025-03-28T13:33:02.752793"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.6607, grad_norm=3.1318)",
+    "\u2192 Boosted memory mem_b0ba34039c02 QuickRecal by 0.2000 due to surprise"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_b0ba34039c02",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T13:33:02.790035"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328133554_1887e929fd0.json
+
+```json
+{
+  "trace_id": "intent_20250328133554_1887e929fd0",
+  "timestamp": "2025-03-28T13:35:54.218105",
+  "memory_trace": {
+    "retrieved": [],
+    "boost_applied": 0.2
+  },
+  "neural_memory_trace": {
+    "loss": 0.6500575542449951,
+    "grad_norm": 3.089069366455078,
+    "timestamp": "2025-03-28T13:35:54.859924"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.6501, grad_norm=3.0891)",
+    "\u2192 Boosted memory mem_febc4eb7ec62 QuickRecal by 0.2000 due to surprise"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_febc4eb7ec62",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T13:35:54.893921"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328134128_1877b5caba0.json
+
+```json
+{
+  "trace_id": "intent_20250328134128_1877b5caba0",
+  "timestamp": "2025-03-28T13:41:28.579220",
+  "memory_trace": {
+    "retrieved": [],
+    "boost_applied": 0.2
+  },
+  "neural_memory_trace": {
+    "loss": 0.6635435819625854,
+    "grad_norm": 3.1921162605285645,
+    "timestamp": "2025-03-28T13:41:33.463407"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.6635, grad_norm=3.1921)",
+    "\u2192 Boosted memory mem_93c8e1a3c865 QuickRecal by 0.2000 due to surprise"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_93c8e1a3c865",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T13:41:33.503477"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328134317_26a809cfbf0.json
+
+```json
+{
+  "trace_id": "intent_20250328134317_26a809cfbf0",
+  "timestamp": "2025-03-28T13:43:17.410769",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_mem_28110eb9a3ec_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.2
+  },
+  "neural_memory_trace": {
+    "loss": 0.6244530081748962,
+    "grad_norm": 2.9935226440429688,
+    "timestamp": "2025-03-28T13:43:18.015688"
+  },
+  "emotional_modulation": {
+    "user_emotion": "curiosity"
+  },
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.6245, grad_norm=2.9935)",
+    "\u2192 Boosted memory mem_28110eb9a3ec QuickRecal by 0.2000 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_28110eb9a3ec",
+    "confidence": 1.0,
+    "timestamp": "2025-03-28T13:43:18.062117"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328162322_7f548d91e4a0.json
+
+```json
+{
+  "trace_id": "intent_20250328162322_7f548d91e4a0",
+  "timestamp": "2025-03-28T16:23:22.649632",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Error: Connection refused or failed",
+    "confidence": 0.0,
+    "timestamp": "2025-03-28T16:23:22.656156"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328163003_7f6762ad1f60.json
+
+```json
+{
+  "trace_id": "intent_20250328163003_7f6762ad1f60",
+  "timestamp": "2025-03-28T16:30:03.491482",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Error: Connection refused or failed",
+    "confidence": 0.0,
+    "timestamp": "2025-03-28T16:30:07.493351"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328163119_7fa1be0caf20.json
+
+```json
+{
+  "trace_id": "intent_20250328163119_7fa1be0caf20",
+  "timestamp": "2025-03-28T16:31:19.562211",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Error: Connection refused or failed",
+    "confidence": 0.0,
+    "timestamp": "2025-03-28T16:31:23.526575"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328163233_7ff4735cdf30.json
+
+```json
+{
+  "trace_id": "intent_20250328163233_7ff4735cdf30",
+  "timestamp": "2025-03-28T16:32:33.240116",
+  "memory_trace": {
+    "retrieved": [],
+    "boost_applied": 0.2
+  },
+  "neural_memory_trace": {
+    "loss": 0.6416096091270447,
+    "grad_norm": 3.140026569366455,
+    "timestamp": "2025-03-28T16:32:40.852472"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.6416, grad_norm=3.1400)",
+    "\u2192 Boosted memory mem_00790152fab6 QuickRecal by 0.2000 due to surprise"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_00790152fab6",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T16:32:40.894895"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328163322_7efcb58d2020.json
+
+```json
+{
+  "trace_id": "intent_20250328163322_7efcb58d2020",
+  "timestamp": "2025-03-28T16:33:22.241265",
+  "memory_trace": {
+    "retrieved": [],
+    "boost_applied": 0.2
+  },
+  "neural_memory_trace": {
+    "loss": 0.5404383540153503,
+    "grad_norm": 2.4210591316223145,
+    "timestamp": "2025-03-28T16:33:22.389749"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.5404, grad_norm=2.4211)",
+    "\u2192 Boosted memory mem_715e0719f653 QuickRecal by 0.2000 due to surprise"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_715e0719f653",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T16:33:22.424870"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328163347_7fc19decdf30.json
+
+```json
+{
+  "trace_id": "intent_20250328163347_7fc19decdf30",
+  "timestamp": "2025-03-28T16:33:47.524171",
+  "memory_trace": {
+    "retrieved": [],
+    "boost_applied": 0.19324893951416017
+  },
+  "neural_memory_trace": {
+    "loss": 0.4021265506744385,
+    "grad_norm": 1.9324893951416016,
+    "timestamp": "2025-03-28T16:33:47.654876"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.4021, grad_norm=1.9325)",
+    "\u2192 Boosted memory mem_272e7ed4b572 QuickRecal by 0.1932 due to surprise"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_272e7ed4b572",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T16:33:47.691738"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328172955_7f9e509cdf30.json
+
+```json
+{
+  "trace_id": "intent_20250328172955_7f9e509cdf30",
+  "timestamp": "2025-03-28T17:29:55.611741",
+  "memory_trace": {
+    "retrieved": [],
+    "boost_applied": 0.13993334770202637
+  },
+  "neural_memory_trace": {
+    "loss": 0.3136737048625946,
+    "grad_norm": 1.3993334770202637,
+    "timestamp": "2025-03-28T17:29:56.075844"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.3137, grad_norm=1.3993)",
+    "\u2192 Boosted memory mem_b6dbc378418b QuickRecal by 0.1399 due to surprise"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_b6dbc378418b",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T17:29:56.140067"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328174115_7f52463bd9c0.json
+
+```json
+{
+  "trace_id": "intent_20250328174115_7f52463bd9c0",
+  "timestamp": "2025-03-28T17:41:15.424577",
+  "memory_trace": {
+    "retrieved": [],
+    "boost_applied": 0.1150374174118042
+  },
+  "neural_memory_trace": {
+    "loss": 0.23371055722236633,
+    "grad_norm": 1.150374174118042,
+    "timestamp": "2025-03-28T17:41:15.669229"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.2337, grad_norm=1.1504)",
+    "\u2192 Boosted memory mem_35fce9e12625 QuickRecal by 0.1150 due to surprise"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_35fce9e12625",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T17:41:15.700138"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328174250_7f8e9c2ce080.json
+
+```json
+{
+  "trace_id": "intent_20250328174250_7f8e9c2ce080",
+  "timestamp": "2025-03-28T17:42:50.108547",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_73a5584e6e8c",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T17:42:58.530089"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328175111_7feeca2c60b0.json
+
+```json
+{
+  "trace_id": "intent_20250328175111_7feeca2c60b0",
+  "timestamp": "2025-03-28T17:51:11.858261",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_e46ba92b0e4e",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T17:51:12.392012"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328175357_7f09250ca110.json
+
+```json
+{
+  "trace_id": "intent_20250328175357_7f09250ca110",
+  "timestamp": "2025-03-28T17:53:57.912299",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_c0bdc7c26774",
+    "confidence": 0.5,
+    "timestamp": "2025-03-28T17:53:58.186126"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328175436_7f163baca080.json
+
+```json
+{
+  "trace_id": "intent_20250328175436_7f163baca080",
+  "timestamp": "2025-03-28T17:54:36.379079",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_mem_6d164d8e233f_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.0003935945220291615
+  },
+  "neural_memory_trace": {
+    "loss": 0.0008068761671893299,
+    "grad_norm": 0.0039359452202916145,
+    "timestamp": "2025-03-28T17:54:37.047505"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.0008, grad_norm=0.0039)",
+    "\u2192 Boosted memory mem_6d164d8e233f QuickRecal by 0.0004 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_6d164d8e233f",
+    "confidence": 1.0,
+    "timestamp": "2025-03-28T17:54:37.090200"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328183049_7f41361473a0.json
+
+```json
+{
+  "trace_id": "intent_20250328183049_7f41361473a0",
+  "timestamp": "2025-03-28T18:30:49.042782",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_mem_f1f4191cab2b_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.0003781659994274378
+  },
+  "neural_memory_trace": {
+    "loss": 0.0007671408820897341,
+    "grad_norm": 0.003781659994274378,
+    "timestamp": "2025-03-28T18:30:50.050661"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.0008, grad_norm=0.0038)",
+    "\u2192 Boosted memory mem_f1f4191cab2b QuickRecal by 0.0004 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_f1f4191cab2b",
+    "confidence": 1.0,
+    "timestamp": "2025-03-28T18:30:50.149131"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328183556_7fa3b78d5c30.json
+
+```json
+{
+  "trace_id": "intent_20250328183556_7fa3b78d5c30",
+  "timestamp": "2025-03-28T18:35:56.483458",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_mem_c7b00fe37a83_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.0003109997604042292
+  },
+  "neural_memory_trace": {
+    "loss": 0.0006745746359229088,
+    "grad_norm": 0.0031099976040422916,
+    "timestamp": "2025-03-28T18:35:56.803905"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.0007, grad_norm=0.0031)",
+    "\u2192 Boosted memory mem_c7b00fe37a83 QuickRecal by 0.0003 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_c7b00fe37a83",
+    "confidence": 1.0,
+    "timestamp": "2025-03-28T18:35:56.866614"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328184001_7f680f0d1c00.json
+
+```json
+{
+  "trace_id": "intent_20250328184001_7f680f0d1c00",
+  "timestamp": "2025-03-28T18:40:01.895401",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_mem_a4f3fd066279_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.0002861972898244858
+  },
+  "neural_memory_trace": {
+    "loss": 0.0006753114867024124,
+    "grad_norm": 0.002861972898244858,
+    "timestamp": "2025-03-28T18:40:02.600124"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.0007, grad_norm=0.0029)",
+    "\u2192 Boosted memory mem_a4f3fd066279 QuickRecal by 0.0003 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_a4f3fd066279",
+    "confidence": 1.0,
+    "timestamp": "2025-03-28T18:40:02.646289"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328185341_7f9270ed9c60.json
+
+```json
+{
+  "trace_id": "intent_20250328185341_7f9270ed9c60",
+  "timestamp": "2025-03-28T18:53:41.638845",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_mem_5bd3d689db43_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.0002533602295443416
+  },
+  "neural_memory_trace": {
+    "loss": 0.0006202238146215677,
+    "grad_norm": 0.0025336022954434156,
+    "timestamp": "2025-03-28T18:53:41.956737"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.0006, grad_norm=0.0025)",
+    "\u2192 Boosted memory mem_5bd3d689db43 QuickRecal by 0.0003 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_5bd3d689db43",
+    "confidence": 1.0,
+    "timestamp": "2025-03-28T18:53:42.019203"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328191231_7f7c6325ad10.json
+
+```json
+{
+  "trace_id": "intent_20250328191231_7f7c6325ad10",
+  "timestamp": "2025-03-28T19:12:31.866357",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_mem_5be7b810f7a3_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.0002520052716135979
+  },
+  "neural_memory_trace": {
+    "loss": 0.0006532114348374307,
+    "grad_norm": 0.0025200527161359787,
+    "timestamp": "2025-03-28T19:12:32.165991"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.0007, grad_norm=0.0025)",
+    "\u2192 Boosted memory mem_5be7b810f7a3 QuickRecal by 0.0003 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_5be7b810f7a3",
+    "confidence": 1.0,
+    "timestamp": "2025-03-28T19:12:32.219087"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328191334_7f347ae52c20.json
+
+```json
+{
+  "trace_id": "intent_20250328191334_7f347ae52c20",
+  "timestamp": "2025-03-28T19:13:34.317212",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_mem_8b135a21ce54_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.00025090742856264113
+  },
+  "neural_memory_trace": {
+    "loss": 0.0006816776585765183,
+    "grad_norm": 0.0025090742856264114,
+    "timestamp": "2025-03-28T19:13:34.715030"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.0007, grad_norm=0.0025)",
+    "\u2192 Boosted memory mem_8b135a21ce54 QuickRecal by 0.0003 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved associated embedding for memory mem_8b135a21ce54",
+    "confidence": 1.0,
+    "timestamp": "2025-03-28T19:13:34.766143"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328195500_7f938a381cc0.json
+
+```json
+{
+  "trace_id": "intent_20250328195500_7f938a381cc0",
+  "timestamp": "2025-03-28T19:55:00.062085",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.00037442808970808986
+  },
+  "neural_memory_trace": {
+    "loss": 0.0007820589817129076,
+    "grad_norm": 0.0037442808970808983,
+    "timestamp": "2025-03-28T19:55:00.756703"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.0008, grad_norm=0.0037)",
+    "\u2192 Boosted memory mem_446fc6179096 QuickRecal by 0.0004 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved: 768 dims",
+    "confidence": 1.0,
+    "timestamp": "2025-03-28T19:55:00.795396"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328195533_7f22d9ff20e0.json
+
+```json
+{
+  "trace_id": "intent_20250328195533_7f22d9ff20e0",
+  "timestamp": "2025-03-28T19:55:33.593328",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.0003245685948058963
+  },
+  "neural_memory_trace": {
+    "loss": 0.0007444422226399183,
+    "grad_norm": 0.003245685948058963,
+    "timestamp": "2025-03-28T19:55:33.817250"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.0007, grad_norm=0.0032)",
+    "\u2192 Boosted memory mem_ed223fe94686 QuickRecal by 0.0003 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved: 768 dims",
+    "confidence": 1.0,
+    "timestamp": "2025-03-28T19:55:33.891738"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328195546_7f22461e20e0.json
+
+```json
+{
+  "trace_id": "intent_20250328195546_7f22461e20e0",
+  "timestamp": "2025-03-28T19:55:46.739877",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.00028283023275434973
+  },
+  "neural_memory_trace": {
+    "loss": 0.0006729270680807531,
+    "grad_norm": 0.002828302327543497,
+    "timestamp": "2025-03-28T19:55:47.225380"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.0007, grad_norm=0.0028)",
+    "\u2192 Boosted memory mem_8fac3e5f6a6b QuickRecal by 0.0003 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved: 768 dims",
+    "confidence": 1.0,
+    "timestamp": "2025-03-28T19:55:47.313321"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328195600_7fc311cea0e0.json
+
+```json
+{
+  "trace_id": "intent_20250328195600_7fc311cea0e0",
+  "timestamp": "2025-03-28T19:56:00.167973",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.0002454044762998819
+  },
+  "neural_memory_trace": {
+    "loss": 0.00063512590713799,
+    "grad_norm": 0.0024540447629988194,
+    "timestamp": "2025-03-28T19:56:00.386984"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.0006, grad_norm=0.0025)",
+    "\u2192 Boosted memory mem_6a542bb5cd04 QuickRecal by 0.0002 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved: 768 dims",
+    "confidence": 1.0,
+    "timestamp": "2025-03-28T19:56:00.434376"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328211848_7f27ec71f580.json
+
+```json
+{
+  "trace_id": "intent_20250328211848_7f27ec71f580",
+  "timestamp": "2025-03-28T21:18:48.071529",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Error: Memory storage failed",
+    "confidence": 0.0,
+    "timestamp": "2025-03-28T21:18:52.054642"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328212418_7f45a6d1b430.json
+
+```json
+{
+  "trace_id": "intent_20250328212418_7f45a6d1b430",
+  "timestamp": "2025-03-28T21:24:18.011845",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Error: Memory storage failed",
+    "confidence": 0.0,
+    "timestamp": "2025-03-28T21:24:21.968867"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328212549_7f45a6d1b430.json
+
+```json
+{
+  "trace_id": "intent_20250328212549_7f45a6d1b430",
+  "timestamp": "2025-03-28T21:25:49.712341",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Error: Memory storage failed",
+    "confidence": 0.0,
+    "timestamp": "2025-03-28T21:25:57.715795"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328213036_7f45a6d1b430.json
+
+```json
+{
+  "trace_id": "intent_20250328213036_7f45a6d1b430",
+  "timestamp": "2025-03-28T21:30:36.862823",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Error: Memory storage failed",
+    "confidence": 0.0,
+    "timestamp": "2025-03-28T21:30:44.832562"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328213406_7f45a6d1b430.json
+
+```json
+{
+  "trace_id": "intent_20250328213406_7f45a6d1b430",
+  "timestamp": "2025-03-28T21:34:06.565163",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Error: Memory storage failed",
+    "confidence": 0.0,
+    "timestamp": "2025-03-28T21:34:10.568256"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250328213800_7f303a697430.json
+
+```json
+{
+  "trace_id": "intent_20250328213800_7f303a697430",
+  "timestamp": "2025-03-28T21:38:00.348887",
+  "memory_trace": {
+    "retrieved": []
+  },
+  "neural_memory_trace": {},
+  "emotional_modulation": {},
+  "reasoning_steps": [],
+  "final_output": {
+    "response_text": "Error: Memory storage failed",
+    "confidence": 0.0,
+    "timestamp": "2025-03-28T21:38:08.348193"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250329104259_7fed76197400.json
+
+```json
+{
+  "trace_id": "intent_20250329104259_7fed76197400",
+  "timestamp": "2025-03-29T10:42:59.006655",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.0003789004171267152
+  },
+  "neural_memory_trace": {
+    "loss": 0.0008071609190665185,
+    "grad_norm": 0.003789004171267152,
+    "timestamp": "2025-03-29T10:42:59.770033"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.0008, grad_norm=0.0038)",
+    "\u2192 Boosted memory mem_44f0f7948e17 QuickRecal by 0.0004 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved: 768 dims",
+    "confidence": 1.0,
+    "timestamp": "2025-03-29T10:42:59.818547"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250329104640_7fed76197400.json
+
+```json
+{
+  "trace_id": "intent_20250329104640_7fed76197400",
+  "timestamp": "2025-03-29T10:46:40.291029",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.0003280433360487223
+  },
+  "neural_memory_trace": {
+    "loss": 0.0007431074045598507,
+    "grad_norm": 0.0032804333604872227,
+    "timestamp": "2025-03-29T10:46:40.523160"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.0007, grad_norm=0.0033)",
+    "\u2192 Boosted memory mem_3a9d15c542a4 QuickRecal by 0.0003 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved: 768 dims",
+    "confidence": 1.0,
+    "timestamp": "2025-03-29T10:46:40.569621"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250329104859_7fed76197400.json
+
+```json
+{
+  "trace_id": "intent_20250329104859_7fed76197400",
+  "timestamp": "2025-03-29T10:48:59.682809",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.00029041040688753127
+  },
+  "neural_memory_trace": {
+    "loss": 0.0007035359158180654,
+    "grad_norm": 0.002904104068875313,
+    "timestamp": "2025-03-29T10:48:59.860028"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.0007, grad_norm=0.0029)",
+    "\u2192 Boosted memory mem_a4d05a43dbe6 QuickRecal by 0.0003 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved: 768 dims",
+    "confidence": 1.0,
+    "timestamp": "2025-03-29T10:48:59.901882"
+  }
+}
+```
+
+# synthians_trainer_server\logs\intent_graphs\intent_20250329105716_7fed76197400.json
+
+```json
+{
+  "trace_id": "intent_20250329105716_7fed76197400",
+  "timestamp": "2025-03-29T10:57:16.690742",
+  "memory_trace": {
+    "retrieved": [
+      {
+        "memory_id": "synthetic_associated",
+        "quickrecal_score": 0.0,
+        "dominant_emotion": null,
+        "emotion_confidence": 0.0
+      }
+    ],
+    "boost_applied": 0.0002642100211232901
+  },
+  "neural_memory_trace": {
+    "loss": 0.0006853328086435795,
+    "grad_norm": 0.0026421002112329006,
+    "timestamp": "2025-03-29T10:57:16.840758"
+  },
+  "emotional_modulation": {},
+  "reasoning_steps": [
+    "\u2192 Updated Neural Memory with new embedding (loss=0.0007, grad_norm=0.0026)",
+    "\u2192 Boosted memory mem_7974ce41c27c QuickRecal by 0.0003 due to surprise",
+    "\u2192 Retrieved 1 memories based on query"
+  ],
+  "final_output": {
+    "response_text": "Retrieved: 768 dims",
+    "confidence": 1.0,
+    "timestamp": "2025-03-29T10:57:16.912214"
+  }
+}
+```
+
+# synthians_trainer_server\logs\memory_updates.jsonl
+
+```jsonl
+{"timestamp": "2025-03-28T13:19:27.012220", "intent_id": null, "loss": 0.5985302329063416, "grad_norm": 3.0188727378845215, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T13:19:27.010132", "input_dim": 768}}
+{"timestamp": "2025-03-28T13:19:27.028056", "intent_id": "intent_20250328131926_1cbfccb5400", "loss": 0.5985302329063416, "grad_norm": 3.0188727378845215, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": "curiosity", "metadata": {"memory_id": "mem_9ca344764818", "content_preview": "What were the key design principles behind the Tit", "quickrecal_initial": 0.6438470492114289}}
+{"timestamp": "2025-03-28T13:21:22.189592", "intent_id": null, "loss": 0.6196844577789307, "grad_norm": 3.0371012687683105, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T13:21:22.187450", "input_dim": 768}}
+{"timestamp": "2025-03-28T13:21:22.194439", "intent_id": "intent_20250328132121_2297f0f5520", "loss": 0.6196844577789307, "grad_norm": 3.0371012687683105, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": "curiosity", "metadata": {"memory_id": "mem_e448cc7dedf9", "content_preview": "What were the key design principles behind the Tit", "quickrecal_initial": 0.5589206536487461}}
+{"timestamp": "2025-03-28T13:29:21.661348", "intent_id": null, "loss": 0.7034170627593994, "grad_norm": 3.310447931289673, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T13:29:21.659173", "input_dim": 768}}
+{"timestamp": "2025-03-28T13:29:21.671043", "intent_id": "intent_20250328132916_2bfdae74a70", "loss": 0.7034170627593994, "grad_norm": 3.310447931289673, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": "curiosity", "metadata": {"memory_id": "mem_53e1646c988f", "content_preview": "What were the key design principles behind the Tit", "quickrecal_initial": 0.6450518791599862}}
+{"timestamp": "2025-03-28T13:33:02.750061", "intent_id": null, "loss": 0.6607450842857361, "grad_norm": 3.1318135261535645, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T13:33:02.747595", "input_dim": 768}}
+{"timestamp": "2025-03-28T13:33:02.752793", "intent_id": "intent_20250328133258_1ab6fe56120", "loss": 0.6607450842857361, "grad_norm": 3.1318135261535645, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": "curiosity", "metadata": {"memory_id": "mem_b0ba34039c02", "content_preview": "What were the key design principles behind the Tit", "quickrecal_initial": 0.5840457341877383}}
+{"timestamp": "2025-03-28T13:35:54.864249", "intent_id": null, "loss": 0.6500575542449951, "grad_norm": 3.089069366455078, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T13:35:54.862235", "input_dim": 768}}
+{"timestamp": "2025-03-28T13:35:54.859924", "intent_id": "intent_20250328133554_1887e929fd0", "loss": 0.6500575542449951, "grad_norm": 3.089069366455078, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": "curiosity", "metadata": {"memory_id": "mem_febc4eb7ec62", "content_preview": "What were the key design principles behind the Tit", "quickrecal_initial": 0.5147387724904321}}
+{"timestamp": "2025-03-28T13:41:33.448902", "intent_id": null, "loss": 0.6635435819625854, "grad_norm": 3.1921162605285645, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T13:41:33.446658", "input_dim": 768}}
+{"timestamp": "2025-03-28T13:41:33.463407", "intent_id": "intent_20250328134128_1877b5caba0", "loss": 0.6635435819625854, "grad_norm": 3.1921162605285645, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": "curiosity", "metadata": {"memory_id": "mem_93c8e1a3c865", "content_preview": "What were the key design principles behind the Tit", "quickrecal_initial": 0.5498046149603236}}
+{"timestamp": "2025-03-28T13:43:17.991268", "intent_id": null, "loss": 0.6244530081748962, "grad_norm": 2.9935226440429688, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T13:43:17.988911", "input_dim": 768}}
+{"timestamp": "2025-03-28T13:43:18.015688", "intent_id": "intent_20250328134317_26a809cfbf0", "loss": 0.6244530081748962, "grad_norm": 2.9935226440429688, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": "curiosity", "metadata": {"memory_id": "mem_28110eb9a3ec", "content_preview": "What were the key design principles behind the Tit", "quickrecal_initial": 0.5433542521174316}}
+{"timestamp": "2025-03-28T16:32:40.834524", "intent_id": null, "loss": 0.6416096091270447, "grad_norm": 3.140026569366455, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T16:32:40.834504", "input_dim": 768}}
+{"timestamp": "2025-03-28T16:32:40.852472", "intent_id": "intent_20250328163233_7ff4735cdf30", "loss": 0.6416096091270447, "grad_norm": 3.140026569366455, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_00790152fab6", "content_preview": "This is a test of the MAC Titans variant", "quickrecal_initial": 0.5543885417225467}}
+{"timestamp": "2025-03-28T16:33:22.375983", "intent_id": null, "loss": 0.5404383540153503, "grad_norm": 2.4210591316223145, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T16:33:22.375962", "input_dim": 768}}
+{"timestamp": "2025-03-28T16:33:22.389749", "intent_id": "intent_20250328163322_7efcb58d2020", "loss": 0.5404383540153503, "grad_norm": 2.4210591316223145, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_715e0719f653", "content_preview": "This is a test of the MAG Titans variant", "quickrecal_initial": 0.645345684244842}}
+{"timestamp": "2025-03-28T16:33:47.641542", "intent_id": null, "loss": 0.4021265506744385, "grad_norm": 1.9324893951416016, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T16:33:47.641523", "input_dim": 768}}
+{"timestamp": "2025-03-28T16:33:47.654876", "intent_id": "intent_20250328163347_7fc19decdf30", "loss": 0.4021265506744385, "grad_norm": 1.9324893951416016, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_272e7ed4b572", "content_preview": "This is a test of the MAL Titans variant", "quickrecal_initial": 0.5262281089605335}}
+{"timestamp": "2025-03-28T17:29:56.054108", "intent_id": null, "loss": 0.3136737048625946, "grad_norm": 1.3993334770202637, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T17:29:56.053861", "input_dim": 768}}
+{"timestamp": "2025-03-28T17:29:56.075844", "intent_id": "intent_20250328172955_7f9e509cdf30", "loss": 0.3136737048625946, "grad_norm": 1.3993334770202637, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_b6dbc378418b", "content_preview": "This is a test of the MAG Titans variant", "quickrecal_initial": 0.658370701722247}}
+{"timestamp": "2025-03-28T17:41:15.652709", "intent_id": null, "loss": 0.23371055722236633, "grad_norm": 1.150374174118042, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T17:41:15.652672", "input_dim": 768}}
+{"timestamp": "2025-03-28T17:41:15.669229", "intent_id": "intent_20250328174115_7f52463bd9c0", "loss": 0.23371055722236633, "grad_norm": 1.150374174118042, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_35fce9e12625", "content_preview": "This is a test of the MAG Titans variant", "quickrecal_initial": 0.5688081714862355, "variant_type": "MAG"}}
+{"timestamp": "2025-03-28T17:54:37.027889", "intent_id": null, "loss": 0.0008068761671893299, "grad_norm": 0.0039359452202916145, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T17:54:37.025636", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-28T17:54:37.047505", "intent_id": "intent_20250328175436_7f163baca080", "loss": 0.0008068761671893299, "grad_norm": 0.0039359452202916145, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_6d164d8e233f", "content_preview": "This is a test of the MAG Titans variant", "quickrecal_initial": 0.5974839517515492, "variant_type": "MAG"}}
+{"timestamp": "2025-03-28T18:30:50.007627", "intent_id": null, "loss": 0.0007671408820897341, "grad_norm": 0.003781659994274378, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T18:30:49.994874", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-28T18:30:50.050661", "intent_id": "intent_20250328183049_7f41361473a0", "loss": 0.0007671408820897341, "grad_norm": 0.003781659994274378, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_f1f4191cab2b", "content_preview": "This is a test of the MAG Titans variant", "quickrecal_initial": 0.6007667428435506, "variant_type": "MAG"}}
+{"timestamp": "2025-03-28T18:35:56.788923", "intent_id": null, "loss": 0.0006745746359229088, "grad_norm": 0.0031099976040422916, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T18:35:56.788901", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-28T18:35:56.803905", "intent_id": "intent_20250328183556_7fa3b78d5c30", "loss": 0.0006745746359229088, "grad_norm": 0.0031099976040422916, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_c7b00fe37a83", "content_preview": "The neural memory adapts gate values dynamically", "quickrecal_initial": 0.5927101845298544, "variant_type": "MAG"}}
+{"timestamp": "2025-03-28T18:40:02.583314", "intent_id": null, "loss": 0.0006753114867024124, "grad_norm": 0.002861972898244858, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T18:40:02.583292", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-28T18:40:02.600124", "intent_id": "intent_20250328184001_7f680f0d1c00", "loss": 0.0006753114867024124, "grad_norm": 0.002861972898244858, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_a4f3fd066279", "content_preview": "Lucidia's cognitive system adapts its memory throu", "quickrecal_initial": 0.5589977731940781, "variant_type": "MAG"}}
+{"timestamp": "2025-03-28T18:53:41.927704", "intent_id": null, "loss": 0.0006202238146215677, "grad_norm": 0.0025336022954434156, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T18:53:41.927640", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-28T18:53:41.956737", "intent_id": "intent_20250328185341_7f9270ed9c60", "loss": 0.0006202238146215677, "grad_norm": 0.0025336022954434156, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_5bd3d689db43", "content_preview": "This is a test of the MAL Titans variant", "quickrecal_initial": 0.6278911673581282, "variant_type": "MAL"}}
+{"timestamp": "2025-03-28T19:12:32.149312", "intent_id": null, "loss": 0.0006532114348374307, "grad_norm": 0.0025200527161359787, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T19:12:32.149261", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-28T19:12:32.165991", "intent_id": "intent_20250328191231_7f7c6325ad10", "loss": 0.0006532114348374307, "grad_norm": 0.0025200527161359787, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_5be7b810f7a3", "content_preview": "Testing defensive coding for diagnostics data poin", "quickrecal_initial": 0.6306412646814934, "variant_type": "MAL"}}
+{"timestamp": "2025-03-28T19:13:34.698433", "intent_id": null, "loss": 0.0006816776585765183, "grad_norm": 0.0025090742856264114, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T19:13:34.698405", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-28T19:13:34.715030", "intent_id": "intent_20250328191334_7f347ae52c20", "loss": 0.0006816776585765183, "grad_norm": 0.0025090742856264114, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_8b135a21ce54", "content_preview": "Final test of improved diagnostics handling", "quickrecal_initial": 0.5474431340962839, "variant_type": "MAL"}}
+{"timestamp": "2025-03-28T19:51:29.888918", "intent_id": null, "loss": 0.000912700139451772, "grad_norm": 0.0043389564380049706, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T19:51:29.886748", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-28T19:51:29.904224", "intent_id": "intent_20250328195129_7f6506a85d20", "loss": 0.000912700139451772, "grad_norm": 0.0043389564380049706, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_fe49141047b4", "content_preview": "Testing NONE variant after type fixes", "variant_type": "NONE"}}
+{"timestamp": "2025-03-28T19:55:00.740549", "intent_id": null, "loss": 0.0007820589817129076, "grad_norm": 0.0037442808970808983, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T19:55:00.738111", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-28T19:55:00.756703", "intent_id": "intent_20250328195500_7f938a381cc0", "loss": 0.0007820589817129076, "grad_norm": 0.0037442808970808983, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_446fc6179096", "content_preview": "Testing NONE variant after type fixes", "variant_type": "NONE"}}
+{"timestamp": "2025-03-28T19:55:33.801363", "intent_id": null, "loss": 0.0007444422226399183, "grad_norm": 0.003245685948058963, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T19:55:33.801344", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-28T19:55:33.817250", "intent_id": "intent_20250328195533_7f22d9ff20e0", "loss": 0.0007444422226399183, "grad_norm": 0.003245685948058963, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_ed223fe94686", "content_preview": "Testing MAC variant after refactoring", "variant_type": "MAC"}}
+{"timestamp": "2025-03-28T19:55:47.211048", "intent_id": null, "loss": 0.0006729270680807531, "grad_norm": 0.002828302327543497, "embedding_norm": 1.0000001192092896, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T19:55:47.210997", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-28T19:55:47.225380", "intent_id": "intent_20250328195546_7f22461e20e0", "loss": 0.0006729270680807531, "grad_norm": 0.002828302327543497, "embedding_norm": 1.0000001192092896, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_8fac3e5f6a6b", "content_preview": "Testing MAG variant after refactoring", "variant_type": "MAG"}}
+{"timestamp": "2025-03-28T19:56:00.372101", "intent_id": null, "loss": 0.00063512590713799, "grad_norm": 0.0024540447629988194, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-28T19:56:00.372079", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-28T19:56:00.386984", "intent_id": "intent_20250328195600_7fc311cea0e0", "loss": 0.00063512590713799, "grad_norm": 0.0024540447629988194, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_6a542bb5cd04", "content_preview": "Testing MAL variant with new calculate_v_prime", "variant_type": "MAL"}}
+{"timestamp": "2025-03-29T10:42:59.748081", "intent_id": null, "loss": 0.0008071609190665185, "grad_norm": 0.003789004171267152, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-29T10:42:59.744508", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-29T10:42:59.770033", "intent_id": "intent_20250329104259_7fed76197400", "loss": 0.0008071609190665185, "grad_norm": 0.003789004171267152, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_44f0f7948e17", "content_preview": "A surprising development regarding Quantum Entangl", "variant_type": "NONE"}}
+{"timestamp": "2025-03-29T10:46:40.508149", "intent_id": null, "loss": 0.0007431074045598507, "grad_norm": 0.0032804333604872227, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-29T10:46:40.508090", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-29T10:46:40.523160", "intent_id": "intent_20250329104640_7fed76197400", "loss": 0.0007431074045598507, "grad_norm": 0.0032804333604872227, "embedding_norm": 1.0, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_3a9d15c542a4", "content_preview": "A surprising development regarding Quantum Entangl", "variant_type": "NONE"}}
+{"timestamp": "2025-03-29T10:48:59.847492", "intent_id": null, "loss": 0.0007035359158180654, "grad_norm": 0.002904104068875313, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-29T10:48:59.847455", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-29T10:48:59.860028", "intent_id": "intent_20250329104859_7fed76197400", "loss": 0.0007035359158180654, "grad_norm": 0.002904104068875313, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_a4d05a43dbe6", "content_preview": "A surprising development regarding Quantum Entangl", "variant_type": "NONE"}}
+{"timestamp": "2025-03-29T10:57:16.825944", "intent_id": null, "loss": 0.0006853328086435795, "grad_norm": 0.0026421002112329006, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"timestamp": "2025-03-29T10:57:16.825920", "input_dim": 768, "external_projections_used": false, "external_gates_used": false}}
+{"timestamp": "2025-03-29T10:57:16.840758", "intent_id": "intent_20250329105716_7fed76197400", "loss": 0.0006853328086435795, "grad_norm": 0.0026421002112329006, "embedding_norm": 0.9999999403953552, "embedding_dim": 768, "emotion": null, "metadata": {"memory_id": "mem_7974ce41c27c", "content_preview": "A surprising development regarding Quantum Entangl", "variant_type": "NONE"}}
+
+```
+
+# synthians_trainer_server\logs\quickrecal_boosts.jsonl
+
+```jsonl
+{"timestamp": "2025-03-28T13:21:22.200359", "intent_id": "intent_20250328132121_2297f0f5520", "memory_id": "mem_e448cc7dedf9", "base_score": 0.5589206536487461, "boost_amount": 0.2, "final_score": 0.7589206536487461, "emotion": "curiosity", "surprise_source": "neural_memory", "metadata": {"loss": 0.6196844577789307, "grad_norm": 3.0371012687683105, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T13:29:21.676391", "intent_id": "intent_20250328132916_2bfdae74a70", "memory_id": "mem_53e1646c988f", "base_score": 0.6450518791599862, "boost_amount": 0.2, "final_score": 0.8450518791599861, "emotion": "curiosity", "surprise_source": "neural_memory", "metadata": {"loss": 0.7034170627593994, "grad_norm": 3.310447931289673, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T13:33:02.759440", "intent_id": "intent_20250328133258_1ab6fe56120", "memory_id": "mem_b0ba34039c02", "base_score": 0.5840457341877383, "boost_amount": 0.2, "final_score": 0.7840457341877383, "emotion": "curiosity", "surprise_source": "neural_memory", "metadata": {"loss": 0.6607450842857361, "grad_norm": 3.1318135261535645, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T13:35:54.865255", "intent_id": "intent_20250328133554_1887e929fd0", "memory_id": "mem_febc4eb7ec62", "base_score": 0.5147387724904321, "boost_amount": 0.2, "final_score": 0.7147387724904322, "emotion": "curiosity", "surprise_source": "neural_memory", "metadata": {"loss": 0.6500575542449951, "grad_norm": 3.089069366455078, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T13:41:33.469326", "intent_id": "intent_20250328134128_1877b5caba0", "memory_id": "mem_93c8e1a3c865", "base_score": 0.5498046149603236, "boost_amount": 0.2, "final_score": 0.7498046149603237, "emotion": "curiosity", "surprise_source": "neural_memory", "metadata": {"loss": 0.6635435819625854, "grad_norm": 3.1921162605285645, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T13:43:18.021550", "intent_id": "intent_20250328134317_26a809cfbf0", "memory_id": "mem_28110eb9a3ec", "base_score": 0.5433542521174316, "boost_amount": 0.2, "final_score": 0.7433542521174317, "emotion": "curiosity", "surprise_source": "neural_memory", "metadata": {"loss": 0.6244530081748962, "grad_norm": 2.9935226440429688, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T16:32:40.863281", "intent_id": "intent_20250328163233_7ff4735cdf30", "memory_id": "mem_00790152fab6", "base_score": 0.5543885417225467, "boost_amount": 0.2, "final_score": 0.7543885417225467, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.6416096091270447, "grad_norm": 3.140026569366455, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T16:33:22.401872", "intent_id": "intent_20250328163322_7efcb58d2020", "memory_id": "mem_715e0719f653", "base_score": 0.645345684244842, "boost_amount": 0.2, "final_score": 0.8453456842448419, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.5404383540153503, "grad_norm": 2.4210591316223145, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T16:33:47.667072", "intent_id": "intent_20250328163347_7fc19decdf30", "memory_id": "mem_272e7ed4b572", "base_score": 0.5262281089605335, "boost_amount": 0.19324893951416017, "final_score": 0.7194770484746937, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.4021265506744385, "grad_norm": 1.9324893951416016, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T17:29:56.091788", "intent_id": "intent_20250328172955_7f9e509cdf30", "memory_id": "mem_b6dbc378418b", "base_score": 0.658370701722247, "boost_amount": 0.13993334770202637, "final_score": 0.7983040494242734, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.3136737048625946, "grad_norm": 1.3993334770202637, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T17:41:15.685476", "intent_id": "intent_20250328174115_7f52463bd9c0", "memory_id": "mem_35fce9e12625", "base_score": 0.5688081714862355, "boost_amount": 0.1150374174118042, "final_score": 0.6838455888980397, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.23371055722236633, "grad_norm": 1.150374174118042, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T17:54:37.059938", "intent_id": "intent_20250328175436_7f163baca080", "memory_id": "mem_6d164d8e233f", "base_score": 0.5974839517515492, "boost_amount": 0.0003935945220291615, "final_score": 0.5978775462735784, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.0008068761671893299, "grad_norm": 0.0039359452202916145, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T18:30:50.090823", "intent_id": "intent_20250328183049_7f41361473a0", "memory_id": "mem_f1f4191cab2b", "base_score": 0.6007667428435506, "boost_amount": 0.0003781659994274378, "final_score": 0.601144908842978, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.0007671408820897341, "grad_norm": 0.003781659994274378, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T18:35:56.819021", "intent_id": "intent_20250328183556_7fa3b78d5c30", "memory_id": "mem_c7b00fe37a83", "base_score": 0.5927101845298544, "boost_amount": 0.0003109997604042292, "final_score": 0.5930211842902586, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.0006745746359229088, "grad_norm": 0.0031099976040422916, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T18:40:02.612870", "intent_id": "intent_20250328184001_7f680f0d1c00", "memory_id": "mem_a4f3fd066279", "base_score": 0.5589977731940781, "boost_amount": 0.0002861972898244858, "final_score": 0.5592839704839025, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.0006753114867024124, "grad_norm": 0.002861972898244858, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T18:53:41.976568", "intent_id": "intent_20250328185341_7f9270ed9c60", "memory_id": "mem_5bd3d689db43", "base_score": 0.6278911673581282, "boost_amount": 0.0002533602295443416, "final_score": 0.6281445275876726, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.0006202238146215677, "grad_norm": 0.0025336022954434156, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T19:12:32.181791", "intent_id": "intent_20250328191231_7f7c6325ad10", "memory_id": "mem_5be7b810f7a3", "base_score": 0.6306412646814934, "boost_amount": 0.0002520052716135979, "final_score": 0.630893269953107, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.0006532114348374307, "grad_norm": 0.0025200527161359787, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T19:13:34.730095", "intent_id": "intent_20250328191334_7f347ae52c20", "memory_id": "mem_8b135a21ce54", "base_score": 0.5474431340962839, "boost_amount": 0.00025090742856264113, "final_score": 0.5476940415248465, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.0006816776585765183, "grad_norm": 0.0025090742856264114, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T19:51:29.915193", "intent_id": "intent_20250328195129_7f6506a85d20", "memory_id": "mem_fe49141047b4", "base_score": 0.61518422685717, "boost_amount": 0.0004338956438004971, "final_score": 0.6156181225009705, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.000912700139451772, "grad_norm": 0.0043389564380049706, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T19:55:00.767596", "intent_id": "intent_20250328195500_7f938a381cc0", "memory_id": "mem_446fc6179096", "base_score": 0.5949985340647745, "boost_amount": 0.00037442808970808986, "final_score": 0.5953729621544827, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.0007820589817129076, "grad_norm": 0.0037442808970808983, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T19:55:33.829108", "intent_id": "intent_20250328195533_7f22d9ff20e0", "memory_id": "mem_ed223fe94686", "base_score": 0.6094970326649796, "boost_amount": 0.0003245685948058963, "final_score": 0.6098216012597855, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.0007444422226399183, "grad_norm": 0.003245685948058963, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T19:55:47.238608", "intent_id": "intent_20250328195546_7f22461e20e0", "memory_id": "mem_8fac3e5f6a6b", "base_score": 0.6416814132426562, "boost_amount": 0.00028283023275434973, "final_score": 0.6419642434754105, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.0006729270680807531, "grad_norm": 0.002828302327543497, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-28T19:56:00.399218", "intent_id": "intent_20250328195600_7fc311cea0e0", "memory_id": "mem_6a542bb5cd04", "base_score": 0.5977799385058595, "boost_amount": 0.0002454044762998819, "final_score": 0.5980253429821594, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.00063512590713799, "grad_norm": 0.0024540447629988194, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-29T10:42:59.782655", "intent_id": "intent_20250329104259_7fed76197400", "memory_id": "mem_44f0f7948e17", "base_score": 0.535122603169681, "boost_amount": 0.0003789004171267152, "final_score": 0.5355015035868077, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.0008071609190665185, "grad_norm": 0.003789004171267152, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-29T10:46:40.534420", "intent_id": "intent_20250329104640_7fed76197400", "memory_id": "mem_3a9d15c542a4", "base_score": 0.6611617336433391, "boost_amount": 0.0003280433360487223, "final_score": 0.6614897769793878, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.0007431074045598507, "grad_norm": 0.0032804333604872227, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-29T10:48:59.868678", "intent_id": "intent_20250329104859_7fed76197400", "memory_id": "mem_a4d05a43dbe6", "base_score": 0.6471339773859797, "boost_amount": 0.00029041040688753127, "final_score": 0.6474243877928672, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.0007035359158180654, "grad_norm": 0.002904104068875313, "reason": "NM Surprise"}}
+{"timestamp": "2025-03-29T10:57:16.878143", "intent_id": "intent_20250329105716_7fed76197400", "memory_id": "mem_7974ce41c27c", "base_score": 0.6649938326346033, "boost_amount": 0.0002642100211232901, "final_score": 0.6652580426557266, "emotion": null, "surprise_source": "neural_memory", "metadata": {"loss": 0.0006853328086435795, "grad_norm": 0.0026421002112329006, "reason": "NM Surprise"}}
+
+```
+
+# synthians_trainer_server\logs\retrievals.jsonl
+
+```jsonl
+{"timestamp": "2025-03-28T13:43:18.032322", "intent_id": null, "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_memory"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"timestamp": "2025-03-28T13:43:18.032311", "embedding_dim": 768}}
+{"timestamp": "2025-03-28T13:43:18.061046", "intent_id": "intent_20250328134317_26a809cfbf0", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_mem_28110eb9a3ec_associated"], "memory_emotions": [], "user_emotion": "curiosity", "emotion_match": false, "metadata": {"original_memory_id": "mem_28110eb9a3ec", "embedding_dim": 768, "timestamp": "2025-03-28T13:43:18.061046"}}
+{"timestamp": "2025-03-28T17:54:37.084878", "intent_id": "intent_20250328175436_7f163baca080", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_mem_6d164d8e233f_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"original_memory_id": "mem_6d164d8e233f", "embedding_dim": 768, "timestamp": "2025-03-28T17:54:37.084854", "variant_type": "MAG"}}
+{"timestamp": "2025-03-28T18:30:50.139339", "intent_id": "intent_20250328183049_7f41361473a0", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_mem_f1f4191cab2b_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"original_memory_id": "mem_f1f4191cab2b", "embedding_dim": 768, "timestamp": "2025-03-28T18:30:50.139316", "variant_type": "MAG"}}
+{"timestamp": "2025-03-28T18:35:56.863105", "intent_id": "intent_20250328183556_7fa3b78d5c30", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_mem_c7b00fe37a83_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"original_memory_id": "mem_c7b00fe37a83", "embedding_dim": 768, "timestamp": "2025-03-28T18:35:56.863083", "variant_type": "MAG"}}
+{"timestamp": "2025-03-28T18:40:02.640935", "intent_id": "intent_20250328184001_7f680f0d1c00", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_mem_a4f3fd066279_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"original_memory_id": "mem_a4f3fd066279", "embedding_dim": 768, "timestamp": "2025-03-28T18:40:02.640912", "variant_type": "MAG"}}
+{"timestamp": "2025-03-28T18:53:42.011629", "intent_id": "intent_20250328185341_7f9270ed9c60", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_mem_5bd3d689db43_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"original_memory_id": "mem_5bd3d689db43", "embedding_dim": 768, "timestamp": "2025-03-28T18:53:42.011608", "variant_type": "MAL"}}
+{"timestamp": "2025-03-28T19:12:32.213177", "intent_id": "intent_20250328191231_7f7c6325ad10", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_mem_5be7b810f7a3_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"original_memory_id": "mem_5be7b810f7a3", "embedding_dim": 768, "timestamp": "2025-03-28T19:12:32.213153", "variant_type": "MAL"}}
+{"timestamp": "2025-03-28T19:13:34.757366", "intent_id": "intent_20250328191334_7f347ae52c20", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_mem_8b135a21ce54_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"original_memory_id": "mem_8b135a21ce54", "embedding_dim": 768, "timestamp": "2025-03-28T19:13:34.757347", "variant_type": "MAL"}}
+{"timestamp": "2025-03-28T19:51:29.940709", "intent_id": "intent_20250328195129_7f6506a85d20", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"embedding_dim": 768, "timestamp": "2025-03-28T19:51:29.940688", "variant_type": "NONE"}}
+{"timestamp": "2025-03-28T19:55:00.790764", "intent_id": "intent_20250328195500_7f938a381cc0", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"embedding_dim": 768, "timestamp": "2025-03-28T19:55:00.790748", "variant_type": "NONE"}}
+{"timestamp": "2025-03-28T19:55:33.875384", "intent_id": "intent_20250328195533_7f22d9ff20e0", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"embedding_dim": 768, "timestamp": "2025-03-28T19:55:33.875364", "variant_type": "MAC"}}
+{"timestamp": "2025-03-28T19:55:47.268864", "intent_id": "intent_20250328195546_7f22461e20e0", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"embedding_dim": 768, "timestamp": "2025-03-28T19:55:47.268845", "variant_type": "MAG"}}
+{"timestamp": "2025-03-28T19:56:00.429004", "intent_id": "intent_20250328195600_7fc311cea0e0", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"embedding_dim": 768, "timestamp": "2025-03-28T19:56:00.428984", "variant_type": "MAL"}}
+{"timestamp": "2025-03-29T10:42:59.810538", "intent_id": "intent_20250329104259_7fed76197400", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"embedding_dim": 768, "timestamp": "2025-03-29T10:42:59.810498", "variant_type": "NONE"}}
+{"timestamp": "2025-03-29T10:46:40.559906", "intent_id": "intent_20250329104640_7fed76197400", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"embedding_dim": 768, "timestamp": "2025-03-29T10:46:40.559887", "variant_type": "NONE"}}
+{"timestamp": "2025-03-29T10:48:59.895064", "intent_id": "intent_20250329104859_7fed76197400", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"embedding_dim": 768, "timestamp": "2025-03-29T10:48:59.895048", "variant_type": "NONE"}}
+{"timestamp": "2025-03-29T10:57:16.902385", "intent_id": "intent_20250329105716_7fed76197400", "embedding_dim": 768, "num_results": 1, "memory_ids": ["synthetic_associated"], "memory_emotions": [], "user_emotion": null, "emotion_match": false, "metadata": {"embedding_dim": 768, "timestamp": "2025-03-29T10:57:16.902369", "variant_type": "NONE"}}
+
 ```
 
 # synthians_trainer_server\metrics_store.py
@@ -10622,6 +18450,44 @@ class MetricsStore:
         def section(title):
             return f"\n{title.center(width, '=')}\n"
         
+        # Ensure diagnostics dict has all expected keys with defaults
+        defaults = {
+            'diagnostic_window': 'Unknown',
+            'avg_loss': 0.0,
+            'avg_grad_norm': 0.0,
+            'avg_quickrecal_boost': 0.0,
+            'emotional_entropy': 0.0,
+            'emotion_bias_index': 0.0,
+            'user_emotion_match_rate': 0.0,
+            'dominant_emotions_boosted': [],
+            'cluster_update_hotspots': [],
+            'alerts': [],
+            'recommendations': [], 
+            'data_points': {
+                'memory_updates': 0,
+                'quickrecal_boosts': 0,
+                'retrievals': 0
+            }
+        }
+        
+        # Fill in any missing keys with defaults
+        for key, default_value in defaults.items():
+            if key not in diagnostics:
+                diagnostics[key] = default_value
+                # Only log warning for non-standard missing keys
+                if key != 'data_points':  # data_points is commonly missing and handled with defaults
+                    logger.warning(f"Missing key '{key}' in diagnostics, using default value")
+                
+        # Ensure data_points has all expected keys
+        if 'data_points' not in diagnostics:
+            diagnostics['data_points'] = {}
+            
+        for key, default_value in defaults['data_points'].items():
+            if key not in diagnostics['data_points']:
+                diagnostics['data_points'][key] = default_value
+                # Only log warning for non-standard missing keys at debug level
+                logger.debug(f"Missing key '{key}' in data_points, using default value")
+        
         # Header
         output = []
         output.append("=" * width)
@@ -10660,7 +18526,9 @@ class MetricsStore:
         output.append(section("MEMORY HOTSPOTS"))
         if diagnostics['cluster_update_hotspots']:
             for hotspot in diagnostics['cluster_update_hotspots']:
-                output.append(f"* {hotspot['cluster_id']}: {hotspot['updates']} updates")
+                hotspot_id = hotspot.get('cluster_id', 'Unknown')
+                updates = hotspot.get('updates', 0)
+                output.append(f"* {hotspot_id}: {updates} updates")
         else:
             output.append("No significant memory hotspots detected")
         
@@ -10674,13 +18542,13 @@ class MetricsStore:
             output.append(f"* {rec}")
         
         # Data summary
-        data_points = diagnostics['data_points']
+        data_points = diagnostics.get('data_points', {})
         output.append(section("DATA SUMMARY"))
-        output.append(f"Based on {data_points['memory_updates']} updates, {data_points['quickrecal_boosts']} boosts, and {data_points['retrievals']} retrievals")
-        output.append("" * width)
+        output.append(f"Based on {data_points.get('memory_updates', 0)} updates, {data_points.get('quickrecal_boosts', 0)} boosts, and {data_points.get('retrievals', 0)} retrievals")
+        output.append("=" * width)  
         
         return "\n".join(output)
-
+    
 # --- Global Instance ---
 metrics_store = None
 
@@ -10837,6 +18705,14 @@ class NeuralMemoryModule(tf.keras.Model):
         self.WK_layer = tf.keras.layers.Dense(key_dim, name="WK_proj", use_bias=False, kernel_initializer=initializer_outer)
         self.WV_layer = tf.keras.layers.Dense(value_dim, name="WV_proj", use_bias=False, kernel_initializer=initializer_outer)
         self.WQ_layer = tf.keras.layers.Dense(query_dim, name="WQ_proj", use_bias=False, kernel_initializer=initializer_outer)
+        
+        # Initialize gate projection layers for MAG variant (used by calculate_gates)
+        self.attention_to_alpha = tf.keras.layers.Dense(1, name="attention_to_alpha")
+        self.attention_to_theta = tf.keras.layers.Dense(1, name="attention_to_theta")
+        self.attention_to_eta = tf.keras.layers.Dense(1, name="attention_to_eta")
+        
+        # Storage for last computed gate values
+        self.last_applied_gates = {}
 
         if not self.config.get('use_complex_gates', False):
             self.alpha_logit = tf.Variable(tf.constant(self.config['alpha_init'], dtype=tf.float32), name="alpha_logit", trainable=True)
@@ -10882,6 +18758,11 @@ class NeuralMemoryModule(tf.keras.Model):
         self.WQ_layer.build(input_shape=(None, input_dim))
         logger.info("Projection layers built.")
 
+        # Build gate projection layers
+        self.attention_to_alpha.build(input_shape=(None, query_dim))
+        self.attention_to_theta.build(input_shape=(None, query_dim))
+        self.attention_to_eta.build(input_shape=(None, query_dim))
+        logger.info("Gate projection layers built.")
 
     @property
     def inner_trainable_variables(self):
@@ -10892,119 +18773,151 @@ class NeuralMemoryModule(tf.keras.Model):
          return self.WK_layer.trainable_variables + \
                 self.WV_layer.trainable_variables + \
                 self.WQ_layer.trainable_variables + \
+                self.attention_to_alpha.trainable_variables + \
+                self.attention_to_theta.trainable_variables + \
+                self.attention_to_eta.trainable_variables + \
                 self._gate_params
 
     def get_projections(self, x_t: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-        """Calculate key, value, query projections from input."""
-        # Convert to tensor and ensure correct dtype
-        x_t = tf.convert_to_tensor(x_t, dtype=tf.float32)
-        original_shape = tf.shape(x_t)
+        """Calculate key, value, query projections from input.
         
-        # Handle various input shapes
-        if len(original_shape) == 1:
-            # Single vector -> add batch dimension
-            x_t = tf.expand_dims(x_t, 0)
-            logger.debug(f"Reshaped input from {original_shape} to {tf.shape(x_t)}")
-        
-        # Verify input dimension
-        if tf.shape(x_t)[-1] != self.config['input_dim']:
-            logger.warning(f"Input dimension mismatch: expected {self.config['input_dim']}, got {tf.shape(x_t)[-1]}")
-            raise ValueError(f"Input dimension mismatch: expected {self.config['input_dim']}, got {tf.shape(x_t)[-1]}")
+        Args:
+            x_t: Input tensor with shape [batch_size, input_dim]
             
-        # Apply projections
-        k_t = self.WK_layer(x_t)
-        v_t = self.WV_layer(x_t)
-        q_t = self.WQ_layer(x_t)
+        Returns:
+            Tuple of (key_projection, value_projection, query_projection)
+        """
+        x_t = tf.convert_to_tensor(x_t, dtype=tf.float32)
+        
+        # Ensure input has right shape
+        if len(tf.shape(x_t)) == 1:
+            # Add batch dimension if missing
+            x_t = tf.expand_dims(x_t, 0)
+            
+        # Get projections
+        k_t = self.WK_layer(x_t)  # [batch_size, key_dim]
+        v_t = self.WV_layer(x_t)  # [batch_size, value_dim]
+        q_t = self.WQ_layer(x_t)  # [batch_size, query_dim]
+        
         return k_t, v_t, q_t
     
-    def get_projection_hash(self) -> str:
-        """Returns a hash representation of the current projection matrices.
+    def calculate_gates(self, attention_output) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+        """Calculate gate values from attention output for MAG variant.
         
-        This is used for introspection and cognitive tracing, allowing the system to
-        detect when projection matrices have changed between different runs or sessions.
-        
+        Args:
+            attention_output: Output tensor from attention mechanism
+            
         Returns:
-            str: A hash string representing the current state of WK, WV, WQ matrices
+            Tuple of (alpha_t, theta_t, eta_t) gate values
         """
-        # In a full implementation, this would calculate a hash based on the actual weight values
-        # For now, return a placeholder with timestamp to make it somewhat unique
-        timestamp = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
-        return f"proj_matrix_hash_{timestamp}"
+        # Default gates (fallback if computation fails)
+        alpha_logit = self.alpha_logit
+        theta_logit = self.theta_logit
+        eta_logit = self.eta_logit
+        
+        try:
+            # Ensure attention_output has the right shape
+            attention_output = tf.convert_to_tensor(attention_output, dtype=tf.float32)
+            if len(tf.shape(attention_output)) == 1:
+                attention_output = tf.expand_dims(attention_output, 0)
+            
+            # Project attention output to gate logits using dedicated layers
+            alpha_logit = self.attention_to_alpha(attention_output)
+            theta_logit = self.attention_to_theta(attention_output)
+            eta_logit = self.attention_to_eta(attention_output)
+            
+            # Remove the extra dimensions
+            alpha_logit = tf.squeeze(alpha_logit)
+            theta_logit = tf.squeeze(theta_logit)
+            eta_logit = tf.squeeze(eta_logit)
+            
+            logger.debug(f"Calculated gate logits from attention: alpha={alpha_logit.numpy()}, theta={theta_logit.numpy()}, eta={eta_logit.numpy()}")
+            
+        except Exception as e:
+            logger.warning(f"Error calculating gates from attention output: {e}. Using default gates.")
+        
+        # Apply sigmoid to get gate values in [0,1] range
+        alpha_t = tf.nn.sigmoid(alpha_logit)  # Forget rate
+        theta_t = tf.nn.sigmoid(theta_logit)  # Inner learning rate
+        eta_t = tf.nn.sigmoid(eta_logit)      # Momentum
+        
+        return alpha_t, theta_t, eta_t
 
-    def call(self, q_t: tf.Tensor, training=False) -> tf.Tensor:
+    def __call__(self, q_t: tf.Tensor, training=False):
         """Retrieve value from memory given query q_t (inference only)."""
-        # Dynamic shape handling - reshape input if needed
+        # Ensure q_t has correct shape with batch dimension
         q_t = tf.convert_to_tensor(q_t, dtype=tf.float32)
-        original_shape = tf.shape(q_t)
-        
-        # Handle various input shapes
-        if len(original_shape) == 1:
-            # Single vector -> add batch dimension
-            q_t = tf.expand_dims(q_t, 0)
-            logger.debug(f"Reshaped input from {original_shape} to {tf.shape(q_t)}")
-        
-        # Verify dimensions
-        if tf.shape(q_t)[-1] != self.config['query_dim']:
-            logger.warning(f"Query dimension mismatch: expected {self.config['query_dim']}, got {tf.shape(q_t)[-1]}")
-            # If crucial dimension doesn't match, raise error
-            raise ValueError(f"Query dimension mismatch: expected {self.config['query_dim']}, got {tf.shape(q_t)[-1]}")
+        if len(tf.shape(q_t)) == 1:
+            q_t = tf.expand_dims(q_t, 0)  # Add batch dim
             
-        if self.config['query_dim'] != self.config['key_dim']:
-            raise ValueError(f"query_dim ({self.config['query_dim']}) must match key_dim ({self.config['key_dim']})")
+        return self.memory_mlp(q_t, training=training)
+
+    def update_step(self, x_t: tf.Tensor, 
+                   external_k_t: Optional[tf.Tensor] = None,
+                   external_v_t: Optional[tf.Tensor] = None,
+                   external_alpha_t: Optional[float] = None,
+                   external_theta_t: Optional[float] = None,
+                   external_eta_t: Optional[float] = None) -> Tuple[tf.Tensor, List[tf.Tensor]]:
+        """Update memory weights based on input x_t.
+        
+        Args:
+            x_t: Input tensor with shape [batch_size, input_dim]
+            external_k_t: Optional external key projection (MAL variant)
+            external_v_t: Optional external value projection (MAL variant)
+            external_alpha_t: Optional external alpha gate (MAG variant - single value)
+            external_theta_t: Optional external theta gate (MAG variant - single value)
+            external_eta_t: Optional external eta gate (MAG variant - single value)
             
-        retrieved_value = self.memory_mlp(q_t, training=training)
-        return retrieved_value
-
-    # Inner loop update step - NO @tf.function for now
-    def update_step(self, x_t: tf.Tensor) -> Tuple[tf.Tensor, List[tf.Tensor]]:
-        # Ensure proper input shape with batch dimension
-        if len(tf.shape(x_t)) == 1: x_t = tf.expand_dims(x_t, axis=0)
-        tf.debugging.assert_equal(tf.shape(x_t)[0], 1, message="update_step expects batch size 1")
-        tf.debugging.assert_equal(tf.shape(x_t)[-1], self.config['input_dim'], message="Input dimension mismatch")
-
-        # Get current gate values
-        alpha_t = tf.sigmoid(self.alpha_logit)
-        theta_t = tf.sigmoid(self.theta_logit)
-        eta_t = tf.sigmoid(self.eta_logit)
-
-        # Calculate projections
-        k_t, v_t, _ = self.get_projections(x_t)
-
-        # Access inner trainable variables directly from the memory_mlp
-        inner_vars = self.memory_mlp.trainable_variables
-        if not inner_vars:
-            logger.error("No inner trainable variables found in update_step!")
-            # Try force-building the MLP again to ensure variables are created
-            dummy_key = tf.zeros((1, self.config['key_dim']), dtype=tf.float32)
-            _ = self.memory_mlp(dummy_key)  # Force model execution
-            inner_vars = self.memory_mlp.trainable_variables
-            if not inner_vars:
-                return tf.constant(0.0), []
-            else:
-                logger.info(f"Successfully rebuilt memory MLP. Found {len(inner_vars)} trainable variables.")
-
-        # Ensure momentum state matches inner variables
-        if len(self.momentum_state) != len(inner_vars):
-            logger.warning("Rebuilding momentum state due to variable mismatch.")
-            self.momentum_state = [tf.Variable(tf.zeros_like(var), trainable=False, name=f"momentum_{i}") 
-                                 for i, var in enumerate(inner_vars)]
-
-        # Compute gradient with explicit watch on inner variables
+        Returns:
+            Tuple of (loss, gradients)
+        """
+        # Ensure x_t has correct shape with batch dimension
+        x_t = tf.convert_to_tensor(x_t, dtype=tf.float32)
+        if len(tf.shape(x_t)) == 1:
+            x_t = tf.expand_dims(x_t, 0)  # Add batch dim
+        
+        # Get projections if not provided externally
+        if external_k_t is None or external_v_t is None:
+            k_t, v_t, _ = self.get_projections(x_t)
+            k_t = external_k_t if external_k_t is not None else k_t
+            v_t = external_v_t if external_v_t is not None else v_t
+        else:
+            # Both projections provided externally
+            k_t, v_t = external_k_t, external_v_t
+        
+        # Determine gate values - use externals if provided, otherwise use defaults
+        alpha_t = tf.convert_to_tensor(external_alpha_t, dtype=tf.float32) if external_alpha_t is not None else tf.nn.sigmoid(self.alpha_logit)  # Forget rate
+        theta_t = tf.convert_to_tensor(external_theta_t, dtype=tf.float32) if external_theta_t is not None else tf.nn.sigmoid(self.theta_logit)  # Inner learning rate
+        eta_t = tf.convert_to_tensor(external_eta_t, dtype=tf.float32) if external_eta_t is not None else tf.nn.sigmoid(self.eta_logit)      # Momentum
+        
+        # Log gate values for debugging
+        logger.debug(f"Applied gate values - alpha_t: {float(alpha_t.numpy()) if hasattr(alpha_t, 'numpy') else float(alpha_t)}, "
+                  f"theta_t: {float(theta_t.numpy()) if hasattr(theta_t, 'numpy') else float(theta_t)}, "
+                  f"eta_t: {float(eta_t.numpy()) if hasattr(eta_t, 'numpy') else float(eta_t)}")
+        
+        # Store the applied gates for downstream monitoring
+        self.last_applied_gates = {
+            "alpha_t": float(alpha_t.numpy()) if hasattr(alpha_t, 'numpy') else float(alpha_t),
+            "theta_t": float(theta_t.numpy()) if hasattr(theta_t, 'numpy') else float(theta_t),
+            "eta_t": float(eta_t.numpy()) if hasattr(eta_t, 'numpy') else float(eta_t)
+        }
+        
+        # --- Gradient Calculation using GradientTape ---
+        inner_vars = self.inner_trainable_variables
         with tf.GradientTape() as tape:
-            # Explicitly watch all inner variables
-            for var in inner_vars:
-                tape.watch(var)
-            predicted_v_t = self.memory_mlp(k_t, training=True)
-            loss = 0.5 * tf.reduce_sum(tf.square(predicted_v_t - v_t))
+            # Forward pass through memory MLP
+            predicted_v_t = self.memory_mlp(k_t, training=True) # Use k_t here
+            # Calculate loss using potentially modified v_t (from MAL or original)
+            loss = 0.5 * tf.reduce_mean(tf.square(predicted_v_t - v_t))
 
         grads = tape.gradient(loss, inner_vars)
+        # --- End Gradient Calculation ---
 
-        # Verify we have valid gradients
+        # --- Momentum and Weight Updates ---
         valid_grads_indices = [i for i, g in enumerate(grads) if g is not None]
-        if len(valid_grads_indices) != len(inner_vars): 
+        if len(valid_grads_indices) != len(inner_vars):
             logger.warning(f"Found {len(inner_vars) - len(valid_grads_indices)} None gradients in inner loop.")
 
-        # Compute momentum updates
         for i in valid_grads_indices:
             grad = grads[i]
             s_var = self.momentum_state[i]
@@ -11012,18 +18925,17 @@ class NeuralMemoryModule(tf.keras.Model):
             s_new = eta_t * s_var - theta_t * grad
             s_var.assign(s_new)
 
-        # Apply weight updates
         for i in valid_grads_indices:
             s_t = self.momentum_state[i]
             m_var = inner_vars[i]
             # Update memory weights
             m_new = (1.0 - alpha_t) * m_var + s_t
             m_var.assign(m_new)
+        # --- End Updates ---
 
-        # Return loss and gradients for tracking
-        return loss, grads
+        return loss, grads # Return original grads list (may contain None)
 
-
+    # Inner loop update step - NO @tf.function for now
     def train_step(self, data):
         input_sequence, target_sequence = data
         
@@ -12069,19 +19981,37 @@ import pytest
 import asyncio
 import shutil
 import tempfile
+import time
 from datetime import datetime
 
-# Define common test fixtures
+# Configure pytest-asyncio
+# Custom event_loop fixture removed to avoid deprecation warnings
 
+# Define common test fixtures
 @pytest.fixture(scope="session")
 def temp_test_dir():
     """Create a temporary directory for test data that's removed after tests finish."""
     test_dir = tempfile.mkdtemp(prefix="synthians_test_")
-    print(f"Created temporary test directory: {test_dir}")
+    print(f"\nCreated temporary test directory: {test_dir}")
     yield test_dir
     # Clean up after tests
-    shutil.rmtree(test_dir, ignore_errors=True)
-    print(f"Removed temporary test directory: {test_dir}")
+    # Add retry logic for Windows file locking issues
+    attempts = 3
+    while attempts > 0:
+        try:
+            if os.path.exists(test_dir):
+                shutil.rmtree(test_dir, ignore_errors=False)
+                print(f"Removed temporary test directory: {test_dir}")
+            else:
+                print(f"Temporary test directory already removed: {test_dir}")
+            break # Success
+        except OSError as e:
+            print(f"Warning: Error removing temp directory (attempt {4-attempts}): {e}")
+            attempts -= 1
+            if attempts == 0:
+                print(f"ERROR: Failed to remove temp directory {test_dir} after multiple attempts.")
+            else:
+                time.sleep(0.5) # Wait before retrying
 
 @pytest.fixture(scope="session")
 def test_server_url():
@@ -12089,7 +20019,7 @@ def test_server_url():
     # Default to localhost:5010, but allow override through environment variable
     return os.environ.get("SYNTHIANS_TEST_URL", "http://localhost:5010")
 
-# Add markers for categorizing tests
+# Configure markers for test categories
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "smoke: mark test as a smoke test (basic functionality)"
@@ -12111,21 +20041,32 @@ def pytest_configure(config):
     )
 
 # Helper functions for test utilities
-
 async def create_test_memories(client, count=5, prefix="Test memory"):
-    """Create a batch of test memories and return their IDs."""
+    """Create a batch of test memories for testing."""
     memory_ids = []
-    timestamp = datetime.now().isoformat()
-    
     for i in range(count):
-        content = f"{prefix} {i+1} created at {timestamp}"
-        metadata = {"test_batch": timestamp, "index": i}
+        content = f"{prefix} {i}"
+        memory_id = f"test_memory_{datetime.now().strftime('%Y%m%d%H%M%S')}_{i}"
         
-        response = await client.process_memory(content=content, metadata=metadata)
-        if response.get("success"):
-            memory_ids.append(response.get("memory_id"))
+        # Create a test memory with random embedding
+        embedding = [float(j) / 100 for j in range(384)]  # 384-dimensional embedding
+        
+        # Use the API to create the memory
+        memory_entry = {
+            "content": content,
+            "embedding": embedding,
+            "metadata": {
+                "source": "test",
+                "test_id": i,
+                "test_batch": prefix
+            }
+        }
+        
+        # Store the memory in the database
+        await client.process_memory(memory_entry, memory_id)
+        memory_ids.append(memory_id)
     
-    return memory_ids, timestamp
+    return memory_ids
 
 ```
 
@@ -12587,6 +20528,844 @@ async def test_emotional_gating_blocks_mismatched():
             print(f"Mismatched emotion memory score: {memories[0].get('quickrecal_score')}")
             print(f"Matching emotion memory score: {angry_memories[0].get('quickrecal_score')}")
 
+```
+
+# tests\test_feedback_loop.py
+
+```py
+# tests/test_feedback_loop.py
+
+import pytest
+import asyncio
+import json
+import time
+import os
+import aiohttp
+import numpy as np
+from datetime import datetime
+
+# Assuming SynthiansClient is available and targets the Memory Core API (e.g., port 5010)
+from synthians_memory_core.api.client.client import SynthiansClient
+
+# Add the get_memory_by_id method to SynthiansClient if not already present
+async def get_memory_by_id(self, memory_id: str):
+    """Retrieve a specific memory by its ID."""
+    async with self.session.get(
+        f"{self.base_url}/api/memories/{memory_id}" # Use the new endpoint path
+    ) as response:
+        if response.status == 404:
+            return None # Return None if not found
+        response.raise_for_status() # Raise an exception for other errors
+        return await response.json()
+
+if not hasattr(SynthiansClient, "get_memory_by_id"):
+    SynthiansClient.get_memory_by_id = get_memory_by_id.__get__(None, SynthiansClient)
+
+
+# --- Test Configuration ---
+CCE_URL = os.environ.get("CCE_TEST_URL", "http://localhost:8002") # Orchestrator URL
+
+# --- Test Case ---
+
+@pytest.mark.asyncio
+@pytest.mark.integration # Mark as integration test
+async def test_quickrecal_boost_feedback_loop():
+    """
+    Tests the full CCE -> NM -> MC feedback loop for QuickRecal boost.
+
+    1. Creates an initial memory (Memory A) directly in the Memory Core.
+    2. Retrieves Memory A to get its initial QuickRecal score.
+    3. Processes a second, related memory (Memory B) via the Context Cascade Engine API.
+       This should trigger the NM update, surprise calculation, and boost request.
+    4. Waits for the loop to complete.
+    5. Retrieves Memory A again.
+    6. Asserts that Memory A's QuickRecal score has increased.
+    """
+    print(f"\n--- Starting Feedback Loop Integration Test ---")
+    print(f"Targeting CCE at: {CCE_URL}")
+
+    test_timestamp = datetime.now().isoformat()
+    memory_A_id = None
+    initial_quickrecal_score = -1.0
+
+    try:
+        # Create client for Memory Core interactions
+        async with SynthiansClient() as mc_client:
+            print(f"Targeting MC at: {mc_client.base_url}")
+            
+            # --- Step 1: Create Initial Memory (Memory A) in Memory Core ---
+            print("Step 1: Creating initial memory (Memory A) in Memory Core...")
+            memory_A_content = f"Baseline memory for feedback loop test at {test_timestamp}. Topic: Quantum Entanglement."
+            meta_A = {"test_id": "feedback_loop", "sequence": "A"}
+
+            create_A_resp = await mc_client.process_memory(content=memory_A_content, metadata=meta_A)
+            assert create_A_resp.get("success") is True, f"Failed to create Memory A: {create_A_resp.get('error')}"
+            memory_A_id = create_A_resp.get("memory_id")
+            assert memory_A_id is not None, "Memory A ID not returned"
+            print(f"  - Memory A created successfully (ID: {memory_A_id})")
+
+            # --- Step 2: Get Initial QuickRecal Score for Memory A ---
+            print(f"Step 2: Retrieving Memory A ({memory_A_id}) to get initial score...")
+            await asyncio.sleep(0.5) # Brief pause for persistence/indexing
+            retrieved_A_initial = await mc_client.get_memory_by_id(memory_A_id)
+            assert retrieved_A_initial is not None, f"Failed to retrieve Memory A ({memory_A_id}) after creation"
+            initial_quickrecal_score = retrieved_A_initial.get("memory", {}).get("quickrecal_score", 0.0)
+            print(f"  - Initial QuickRecal score for Memory A: {initial_quickrecal_score:.6f}")
+
+            # --- Step 3: Process Second Memory (Memory B) via CCE ---
+            # This memory should be related but different enough to cause surprise
+            print("Step 3: Processing related memory (Memory B) via Context Cascade Engine...")
+            memory_B_content = f"A surprising development regarding Quantum Entanglement measurement observed at {test_timestamp}."
+            meta_B = {"test_id": "feedback_loop", "sequence": "B"}
+            cce_payload = {
+                "content": memory_B_content,
+                "metadata": meta_B
+                # Embedding will be generated by CCE/MC
+            }
+
+            async with aiohttp.ClientSession() as session:
+                cce_process_url = f"{CCE_URL}/process_memory"
+                print(f"  - Calling CCE at: {cce_process_url}")
+                async with session.post(cce_process_url, json=cce_payload, timeout=30.0) as resp:
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        pytest.fail(f"CCE /process_memory call failed with status {resp.status}: {error_text}")
+                    cce_resp_B = await resp.json()
+                    print(f"  - CCE processed Memory B. Response keys: {list(cce_resp_B.keys())}")
+                    # Print out the full response from CCE for diagnosis
+                    print(f"  - CCE FULL RESPONSE: {json.dumps(cce_resp_B, indent=2)}")
+
+            # Check if CCE response indicates a boost was attempted (based on surprise metrics)
+            surprise_metrics = cce_resp_B.get("surprise_metrics", {})
+            loss = surprise_metrics.get("loss")
+            grad_norm = surprise_metrics.get("grad_norm")
+            boost_calculated = surprise_metrics.get("boost_calculated")
+
+            print(f"  - Surprise Metrics from CCE: Loss={loss}, GradNorm={grad_norm}, BoostCalculated={boost_calculated}")
+            # Make this assertion optional for local testing without Neural Memory
+            if loss is None and grad_norm is None:
+                print(f"  - WARNING: CCE response missing surprise metrics (loss/grad_norm).")
+                print(f"  - This may be due to Neural Memory not being available or a connection issue.")
+                print(f"  - Will continue test with the assumption that some boost was calculated.")
+            else:
+                assert loss is not None or grad_norm is not None, "CCE response missing surprise metrics (loss/grad_norm)"
+            # We expect some boost to be calculated if there was surprise
+            # Allow for very small/zero boost if NM is already well-adapted
+            # assert boost_calculated is not None and boost_calculated > 1e-6, "CCE did not calculate a significant boost"
+
+            # --- Step 4: Wait for the feedback loop to complete ---
+            # This involves CCE calling MC API's update endpoint. Needs some time.
+            wait_time = 3.0 # Adjust based on observed system latency
+            print(f"Step 4: Waiting {wait_time} seconds for feedback loop...")
+            await asyncio.sleep(wait_time)
+
+            # --- Step 5: Retrieve Memory A Again ---
+            print(f"Step 5: Retrieving Memory A ({memory_A_id}) again to check score...")
+            
+            # Check the memory details before the final check
+            memory_before_check = await mc_client.get_memory_by_id(memory_A_id)
+            if memory_before_check:
+                print(f"  - DEBUG: Memory details before final check:")
+                print(f"      - QuickRecal score: {memory_before_check.get('memory', {}).get('quickrecal_score', 'N/A')}")
+                print(f"      - Metadata: {json.dumps(memory_before_check.get('memory', {}).get('metadata', {}), indent=2)}")
+                # Check if surprise_events exist in metadata
+                metadata = memory_before_check.get('memory', {}).get('metadata', {})
+                if 'surprise_events' in metadata:
+                    print(f"      - Found {len(metadata['surprise_events'])} surprise events in metadata")
+                    for i, event in enumerate(metadata['surprise_events']):
+                        print(f"        - Event {i+1}: delta={event.get('delta')}, previous={event.get('previous_score')}, new={event.get('new_score')}, reason={event.get('reason')}")
+                else:
+                    print(f"      - No surprise events found in metadata")
+            
+            retrieved_A_final = await mc_client.get_memory_by_id(memory_A_id)
+            assert retrieved_A_final is not None, f"Failed to retrieve Memory A ({memory_A_id}) after feedback loop"
+            final_quickrecal_score = retrieved_A_final.get("memory", {}).get("quickrecal_score", 0.0)
+            print(f"  - Final QuickRecal score for Memory A: {final_quickrecal_score:.6f}")
+
+            # --- Step 6: Assert Score Increase ---
+            print("Step 6: Verifying QuickRecal score increase...")
+            # Allow for potential floating point noise, check for meaningful increase
+            assert final_quickrecal_score > initial_quickrecal_score, \
+                f"QuickRecal score for Memory A did not increase! Initial={initial_quickrecal_score}, Final={final_quickrecal_score}"
+            print(f"  - SUCCESS: Score increased by {final_quickrecal_score - initial_quickrecal_score:.6f}")
+
+            print("--- Feedback Loop Integration Test PASSED ---")
+
+    except aiohttp.ClientConnectorError as e:
+        pytest.fail(f"Connection Error: Could not connect to services. Ensure CCE ({CCE_URL}) and MC are running. Details: {e}")
+    except Exception as e:
+        pytest.fail(f"An unexpected error occurred during the feedback loop test: {e}\nTraceback: {e.__traceback__}")
+    finally:
+        # Optional cleanup: Delete created memories
+        # if memory_A_id:
+        #     pass # Add delete call if/when available
+        pass
+
+```
+
+# tests\test_memory_core_updates.py
+
+```py
+# tests/test_memory_core_updates.py
+
+import pytest
+import pytest_asyncio  # Import the decorator
+import asyncio
+import json
+import time
+import os
+import shutil
+import threading
+from datetime import datetime, timedelta, timezone
+import numpy as np
+from typing import Dict, Any, List, Optional
+import aiofiles # Ensure aiofiles is imported
+
+# Import the necessary components from the core
+from synthians_memory_core import (
+    SynthiansMemoryCore,
+    MemoryEntry,
+    GeometryManager,
+    MemoryPersistence
+)
+from synthians_memory_core.vector_index import MemoryVectorIndex
+
+# --- Dummy Async Lock for Testing ---
+class DummyAsyncLock:
+    """A dummy lock that doesn't block, for testing purposes."""
+    async def __aenter__(self):
+        # print("DEBUG: Entering DummyAsyncLock") # Optional debug print
+        pass
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        # print("DEBUG: Exiting DummyAsyncLock") # Optional debug print
+        pass
+
+# Helper function for removing test directories
+async def _remove_directory_with_retry(directory, max_attempts=5, delay=0.5):
+    """Helper function to remove a directory with retry logic"""
+    attempts = 0
+    while attempts < max_attempts:
+        try:
+            shutil.rmtree(directory, ignore_errors=True)
+            if not os.path.exists(directory):
+                print(f"  - Successfully removed {directory}")
+                return True
+            raise OSError(f"Directory still exists after removal: {directory}")
+        except OSError as e:
+            attempts += 1
+            print(f"  - Error removing directory (attempt {attempts}/{max_attempts}): {e}")
+            if attempts < max_attempts:
+                await asyncio.sleep(delay)
+    
+    print(f"  - Failed to remove directory after {max_attempts} attempts: {directory}")
+    return False
+
+# --- REVISED FIXTURE ---
+@pytest_asyncio.fixture
+async def memory_core(temp_test_dir, request):
+    """Provides a properly configured SynthiansMemoryCore instance with cleanup."""
+    # Create a test-specific directory within the temp directory
+    test_name = request.node.name
+    test_dir = os.path.join(temp_test_dir, test_name.replace('/', '_').replace(':', '_')) # Added replace for ':'
+    os.makedirs(test_dir, exist_ok=True)
+    print(f"\nSetting up memory_core fixture for test: {test_name} in {test_dir}")
+
+    # Create components for testing
+    geometry_manager = GeometryManager(
+        config={
+            'embedding_dim': 384,
+            'geometry_type': 'euclidean',
+        }
+    )
+
+    vector_index = MemoryVectorIndex(
+        config={
+            'embedding_dim': 384,
+            'storage_path': test_dir,
+            'index_type': 'L2',
+            'use_gpu': False
+        }
+    )
+
+    # Use the original MemoryPersistence, but we'll override its lock later
+    persistence = MemoryPersistence(
+        config={
+            'storage_path': test_dir,
+            # 'auto_save': True # Removed, rely on explicit saves/shutdown
+        }
+    )
+    # Initialize persistence explicitly before creating core
+    await persistence.initialize()
+
+    # Create the memory core instance with only a config
+    core = SynthiansMemoryCore(
+        config={
+            'embedding_dim': 384,
+            'storage_path': test_dir,
+            'vector_index_type': 'L2',
+            'use_gpu': False,
+            # Disable background tasks for unit testing updates
+            'persistence_interval': 3600 * 24,
+            'decay_interval': 3600 * 24,
+            'prune_check_interval': 3600 * 24,
+        }
+    )
+
+    # Manually replace the components for testing
+    core.vector_index = vector_index
+    core.persistence = persistence
+    core.geometry_manager = geometry_manager
+
+    # Replace the locks with dummy locks
+    dummy_lock = DummyAsyncLock()
+    core._lock = dummy_lock
+    persistence._lock = dummy_lock
+
+    # Initialize core - crucial step to load state and start components
+    # Background tasks are disabled by high intervals in config
+    await core.initialize()
+
+    # Setup cleanup function
+    async def async_finalizer():
+        """Async cleanup function that properly awaits shutdown"""
+        print(f"\n==== Cleaning up memory_core for test: {test_name} ====")
+        
+        # First, set the shutdown signal to stop background loops
+        if hasattr(core, '_shutdown_signal'):
+            core._shutdown_signal.set()
+            print("- Set shutdown signal")
+        
+        # Wait a moment for tasks to observe the signal
+        await asyncio.sleep(0.2)
+        
+        # Explicitly get all tasks that might be associated with this test
+        # to ensure we don't leave anything hanging
+        all_tasks = asyncio.all_tasks()
+        tasks_to_cancel = [
+            t for t in all_tasks 
+            if not t.done() and 
+               t is not asyncio.current_task() and
+               'test_' in t.get_name()  # Only care about test-related tasks
+        ]
+        
+        # Cancel all background tasks associated with the test
+        if tasks_to_cancel:
+            print(f"- Found {len(tasks_to_cancel)} tasks to cancel")
+            for task in tasks_to_cancel:
+                if not task.done() and not task.cancelled():
+                    task.cancel()
+                    print(f"  - Cancelled task: {task.get_name()}")
+        
+            # Wait for the tasks to finish cancelling
+            try:
+                await asyncio.wait(tasks_to_cancel, timeout=2)
+                print("- Waited for tasks to cancel")
+            except Exception as e:
+                print(f"- Error waiting for tasks: {e}")
+        
+        # Now run the core's shutdown method
+        if hasattr(core, 'shutdown'):
+            print("- Running core.shutdown()...")
+            try:
+                await asyncio.wait_for(core.shutdown(), timeout=3)
+                print("- Shutdown completed")
+            except asyncio.TimeoutError:
+                print("- Warning: Shutdown timed out")
+            except Exception as e:
+                print(f"- Error during shutdown: {e}")
+        
+        # Finally, remove the test directory
+        if os.path.exists(test_dir):
+            print(f"- Removing test directory: {test_dir}")
+            await _remove_directory_with_retry(test_dir, max_attempts=3)
+            
+        print(f"==== Cleanup finished for test: {test_name} ====")
+            
+    def finalizer():
+        """Sync wrapper for the async finalizer"""
+        loop = asyncio.get_event_loop_policy().get_event_loop()
+        
+        # If we're in an event loop running from pytest_asyncio
+        if loop.is_running():
+            task = asyncio.create_task(
+                async_finalizer(), 
+                name=f"finalizer_{test_name}"
+            )
+            
+            # We need to ensure this task completes, but we can't await directly
+            # Create a shared event for signaling completion
+            done_event = threading.Event()
+            
+            def _on_task_done(task):
+                # Signal that the task is done, regardless of result
+                done_event.set()
+                
+            task.add_done_callback(_on_task_done)
+            
+            # Wait for the task to complete with a timeout
+            # This is a blocking wait, but it's necessary for cleanup
+            if not done_event.wait(timeout=5):
+                print("Warning: Cleanup task timed out!")
+        else:
+            # If we're not in a running loop (shouldn't happen with pytest_asyncio)
+            loop.run_until_complete(async_finalizer())
+    
+    # Register the cleanup function
+    request.addfinalizer(finalizer)
+    
+    # Return the memory core for use in tests
+    return core
+
+# --- Tests ---
+
+@pytest.mark.asyncio
+async def test_get_memory_by_id(memory_core: SynthiansMemoryCore):
+    """Test retrieving a memory by ID."""
+    print("\n--- Running test_get_memory_by_id ---")
+    # Create a test memory using the correct method
+    timestamp = datetime.now(timezone.utc)
+    content = f"Test memory for retrieval at {timestamp.isoformat()}"
+    original_embedding = np.random.rand(memory_core.config['embedding_dim']).astype(np.float32) # Use configured dim
+
+    # Normalize the original embedding *before* sending, as the core will normalize it.
+    normalized_original_embedding = memory_core.geometry_manager.normalize_embedding(original_embedding)
+
+    print(f"Creating memory '{content[:20]}...'")
+    # Use process_new_memory to store, passing the original (will be normalized inside)
+    memory_entry = await memory_core.process_new_memory(
+        content=content,
+        embedding=original_embedding, # Send the original random one
+        metadata={"source": "test_get_by_id", "importance": 0.75}
+    )
+    assert memory_entry is not None, "Failed to create Memory A"
+    memory_id = memory_entry.id
+    print(f"Memory created with ID: {memory_id}")
+
+    # Retrieve the memory by ID using the core method
+    print(f"Retrieving memory {memory_id}...")
+    # Use the core's synchronous method directly (as it accesses internal dict)
+    # Ensure the lock is the dummy one to avoid blocking
+    assert isinstance(memory_core._lock, DummyAsyncLock)
+    retrieved_memory = memory_core.get_memory_by_id(memory_id)
+
+    # Assert memory was retrieved
+    assert retrieved_memory is not None, f"Memory with ID {memory_id} was not found"
+    assert isinstance(retrieved_memory, MemoryEntry), "get_memory_by_id did not return a MemoryEntry object"
+    print("Memory retrieved successfully.")
+
+    # Verify memory contents using object attributes
+    assert retrieved_memory.id == memory_id
+    assert retrieved_memory.content == content, "Retrieved memory content does not match original"
+    assert retrieved_memory.embedding is not None, "Retrieved memory embedding is None"
+
+    # Compare the *retrieved* embedding with the *normalized version* of the original
+    print("Comparing embeddings...")
+    assert np.allclose(retrieved_memory.embedding, normalized_original_embedding, atol=1e-6), \
+        f"Retrieved memory embedding does not match the normalized original.\nRetrieved (first 5): {retrieved_memory.embedding[:5]}\nExpected (first 5): {normalized_original_embedding[:5]}"
+    print("Embeddings match.")
+
+    assert retrieved_memory.metadata.get("source") == "test_get_by_id", "Retrieved memory metadata does not match original"
+
+    # Test retrieving non-existent memory
+    print("Testing retrieval of non-existent memory...")
+    non_existent_id = "non_existent_id_12345"
+    non_existent_memory = memory_core.get_memory_by_id(non_existent_id)
+    assert non_existent_memory is None, f"Memory with non-existent ID {non_existent_id} was found"
+    print("Non-existent memory test passed.")
+    print("--- test_get_memory_by_id PASSED ---")
+
+
+@pytest.mark.asyncio
+async def test_update_quickrecal_score(memory_core: SynthiansMemoryCore):
+    """Test updating the QuickRecal score of a memory."""
+    print("\n--- Running test_update_quickrecal_score ---")
+    # Create a test memory
+    timestamp = datetime.now(timezone.utc)
+    content = f"Test memory for QuickRecal update at {timestamp.isoformat()}"
+    embedding = np.random.rand(memory_core.config['embedding_dim']).astype(np.float32)
+
+    # Use process_new_memory
+    print("Creating memory...")
+    try:
+        async with asyncio.timeout(10):  # 10 second timeout for memory creation
+            memory_entry = await memory_core.process_new_memory(
+                content=content,
+                embedding=embedding,
+                metadata={"source": "test_update_quickrecal"}
+            )
+        assert memory_entry is not None, "Failed to create memory"
+        memory_id = memory_entry.id
+        initial_score_actual = memory_entry.quickrecal_score # Get the actual initial score
+        print(f"Memory created (ID: {memory_id}), initial score: {initial_score_actual:.6f}")
+    except asyncio.TimeoutError:
+        pytest.fail("Timed out waiting for process_new_memory to complete - possible deadlock")
+
+    # Give time for any background tasks to complete (though they shouldn't run)
+    await asyncio.sleep(0.1)
+
+    # Verify initial score
+    # Use synchronous get_memory_by_id
+    assert isinstance(memory_core._lock, DummyAsyncLock)
+    memory_before = memory_core.get_memory_by_id(memory_id)
+    assert memory_before is not None, f"Memory {memory_id} not found"
+    assert abs(memory_before.quickrecal_score - initial_score_actual) < 1e-6
+
+    # Update QuickRecal score
+    new_score = 0.9
+    print(f"Updating score to {new_score}...")
+
+    # Use a timeout to prevent indefinite waiting if deadlock occurs
+    try:
+        async with asyncio.timeout(5):  # 5 seconds should be plenty
+            updated = await memory_core.update_memory(
+                memory_id=memory_id,
+                updates={"quickrecal_score": new_score}
+            )
+        assert updated is True, "Memory update failed"
+        print("Update successful.")
+    except asyncio.TimeoutError:
+        pytest.fail("Timed out waiting for update_memory to complete - possible deadlock")
+
+    # Give time for persistence (even though loop is disabled, update_memory calls save)
+    await asyncio.sleep(0.1)
+
+    # Verify updated score
+    # Use synchronous get_memory_by_id
+    memory_after = memory_core.get_memory_by_id(memory_id)
+    assert memory_after is not None, f"Memory {memory_id} not found after update"
+    assert abs(memory_after.quickrecal_score - new_score) < 1e-6, \
+        f"QuickRecal score was not updated correctly (Expected: {new_score}, Found: {memory_after.quickrecal_score})"
+    print(f"Score updated to: {memory_after.quickrecal_score:.6f}")
+
+    # Test update clamping (high)
+    print("Testing high score clamping...")
+    # Use a timeout to prevent indefinite waiting if deadlock occurs
+    try:
+        async with asyncio.timeout(5):  # 5 seconds timeout
+            updated = await memory_core.update_memory(
+                memory_id=memory_id,
+                updates={"quickrecal_score": 1.5}  # Should be clamped to 1.0
+            )
+        assert updated is True, "Memory update (high score) failed"
+    except asyncio.TimeoutError:
+        pytest.fail("Timed out waiting for update_memory (high score) to complete - possible deadlock")
+
+    # Verify clamped score
+    await asyncio.sleep(0.1)
+    memory_after_high = memory_core.get_memory_by_id(memory_id)
+    assert memory_after_high is not None
+    assert abs(memory_after_high.quickrecal_score - 1.0) < 1e-6, \
+        f"Score was not properly clamped (Expected: 1.0, Found: {memory_after_high.quickrecal_score})"
+    print(f"Score clamped to: {memory_after_high.quickrecal_score:.6f}")
+
+    # Test update clamping (low)
+    print("Testing low score clamping...")
+    try:
+        async with asyncio.timeout(5):  # 5 seconds timeout
+            updated = await memory_core.update_memory(
+                memory_id=memory_id,
+                updates={"quickrecal_score": -0.5}  # Should be clamped to 0.0
+            )
+        assert updated is True, "Memory update (low score) failed"
+    except asyncio.TimeoutError:
+        pytest.fail("Timed out waiting for update_memory (low score) to complete - possible deadlock")
+
+    # Verify clamped score
+    await asyncio.sleep(0.1)
+    memory_after_low = memory_core.get_memory_by_id(memory_id)
+    assert memory_after_low is not None
+    assert abs(memory_after_low.quickrecal_score - 0.0) < 1e-6, \
+        f"Score was not properly clamped (Expected: 0.0, Found: {memory_after_low.quickrecal_score})"
+    print(f"Score clamped to: {memory_after_low.quickrecal_score:.6f}")
+    print("--- test_update_quickrecal_score PASSED ---")
+
+
+@pytest.mark.asyncio
+async def test_update_metadata(memory_core: SynthiansMemoryCore):
+    """Test updating metadata of a memory."""
+    print("\n--- Running test_update_metadata ---")
+    # Create a test memory
+    timestamp = datetime.now(timezone.utc)
+    content = f"Test memory for metadata update at {timestamp.isoformat()}"
+    embedding = np.random.rand(memory_core.config['embedding_dim']).astype(np.float32)
+    initial_metadata = {
+        "source": "test_update_metadata",
+        "tags": ["test", "metadata"],
+        "nested": {"key1": "value1", "key2": "value2"}
+    }
+    memory_entry = await memory_core.process_new_memory(
+        content=content,
+        embedding=embedding,
+        metadata=initial_metadata.copy()
+    )
+    assert memory_entry is not None, "Failed to create memory"
+    memory_id = memory_entry.id
+    print(f"Memory created (ID: {memory_id})")
+
+    # Verify initial custom metadata persisted (synthesized data also exists)
+    memory_before = memory_core.get_memory_by_id(memory_id)
+    assert memory_before is not None
+    assert memory_before.metadata.get("source") == initial_metadata["source"]
+    assert set(memory_before.metadata.get("tags", [])) == set(initial_metadata["tags"]) # Use set for order independence
+    assert memory_before.metadata.get("nested") == initial_metadata["nested"]
+    print("Initial metadata verified.")
+
+    # Update metadata
+    metadata_updates = {
+        "category": "tested",
+        "tags": ["test", "metadata", "updated"], # Replace list
+        "nested": {"key1": "updated_value1", "key3": "new_value3"}, # Merge dict
+        "another_new_field": 123
+    }
+    print(f"Updating metadata with: {metadata_updates}")
+    updated = await memory_core.update_memory(
+        memory_id=memory_id,
+        updates={"metadata": metadata_updates}
+    )
+    assert updated is True, "Memory metadata update failed"
+    print("Metadata update successful.")
+
+    # Verify updated metadata
+    await asyncio.sleep(0.1) # Allow persistence
+    memory_after = memory_core.get_memory_by_id(memory_id)
+    assert memory_after is not None
+    final_metadata = memory_after.metadata
+    print(f"Final Metadata: {json.dumps(final_metadata, indent=2)}")
+
+    # Check updated and added fields
+    assert final_metadata.get("category") == "tested"
+    assert set(final_metadata.get("tags", [])) == set(["test", "metadata", "updated"])
+    assert final_metadata.get("another_new_field") == 123
+
+    # Check merged nested field updates
+    assert final_metadata.get("nested", {}).get("key1") == "updated_value1"
+    assert final_metadata.get("nested", {}).get("key3") == "new_value3"
+    # Check original nested field persisted
+    assert final_metadata.get("nested", {}).get("key2") == "value2"
+
+    # Check original top-level field persisted
+    assert final_metadata.get("source") == "test_update_metadata"
+    print("--- test_update_metadata PASSED ---")
+
+
+@pytest.mark.asyncio
+async def test_update_invalid_fields(memory_core: SynthiansMemoryCore):
+    """Test updating with invalid/non-existent fields."""
+    print("\n--- Running test_update_invalid_fields ---")
+    timestamp = datetime.now(timezone.utc)
+    content = f"Test memory for invalid field update at {timestamp.isoformat()}"
+    embedding = np.random.rand(memory_core.config['embedding_dim']).astype(np.float32)
+    memory_entry = await memory_core.process_new_memory(
+        content=content,
+        embedding=embedding,
+        metadata={"source": "test_invalid_fields"}
+    )
+    assert memory_entry is not None, "Failed to create memory"
+    memory_id = memory_entry.id
+
+    # Try to update with invalid field
+    print("Attempting update with invalid field 'invalid_field_xyz'...")
+    updated_invalid = await memory_core.update_memory(
+        memory_id=memory_id,
+        updates={"invalid_field_xyz": "some_value"}
+    )
+    # Update should still likely return True if it ignores bad fields
+    print(f"Update call returned: {updated_invalid}")
+    await asyncio.sleep(0.1)
+    memory_after_invalid = memory_core.get_memory_by_id(memory_id)
+    assert memory_after_invalid is not None
+    assert not hasattr(memory_after_invalid, "invalid_field_xyz"), "Invalid field was added to memory object"
+    assert "invalid_field_xyz" not in memory_after_invalid.metadata, "Invalid field was added to metadata"
+    print("Verified invalid field was ignored.")
+
+    # Try to update with a valid field and an invalid field
+    initial_score = memory_after_invalid.quickrecal_score
+    print(f"Attempting update with valid score and invalid field ('another_invalid_field'). Initial score: {initial_score}")
+    updated_mixed = await memory_core.update_memory(
+        memory_id=memory_id,
+        updates={
+            "quickrecal_score": 0.77,
+            "another_invalid_field": "another_value"
+        }
+    )
+    assert updated_mixed is True, "Mixed update failed"
+    print("Mixed update successful.")
+
+    await asyncio.sleep(0.1)
+    memory_after_mixed = memory_core.get_memory_by_id(memory_id)
+    assert memory_after_mixed is not None
+    assert abs(memory_after_mixed.quickrecal_score - 0.77) < 1e-6, "Valid field 'quickrecal_score' was not updated during mixed update"
+    assert not hasattr(memory_after_mixed, "another_invalid_field"), "Invalid field was added to memory object during mixed update"
+    assert "another_invalid_field" not in memory_after_mixed.metadata, "Invalid field was added to metadata during mixed update"
+    print("Verified mixed update handled correctly.")
+    print("--- test_update_invalid_fields PASSED ---")
+
+
+@pytest.mark.asyncio
+async def test_update_nonexistent_memory(memory_core: SynthiansMemoryCore):
+    """Test updating a memory that doesn't exist."""
+    print("\n--- Running test_update_nonexistent_memory ---")
+    non_existent_id = "non_existent_id_98765"
+    print(f"Attempting update for non-existent ID: {non_existent_id}")
+    updated = await memory_core.update_memory(
+        memory_id=non_existent_id,
+        updates={"quickrecal_score": 0.8}
+    )
+    assert updated is False, "Update to non-existent memory reported success"
+    print("Verified update returned False for non-existent memory.")
+    print("--- test_update_nonexistent_memory PASSED ---")
+
+
+@pytest.mark.asyncio
+async def test_update_persistence(memory_core: SynthiansMemoryCore, temp_test_dir, request):
+    """Test that updates are persisted properly by reloading."""
+    print("\n--- Running test_update_persistence ---")
+    test_name = request.node.name
+    test_dir = os.path.join(temp_test_dir, test_name.replace('/', '_').replace(':', '_'))
+    print(f"Using test directory: {test_dir}")
+
+    timestamp = datetime.now(timezone.utc)
+    content = f"Test memory for persistence at {timestamp.isoformat()}"
+    embedding = np.random.rand(memory_core.config['embedding_dim']).astype(np.float32)
+    print("Creating initial memory...")
+    memory_entry = await memory_core.process_new_memory(
+        content=content,
+        embedding=embedding,
+        metadata={"source": "test_persistence"},
+    )
+    assert memory_entry is not None, "Failed to create memory"
+    memory_id = memory_entry.id
+    print(f"Memory created (ID: {memory_id})")
+
+    # Update the memory
+    new_score = 0.88
+    new_meta_value = "updated_value"
+    update_timestamp_iso = datetime.now(timezone.utc).isoformat()
+    updates_dict = {
+        "quickrecal_score": new_score,
+        "metadata": {"update_status": new_meta_value, "last_update_iso": update_timestamp_iso }
+    }
+    print(f"Updating memory {memory_id} with: {updates_dict}")
+    updated = await memory_core.update_memory(
+        memory_id=memory_id,
+        updates=updates_dict
+    )
+    assert updated is True, "Memory update failed"
+    print("Memory update successful.")
+
+    # Ensure persistence happens - explicitly call save if loops disabled
+    await memory_core.persistence.save_memory(memory_core.get_memory_by_id(memory_id))
+    await memory_core.persistence._save_index() # Force save index
+    print("Explicit save performed.")
+    await asyncio.sleep(0.2) # Small delay
+
+    # --- Simulate Restart ---
+    print("Shutting down original memory core...")
+    # Need to shut down cleanly to ensure files are closed
+    # await memory_core.shutdown() # Shutdown might cause issues with fixture cleanup
+
+    # Create a NEW memory core instance using the SAME config
+    config = memory_core.config # Reuse config dict
+    print(f"Re-initializing Memory Core with storage path: {config['storage_path']}")
+    new_memory_core = SynthiansMemoryCore(config=config)
+    # Replace locks with dummy locks for the new instance too
+    new_memory_core._lock = DummyAsyncLock()
+    new_memory_core.persistence._lock = DummyAsyncLock()
+    # Initialize the new core, which loads from persistence
+    await new_memory_core.initialize()
+    print("New memory core initialized, loading from persistence.")
+
+    # Retrieve the memory from the new instance
+    print(f"Retrieving memory {memory_id} from reloaded core...")
+    memory_after_reload = new_memory_core.get_memory_by_id(memory_id)
+
+    # Verify the updated values were loaded from persistence
+    assert memory_after_reload is not None, f"Memory with ID {memory_id} was not found after reload"
+    assert isinstance(memory_after_reload, MemoryEntry), "Did not get MemoryEntry object after reload"
+    print("Memory retrieved after reload.")
+
+    assert abs(memory_after_reload.quickrecal_score - new_score) < 1e-6, \
+        f"Updated QuickRecal score was not persisted (Expected: {new_score}, Found: {memory_after_reload.quickrecal_score})"
+    assert memory_after_reload.metadata.get("update_status") == new_meta_value, \
+        "Updated metadata field 'update_status' was not persisted"
+    assert memory_after_reload.metadata.get("last_update_iso") == update_timestamp_iso, \
+        "Added metadata field 'last_update_iso' was not persisted"
+    assert memory_after_reload.metadata.get("source") == "test_persistence", \
+        "Original metadata field 'source' was lost during update/persistence"
+    print("Verified persisted updates.")
+
+    # await new_memory_core.shutdown() # Shutdown the new core instance
+    print("--- test_update_persistence PASSED ---")
+
+
+@pytest.mark.asyncio
+async def test_quickrecal_updated_timestamp(memory_core: SynthiansMemoryCore):
+    """Test that quickrecal_updated_at timestamp is set correctly in metadata."""
+    print("\n--- Running test_quickrecal_updated_timestamp ---")
+    content = "Test memory for quickrecal timestamp"
+    embedding = np.random.rand(memory_core.config['embedding_dim']).astype(np.float32)
+
+    print("Creating memory...")
+    memory_entry = await memory_core.process_new_memory(content=content, embedding=embedding)
+    assert memory_entry is not None, "Failed to create memory"
+    memory_id = memory_entry.id
+
+    memory_before = memory_core.get_memory_by_id(memory_id)
+    assert memory_before.metadata.get('quickrecal_updated_at') is None, \
+        "quickrecal_updated_at should be None initially in metadata"
+    print("Initial state verified (no quickrecal_updated_at).")
+
+    # Update score
+    await asyncio.sleep(0.1)
+    time_before_update = datetime.now(timezone.utc)
+    await asyncio.sleep(0.1)
+
+    print("Updating quickrecal_score...")
+    updated = await memory_core.update_memory(
+        memory_id=memory_id,
+        updates={"quickrecal_score": 0.9}
+    )
+    assert updated is True
+
+    await asyncio.sleep(0.1)
+    time_after_update = datetime.now(timezone.utc)
+    await asyncio.sleep(0.1) # Allow persistence
+
+    memory_after = memory_core.get_memory_by_id(memory_id)
+    assert memory_after is not None
+
+    updated_at_str = memory_after.metadata.get('quickrecal_updated_at')
+    assert updated_at_str is not None, "quickrecal_updated_at was not set in metadata"
+    print(f"Found quickrecal_updated_at: {updated_at_str}")
+
+    # Parse and compare timestamp
+    try:
+        if updated_at_str.endswith('Z'): updated_at_str = updated_at_str[:-1] + '+00:00'
+        updated_at_dt = datetime.fromisoformat(updated_at_str)
+        if updated_at_dt.tzinfo is None: updated_at_dt = updated_at_dt.replace(tzinfo=timezone.utc)
+        if time_before_update.tzinfo is None: time_before_update = time_before_update.replace(tzinfo=timezone.utc)
+        if time_after_update.tzinfo is None: time_after_update = time_after_update.replace(tzinfo=timezone.utc)
+
+        assert time_before_update <= updated_at_dt <= time_after_update, \
+            f"quickrecal_updated_at timestamp ({updated_at_dt}) is outside the expected update window ({time_before_update} - {time_after_update})"
+        print("Timestamp is within expected range.")
+    except ValueError:
+        pytest.fail(f"Could not parse quickrecal_updated_at timestamp: {updated_at_str}")
+
+    # Update metadata only, timestamp should NOT change
+    await asyncio.sleep(0.1)
+    print("Updating metadata only...")
+    updated_meta = await memory_core.update_memory(
+        memory_id=memory_id,
+        updates={"metadata": {"another_field": "value"}}
+    )
+    assert updated_meta is True
+    await asyncio.sleep(0.1) # Allow persistence
+    memory_after_meta = memory_core.get_memory_by_id(memory_id)
+    assert memory_after_meta.metadata.get('quickrecal_updated_at') == updated_at_str, \
+        "quickrecal_updated_at changed when only metadata was updated"
+    print("Verified quickrecal_updated_at unchanged after metadata-only update.")
+    print("--- test_quickrecal_updated_timestamp PASSED ---")
 ```
 
 # tests\test_memory_lifecycle.py

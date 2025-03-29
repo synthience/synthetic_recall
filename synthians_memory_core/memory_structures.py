@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from typing import Dict, Any, Optional, List, Union, Set
 from dataclasses import dataclass, field
+from datetime import datetime, timezone  # Add datetime imports
 
 from .custom_logger import logger # Use the shared custom logger
 
@@ -15,16 +16,24 @@ class MemoryEntry:
     content: str
     embedding: Optional[np.ndarray] = None
     id: str = field(default_factory=lambda: f"mem_{uuid.uuid4().hex[:12]}")
-    timestamp: float = field(default_factory=time.time)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     quickrecal_score: float = 0.5
+    quickrecal_updated: Optional[datetime] = None  # Add missing field
     metadata: Dict[str, Any] = field(default_factory=dict)
     access_count: int = 0
-    last_access_time: float = field(default_factory=time.time)
+    last_access_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     # Hyperbolic specific
     hyperbolic_embedding: Optional[np.ndarray] = None
 
     def __post_init__(self):
         self.quickrecal_score = max(0.0, min(1.0, self.quickrecal_score))
+        
+        # Convert timestamp/last_access_time from potential float on init if needed
+        if isinstance(self.timestamp, (int, float)):
+            self.timestamp = datetime.fromtimestamp(self.timestamp, timezone.utc)
+        if isinstance(self.last_access_time, (int, float)):
+            self.last_access_time = datetime.fromtimestamp(self.last_access_time, timezone.utc)
+
         # Ensure embedding is numpy array
         if self.embedding is not None and not isinstance(self.embedding, np.ndarray):
             if isinstance(self.embedding, torch.Tensor):
@@ -46,14 +55,16 @@ class MemoryEntry:
 
     def record_access(self):
         self.access_count += 1
-        self.last_access_time = time.time()
+        self.last_access_time = datetime.now(timezone.utc)
 
     def get_effective_quickrecal(self, decay_rate: float = 0.05) -> float:
         """Calculate effective QuickRecal score with time decay."""
-        age_days = (time.time() - self.timestamp) / 86400
+        # Calculate age using datetime objects
+        age_seconds = (datetime.now(timezone.utc) - self.timestamp).total_seconds()
+        age_days = age_seconds / 86400
         if age_days < 1: return self.quickrecal_score
         importance_factor = 0.5 + (0.5 * self.quickrecal_score)
-        effective_decay_rate = decay_rate / importance_factor
+        effective_decay_rate = decay_rate / max(0.1, importance_factor)  # Avoid division by zero
         decay_factor = np.exp(-effective_decay_rate * (age_days - 1))
         return max(0.0, min(1.0, self.quickrecal_score * decay_factor))
 
@@ -63,11 +74,12 @@ class MemoryEntry:
             "id": self.id,
             "content": self.content,
             "embedding": self.embedding.tolist() if self.embedding is not None else None,
-            "timestamp": self.timestamp,
+            "timestamp": self.timestamp.isoformat() if hasattr(self.timestamp, 'isoformat') else self.timestamp,
             "quickrecal_score": self.quickrecal_score,
+            "quickrecal_updated": self.quickrecal_updated.isoformat() if hasattr(self.quickrecal_updated, 'isoformat') and self.quickrecal_updated else None,
             "metadata": self.metadata,
             "access_count": self.access_count,
-            "last_access_time": self.last_access_time,
+            "last_access_time": self.last_access_time.isoformat() if hasattr(self.last_access_time, 'isoformat') else self.last_access_time,
             "hyperbolic_embedding": self.hyperbolic_embedding.tolist() if self.hyperbolic_embedding is not None else None
         }
 
@@ -79,15 +91,27 @@ class MemoryEntry:
         # Handle legacy 'significance' field
         quickrecal = data.get("quickrecal_score", data.get("significance", 0.5))
 
+        # Helper to parse timestamp (float or ISO string)
+        def parse_datetime(ts_data):
+            if ts_data is None: return None
+            if isinstance(ts_data, str):
+                try: return datetime.fromisoformat(ts_data.replace('Z', '+00:00'))
+                except ValueError: return None # Handle parsing error
+            elif isinstance(ts_data, (int, float)):
+                try: return datetime.fromtimestamp(ts_data, timezone.utc)
+                except ValueError: return None # Handle invalid timestamp float
+            return None # Unknown type
+
         return cls(
             content=data["content"],
             embedding=embedding,
             id=data.get("id"),
-            timestamp=data.get("timestamp"),
+            timestamp=parse_datetime(data.get("timestamp")) or datetime.now(timezone.utc),
             quickrecal_score=quickrecal,
+            quickrecal_updated=parse_datetime(data.get("quickrecal_updated")),
             metadata=data.get("metadata", {}),
             access_count=data.get("access_count", 0),
-            last_access_time=data.get("last_access_time"),
+            last_access_time=parse_datetime(data.get("last_access_time")) or datetime.now(timezone.utc),
             hyperbolic_embedding=hyperbolic
         )
 
@@ -102,7 +126,7 @@ class MemoryAssembly:
         self.assembly_id = assembly_id or f"asm_{uuid.uuid4().hex[:12]}"
         self.name = name or f"Assembly-{self.assembly_id[:8]}"
         self.description = description or ""
-        self.creation_time = time.time()
+        self.creation_time = datetime.now(timezone.utc)
         self.last_access_time = self.creation_time
         self.access_count = 0
 
@@ -188,7 +212,7 @@ class MemoryAssembly:
 
     def activate(self, level: float):
         self.activation_level = min(1.0, max(0.0, level))
-        self.last_access_time = time.time()
+        self.last_access_time = datetime.now(timezone.utc)
         self.access_count += 1
 
     def decay_activation(self):
@@ -200,8 +224,8 @@ class MemoryAssembly:
             "assembly_id": self.assembly_id,
             "name": self.name,
             "description": self.description,
-            "creation_time": self.creation_time,
-            "last_access_time": self.last_access_time,
+            "creation_time": self.creation_time.isoformat(),
+            "last_access_time": self.last_access_time.isoformat(),
             "access_count": self.access_count,
             "memory_ids": list(self.memories),
             "composite_embedding": self.composite_embedding.tolist() if self.composite_embedding is not None else None,
@@ -220,8 +244,8 @@ class MemoryAssembly:
             name=data["name"],
             description=data["description"]
         )
-        assembly.creation_time = data.get("creation_time")
-        assembly.last_access_time = data.get("last_access_time")
+        assembly.creation_time = datetime.fromisoformat(data.get("creation_time"))
+        assembly.last_access_time = datetime.fromisoformat(data.get("last_access_time"))
         assembly.access_count = data.get("access_count", 0)
         assembly.memories = set(data.get("memory_ids", []))
         assembly.composite_embedding = np.array(data["composite_embedding"], dtype=np.float32) if data.get("composite_embedding") else None

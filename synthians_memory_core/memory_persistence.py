@@ -15,6 +15,7 @@ import uuid
 from .memory_structures import MemoryEntry, MemoryAssembly # Use the unified structure
 from .custom_logger import logger # Use the shared custom logger
 from datetime import datetime
+import copy
 
 class MemoryPersistence:
     """Handles disk-based memory operations with robustness."""
@@ -34,6 +35,7 @@ class MemoryPersistence:
         self.memory_index: Dict[str, Dict[str, Any]] = {}
         self._lock = asyncio.Lock()
         self.stats = {'saves': 0, 'loads': 0, 'deletes': 0, 'backups': 0, 'errors': 0}
+        self._initialized = False  # Add initialization flag
 
         # Ensure directories exist
         try:
@@ -43,10 +45,16 @@ class MemoryPersistence:
              logger.error("MemoryPersistence", "Failed to create storage directories", {"path": self.storage_path, "error": str(e)})
              raise # Initialization failure is critical
 
-        # Load index on init
-        asyncio.create_task(self._load_index()) # Load index in background
+        logger.info("MemoryPersistence", "Initialized (index loading deferred)", {"storage_path": str(self.storage_path)})
 
-        logger.info("MemoryPersistence", "Initialized", {"storage_path": str(self.storage_path)})
+    async def initialize(self):
+        """Load the memory index asynchronously."""
+        if self._initialized:
+            return
+        logger.info("MemoryPersistence", "Initializing (loading index)...")
+        await self._load_index()
+        self._initialized = True
+        logger.info("MemoryPersistence", "Initialization complete.")
 
     async def _load_index(self):
         """Load the memory index from disk."""
@@ -71,78 +79,110 @@ class MemoryPersistence:
                  logger.error("MemoryPersistence", "Error loading memory index, starting fresh.", {"path": str(self.index_path), "error": str(e)})
                  self.memory_index = {} # Start fresh on error
 
+    async def _save_index_no_lock(self):
+        """Save the memory index to disk atomically, without acquiring a lock.
+        This method should only be called when the caller already holds self._lock."""
+        try:
+            logger.debug("MemoryPersistence", "Saving memory index to disk")
+            temp_path = self.index_path.with_suffix('.tmp')
+            async with aiofiles.open(temp_path, 'w') as f:
+                await f.write(json.dumps(self.memory_index, indent=2))
+            await asyncio.to_thread(os.replace, temp_path, self.index_path)
+            self.stats['last_index_update'] = time.time()
+            logger.debug("MemoryPersistence", "Memory index saved successfully")
+            return True
+        except asyncio.TimeoutError:
+            logger.error("MemoryPersistence", "Timeout saving memory index")
+            return False
+        except Exception as e:
+            logger.error("MemoryPersistence", "Error saving memory index", {"path": str(self.index_path), "error": str(e)})
+            # Attempt to remove potentially corrupted temp file
+            if await asyncio.to_thread(os.path.exists, temp_path):
+                try: await asyncio.to_thread(os.remove, temp_path)
+                except Exception: pass
+            return False
+
     async def _save_index(self):
-        """Save the memory index to disk atomically."""
+        """Save the memory index to disk atomically with lock acquisition."""
         async with self._lock:
-             temp_path = self.index_path.with_suffix('.tmp')
-             try:
-                 async with aiofiles.open(temp_path, 'w') as f:
-                     await f.write(json.dumps(self.memory_index, indent=2))
-                 await asyncio.to_thread(os.replace, temp_path, self.index_path)
-                 self.stats['last_index_update'] = time.time()
-             except Exception as e:
-                 logger.error("MemoryPersistence", "Error saving memory index", {"path": str(self.index_path), "error": str(e)})
-                 # Attempt to remove potentially corrupted temp file
-                 if await asyncio.to_thread(os.path.exists, temp_path):
-                      try: await asyncio.to_thread(os.remove, temp_path)
-                      except Exception: pass
+            await self._save_index_no_lock()
 
     async def save_memory(self, memory: MemoryEntry) -> bool:
         """Save a single memory entry to disk."""
         try:
-            # Create a unique ID if one doesn't exist
-            if not hasattr(memory, 'id') or memory.id is None:
-                memory.id = f"mem_{uuid.uuid4().hex[:12]}"
+            # Check if we're being called during shutdown/cleanup with no event loop
+            try:
+                loop = asyncio.get_running_loop()
+                if not loop.is_running():
+                    logger.warning("MemoryPersistence", f"Attempted to save memory {memory.id} with no running event loop")
+                    return False
+            except RuntimeError:
+                # No running event loop - this happens during test cleanup sometimes
+                logger.warning("MemoryPersistence", f"Error saving memory {memory.id}: no running event loop")
+                return False
             
-            # Ensure the storage directory exists
-            memory_dir = self.storage_path 
-            memory_dir.mkdir(exist_ok=True, parents=True)
-            
-            # Generate a filename based on the memory ID
-            file_path = memory_dir / f"{memory.id}.json"
-            
-            # Convert the memory to a serializable dict
-            memory_dict = memory.to_dict()
+            logger.debug("MemoryPersistence", f"Saving memory {memory.id} - acquiring lock")
+            async with self._lock:
+                try:
+                    # Create a unique ID if one doesn't exist
+                    if not hasattr(memory, 'id') or memory.id is None:
+                        memory.id = f"mem_{uuid.uuid4().hex[:12]}"
+                    
+                    # Ensure the storage directory exists
+                    memory_dir = self.storage_path 
+                    memory_dir.mkdir(exist_ok=True, parents=True)
+                    
+                    # Generate a filename based on the memory ID
+                    file_path = memory_dir / f"{memory.id}.json"
+                    
+                    # Convert the memory to a serializable dict
+                    memory_dict = memory.to_dict()
 
-            # Write the memory to disk
-            async with aiofiles.open(file_path, 'w') as f:
-                # Ensure complex numbers or other non-serializables are handled
-                def default_serializer(obj):
-                     if isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
-                                         np.int16, np.int32, np.int64, np.uint8,
-                                         np.uint16, np.uint32, np.uint64)):
-                         return int(obj)
-                     elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
-                         return float(obj)
-                     elif isinstance(obj, (np.ndarray,)): # Handle complex arrays if needed
-                         return obj.tolist()
-                     elif isinstance(obj, set):
-                         return list(obj)
-                     try:
-                          # Fallback for other types
-                          return str(obj)
-                     except:
-                          return "[Unserializable Object]"
-                await f.write(json.dumps(memory_dict, indent=2, default=default_serializer))
-            
-            # Update the memory index
-            self.memory_index[memory.id] = {
-                'path': str(file_path.relative_to(self.storage_path)),
-                'timestamp': memory.timestamp if hasattr(memory, 'timestamp') else time.time(),
-                'quickrecal': memory.quickrecal_score if hasattr(memory, 'quickrecal_score') else 0.5,
-                'type': 'memory'  # Default type since memory_type doesn't exist
-            }
-            
-            # Save the memory index
-            await self._save_index()
-            
-            self.stats['saves'] += 1
-            self.stats['successful_saves'] = self.stats.get('successful_saves', 0) + 1
-            return True
-        except Exception as e:
-            logger.error("MemoryPersistence", f"Error saving memory {getattr(memory, 'id', 'unknown')}: {str(e)}")
-            self.stats['saves'] += 1
-            self.stats['failed_saves'] = self.stats.get('failed_saves', 0) + 1
+                    # Write the memory to disk
+                    async with aiofiles.open(file_path, 'w') as f:
+                        # Ensure complex numbers or other non-serializables are handled
+                        def default_serializer(obj):
+                             if isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
+                                                 np.int16, np.int32, np.int64, np.uint8,
+                                                 np.uint16, np.uint32, np.uint64)):
+                                 return int(obj)
+                             elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+                                 return float(obj)
+                             elif isinstance(obj, (np.ndarray,)): # Handle complex arrays if needed
+                                 return obj.tolist()
+                             elif isinstance(obj, set):
+                                 return list(obj)
+                             elif isinstance(obj, datetime):
+                                 return obj.isoformat()
+                             try:
+                                  # Fallback for other types
+                                  return str(obj)
+                             except:
+                                  return "[Unserializable Object]"
+                        await f.write(json.dumps(memory_dict, indent=2, default=default_serializer))
+                    
+                    # Update the memory index
+                    self.memory_index[memory.id] = {
+                        'path': str(file_path.relative_to(self.storage_path)),
+                        'timestamp': memory.timestamp.isoformat() if hasattr(memory.timestamp, 'isoformat') else str(memory.timestamp) if hasattr(memory, 'timestamp') else time.time(),
+                        'quickrecal': memory.quickrecal_score if hasattr(memory, 'quickrecal_score') else 0.5,
+                        'type': 'memory'  # Default type since memory_type doesn't exist
+                    }
+                    
+                    # Save the memory index - call internal version without lock since we already have it
+                    await asyncio.wait_for(self._save_index_no_lock(), timeout=5)
+                    
+                    self.stats['saves'] += 1
+                    self.stats['successful_saves'] = self.stats.get('successful_saves', 0) + 1
+                    logger.debug("MemoryPersistence", f"Memory {memory.id} saved to disk, releasing lock")
+                    return True
+                except Exception as e:
+                    logger.error("MemoryPersistence", f"Error saving memory {getattr(memory, 'id', 'unknown')}: {str(e)}")
+                    self.stats['saves'] += 1
+                    self.stats['failed_saves'] = self.stats.get('failed_saves', 0) + 1
+                    return False
+        except asyncio.TimeoutError:
+            logger.error("MemoryPersistence", f"Timeout saving memory {getattr(memory, 'id', 'unknown')}")
             return False
 
     async def load_memory(self, memory_id: str) -> Optional[MemoryEntry]:
@@ -247,21 +287,25 @@ class MemoryPersistence:
 
     async def load_all(self) -> List[MemoryEntry]:
         """Load all memories listed in the index."""
+        if not self._initialized:
+            await self.initialize()  # Ensure index is loaded
+            
         all_memories = []
-        memory_ids = list(self.memory_index.keys())
-        logger.info("MemoryPersistence", f"Loading all {len(memory_ids)} memories from index.")
+        async with self._lock:
+            memory_ids = list(self.memory_index.keys())
+            logger.info("MemoryPersistence", f"Loading all {len(memory_ids)} memories from index.")
 
-        # Consider batching if loading many memories
-        batch_size = 100
-        for i in range(0, len(memory_ids), batch_size):
-             batch_ids = memory_ids[i:i+batch_size]
-             load_tasks = [self.load_memory(mid) for mid in batch_ids]
-             results = await asyncio.gather(*load_tasks)
-             all_memories.extend(mem for mem in results if mem is not None)
-             await asyncio.sleep(0.01) # Yield control between batches
+            # Consider batching if loading many memories
+            batch_size = 100
+            for i in range(0, len(memory_ids), batch_size):
+                 batch_ids = memory_ids[i:i+batch_size]
+                 load_tasks = [self.load_memory(mid) for mid in batch_ids]
+                 results = await asyncio.gather(*load_tasks)
+                 all_memories.extend(mem for mem in results if mem is not None)
+                 await asyncio.sleep(0.01) # Yield control between batches
 
-        logger.info("MemoryPersistence", f"Finished loading {len(all_memories)} memories.")
-        return all_memories
+            logger.info("MemoryPersistence", f"Finished loading {len(all_memories)} memories.")
+            return all_memories
 
     async def create_backup(self) -> bool:
         """Create a timestamped backup of the memory storage."""
@@ -340,6 +384,8 @@ class MemoryPersistence:
                         return obj.tolist()
                     elif isinstance(obj, set):
                         return list(obj)
+                    elif isinstance(obj, datetime):
+                        return obj.isoformat()
                     try:
                         # Fallback for other types
                         return str(obj)
@@ -505,20 +551,35 @@ class MemoryPersistence:
                 self.stats['failed_assembly_deletes'] = self.stats.get('failed_assembly_deletes', 0) + 1
                 return False
 
+    async def shutdown(self):
+        """Ensure final index save and perform cleanup."""
+        logger.info("MemoryPersistence", "Shutting down...")
+        try:
+            loop = asyncio.get_running_loop()
+            if not loop.is_running():
+                logger.warning("MemoryPersistence", "No running event loop during shutdown")
+                return
+        except RuntimeError:
+            logger.warning("MemoryPersistence", "No running event loop during shutdown")
+            return
+        await self._save_index()  # Ensure final save
+        logger.info("MemoryPersistence", "Shutdown complete.")
+
     def get_stats(self) -> Dict[str, Any]:
         """Get persistence statistics."""
-        asyncio.create_task(self._save_index()) # Ensure index is saved before getting stats
+        if not self._initialized:
+            # Avoid calling initialize here as it might block if called sync
+            logger.warning("MemoryPersistence", "Stats requested before initialization, index count may be inaccurate.")
+        
+        # Return stats with possibly unloaded index count
         return {
-            "total_indexed_memories": len(self.memory_index),
+            "total_indexed_items": len(self.memory_index),
+            "initialized": self._initialized,
             "last_index_update": self.stats.get('last_index_update', 0),
-            "saves": self.stats.get('saves', 0),
-            "successful_saves": self.stats.get('successful_saves', 0),
-            "failed_saves": self.stats.get('failed_saves', 0),
-            "loads": self.stats.get('loads', 0),
-            "successful_loads": self.stats.get('successful_loads', 0),
-            "failed_loads": self.stats.get('failed_loads', 0),
-            "deletes": self.stats.get('deletes', 0),
-            "backups": self.stats.get('backup_count', 0),
             "last_backup": self.stats.get('last_backup', 0),
+            "saves": self.stats.get('saves', 0),
+            "loads": self.stats.get('loads', 0),
+            "deletes": self.stats.get('deletes', 0),
+            "backups": self.stats.get('backups', 0),
             "errors": self.stats.get('errors', 0)
         }
