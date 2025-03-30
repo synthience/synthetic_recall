@@ -1,5 +1,7 @@
 Looking in indexes: https://pypi.org/simple, https://download.pytorch.org/whl/cu118
-Requirement already satisfied: tensorflow in /usr/local/lib/python3.10/dist-packages (2.19.0)
+Collecting tensorflow
+  Downloading tensorflow-2.19.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (644.8 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 644.8/644.8 MB 53.0 MB/s eta 0:00:00
 Requirement already satisfied: absl-py>=1.0.0 in /usr/local/lib/python3.10/dist-packages (from tensorflow) (1.4.0)
 Requirement already satisfied: astunparse>=1.6.0 in /usr/local/lib/python3.10/dist-packages (from tensorflow) (1.6.3)
 Requirement already satisfied: flatbuffers>=24.3.25 in /usr/local/lib/python3.10/dist-packages (from tensorflow) (25.2.10)
@@ -37,3 +39,5 @@ Requirement already satisfied: MarkupSafe>=2.1.1 in /usr/local/lib/python3.10/di
 Requirement already satisfied: markdown-it-py>=2.2.0 in /usr/local/lib/python3.10/dist-packages (from rich->keras>=3.5.0->tensorflow) (3.0.0)
 Requirement already satisfied: pygments<3.0.0,>=2.13.0 in /usr/local/lib/python3.10/dist-packages (from rich->keras>=3.5.0->tensorflow) (2.15.1)
 Requirement already satisfied: mdurl~=0.1 in /usr/local/lib/python3.10/dist-packages (from markdown-it-py>=2.2.0->rich->keras>=3.5.0->tensorflow) (0.1.2)
+Installing collected packages: tensorflow
+Successfully installed tensorflow-2.19.0

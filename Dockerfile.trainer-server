@@ -1,0 +1,37 @@
+FROM python:3.10-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set up working directory
+WORKDIR /workspace/project
+
+# Create script for fixing numpy version
+RUN echo '#!/usr/bin/env python\nimport subprocess\nimport sys\nsubprocess.run([sys.executable, "-m", "pip", "install", "--force-reinstall", "numpy==1.25.2"], check=True)' > /workspace/project/fix_numpy.py
+
+# Create directories for models and storage
+RUN mkdir -p /app/models
+
+# Copy dependencies
+COPY requirements.txt /workspace/project/
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir fastapi uvicorn pydantic
+
+# Install tensorflow with CPU support to minimize conflicts
+RUN pip install --no-cache-dir tensorflow
+
+# Expose the API port
+EXPOSE 5020
+
+# Set the default command
+CMD ["bash", "-c", "pip install -q -r requirements.txt && python fix_numpy.py && python -m synthians_memory_core.synthians_trainer_server.http_server"]

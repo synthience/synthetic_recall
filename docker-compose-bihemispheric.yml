@@ -26,18 +26,3 @@ services:
     command: bash -c "pip install -q fastapi uvicorn aiohttp pydantic tensorflow && python -m uvicorn synthians_memory_core.orchestrator.server:app --host 0.0.0.0 --port 8002"
     depends_on:
       - trainer-server
-
-  livekit-server:
-    image: livekit/livekit-server
-    container_name: livekit-server
-    # Using ports mapping instead of host network to avoid conflicts
-    ports:
-      - "7880:7880"
-      - "7881:7881"
-      - "7882:7882/udp"
-      - "3478:3478/udp"
-      - "5349:5349"
-      - "40000-40100:40000-40100/udp"
-    volumes:
-      - ./config/livekit.yaml:/livekit.yaml
-    command: --config /livekit.yaml

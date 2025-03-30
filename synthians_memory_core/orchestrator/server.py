@@ -6,6 +6,14 @@ from typing import Dict, List, Any, Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
+# Import TensorFlow installer before importing other modules
+from synthians_memory_core.orchestrator.tf_installer import ensure_tensorflow_installed
+
+# Attempt TensorFlow installation at module level before importing other dependencies
+enforce_tf = ensure_tensorflow_installed()
+if not enforce_tf:
+    logging.warning("Failed to install TensorFlow. Titans variants requiring TensorFlow may not work correctly!")
+
 from synthians_memory_core.geometry_manager import GeometryManager
 from synthians_memory_core.orchestrator.context_cascade_engine import ContextCascadeEngine
 
@@ -34,6 +42,10 @@ class SequenceEmbeddingsRequest(BaseModel):
 class AnalyzeSurpriseRequest(BaseModel):
     predicted_embedding: List[float]
     actual_embedding: List[float]
+
+class SetVariantRequest(BaseModel):
+    variant: str
+    reset_neural_memory: bool = False
 
 # --- Helper Functions ---
 
@@ -127,6 +139,42 @@ async def analyze_surprise(request: AnalyzeSurpriseRequest):
     except Exception as e:
         logger.error(f"Error analyzing surprise: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error analyzing surprise: {str(e)}")
+
+@app.post("/set_variant")
+async def set_variant(request: SetVariantRequest):
+    """Set the active Titans variant at runtime. Only available in DevMode.
+    
+    This endpoint allows dynamic switching between TITANS variants during runtime.
+    It requires the CCE_DEV_MODE environment variable to be set to "true".
+    
+    Args:
+        request: Request body containing the variant to switch to
+        
+    Returns:
+        Dict containing the switch result and status information
+        
+    Raises:
+        HTTPException: If DevMode is not enabled, variant is invalid, or switching during processing
+    """
+    try:
+        # Ensure orchestrator is initialized
+        orchestrator = get_orchestrator()
+        
+        # Call the orchestrator's set_variant method
+        result = await orchestrator.set_variant(request.variant, reset_neural_memory=request.reset_neural_memory)
+        return result
+    except RuntimeError as e:
+        # DevMode not enabled or processing lock held
+        logger.error(f"Runtime error in set_variant: {e}")
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        # Invalid variant name
+        logger.error(f"Value error in set_variant: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        # Unexpected error
+        logger.error(f"Unexpected error in set_variant: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 # --- Startup and Shutdown Events ---
 

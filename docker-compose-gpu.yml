@@ -1,0 +1,82 @@
+services:
+  synthians_memory_core_gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.synthians-gpu
+    image: synthians_memory_core_gpu:latest
+    container_name: synthians_memory_core_gpu
+    volumes:
+      - ./:/workspace/project
+      - synthians_memory_data:/app/memory/stored/synthians
+      - synthians_models:/app/models
+    ports:
+      - "5010:5010"  # Memory Core API port
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - PYTHONPATH=/workspace/project
+      - USE_GPU=1
+      - NVIDIA_VISIBLE_DEVICES=all
+      - LOG_LEVEL=DEBUG
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5010/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  trainer_server:
+    image: synthians_trainer_server:latest
+    container_name: synthians_trainer_server
+    build:
+      context: .
+      dockerfile: Dockerfile.trainer-server
+    volumes:
+      - ./:/workspace/project
+      - trainer_models:/app/models
+    ports:
+      - "5020:5020"  # Trainer server port
+    environment:
+      - PYTHONPATH=/workspace/project
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5020/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    depends_on:
+      - synthians_memory_core_gpu
+
+  context_cascade_orchestrator:
+    image: context_cascade_orchestrator:latest
+    container_name: context_cascade_orchestrator
+    build:
+      context: .
+      dockerfile: Dockerfile.context-cascade
+    volumes:
+      - ./:/workspace/project
+    ports:
+      - "5030:5030"  # Orchestrator port
+    environment:
+      - PYTHONPATH=/workspace/project
+      - MEMORY_CORE_URL=http://synthians_memory_core_gpu:5010
+      - NEURAL_MEMORY_URL=http://trainer_server:5020
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5030/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    depends_on:
+      - synthians_memory_core_gpu
+      - trainer_server
+
+volumes:
+  synthians_memory_data:
+  synthians_models:
+  trainer_models:

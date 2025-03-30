@@ -6,9 +6,20 @@ import json
 import datetime
 import threading
 import os
+import math
 from typing import Dict, List, Any, Optional, Union, Deque
 from collections import deque, defaultdict
-import numpy as np
+
+# Replace NumPy with pure Python implementations
+def calculate_norm(vector):
+    """Calculate the Euclidean norm of a vector."""
+    return math.sqrt(sum(x*x for x in vector))
+
+def calculate_mean(values):
+    """Calculate the mean of a list of values."""
+    if not values:
+        return 0.0
+    return sum(values) / len(values)
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +115,7 @@ class MetricsStore:
         intent_id = intent_id or self._current_intent_id
         
         # Calculate embedding norm for reference
-        embedding_norm = float(np.linalg.norm(np.array(input_embedding, dtype=np.float32)))
+        embedding_norm = calculate_norm(input_embedding)
         
         event = {
             "timestamp": event_time.isoformat(),
@@ -270,6 +281,77 @@ class MetricsStore:
         self._maybe_write_event_log("retrievals", event)
         logger.debug(f"Logged retrieval: {len(retrieved_memories)} memories retrieved")
     
+    def get_intent_statistics(self, intent_id: Optional[str] = None, emotion_filter: Optional[str] = None) -> Dict[str, Any]:
+        """Get summary statistics for a specific intent session.
+        
+        Args:
+            intent_id: Optional intent ID (uses current if not provided)
+            emotion_filter: Optional emotion to filter by
+            
+        Returns:
+            Dict containing summary statistics
+        """
+        intent_id = intent_id or self._current_intent_id
+        if not intent_id:
+            return {}
+        
+        with self._lock:
+            # Gather all events for this intent
+            memory_updates = [e for e in self._memory_updates if e.get("intent_id") == intent_id]
+            retrievals = [e for e in self._retrievals if e.get("intent_id") == intent_id]
+            quickrecal_boosts = [e for e in self._quickrecal_boosts if e.get("intent_id") == intent_id]
+            
+            # Apply emotion filter if provided
+            if emotion_filter:
+                memory_updates = [e for e in memory_updates if e.get("emotion") == emotion_filter]
+                retrievals = [e for e in retrievals if e.get("user_emotion") == emotion_filter]
+                quickrecal_boosts = [e for e in quickrecal_boosts if e.get("emotion") == emotion_filter]
+            
+            # Calculate average metrics
+            avg_loss = calculate_mean([e["loss"] for e in memory_updates]) if memory_updates else 0.0
+            avg_grad_norm = calculate_mean([e["grad_norm"] for e in memory_updates]) if memory_updates else 0.0
+            avg_boost = calculate_mean([e["boost_amount"] for e in quickrecal_boosts]) if quickrecal_boosts else 0.0
+            
+            # Count unique memories
+            retrieved_memories = set()
+            for r in retrievals:
+                for mem in r.get("memory_ids", []):
+                    retrieved_memories.add(mem)
+            
+            # Count emotions if any
+            emotions = {}
+            for e in memory_updates:
+                if e.get("emotion"):
+                    emotions[e["emotion"]] = emotions.get(e["emotion"], 0) + 1
+            
+            # Calculate emotion entropy if emotions present
+            emotion_entropy = 0.0
+            if emotions:
+                total = sum(emotions.values())
+                if total > 0:
+                    probs = [count / total for count in emotions.values()]
+                    entropy = -sum(p * math.log(p) for p in probs if p > 0)
+                    emotion_entropy = float(entropy)
+            
+            return {
+                "intent_id": intent_id,
+                "event_counts": {
+                    "memory_updates": len(memory_updates),
+                    "retrievals": len(retrievals),
+                    "quickrecal_boosts": len(quickrecal_boosts),
+                },
+                "metrics": {
+                    "avg_loss": float(avg_loss),
+                    "avg_grad_norm": float(avg_grad_norm),
+                    "avg_quickrecal_boost": float(avg_boost),
+                    "emotion_entropy": emotion_entropy,
+                },
+                "memory_stats": {
+                    "unique_memories_retrieved": len(retrieved_memories),
+                },
+                "emotions": emotions,
+            }
+    
     def _maybe_write_event_log(self, event_type: str, event: Dict[str, Any]) -> None:
         """Write event to log file if logging is enabled."""
         if not self.log_dir:
@@ -370,9 +452,9 @@ class MetricsStore:
                 quickrecal_boosts = [e for e in quickrecal_boosts if e.get("emotion") == emotion_filter]
             
             # Calculate average metrics
-            avg_loss = np.mean([e["loss"] for e in memory_updates]) if memory_updates else 0.0
-            avg_grad_norm = np.mean([e["grad_norm"] for e in memory_updates]) if memory_updates else 0.0
-            avg_boost = np.mean([e["boost_amount"] for e in quickrecal_boosts]) if quickrecal_boosts else 0.0
+            avg_loss = calculate_mean([e["loss"] for e in memory_updates]) if memory_updates else 0.0
+            avg_grad_norm = calculate_mean([e["grad_norm"] for e in memory_updates]) if memory_updates else 0.0
+            avg_boost = calculate_mean([e["boost_amount"] for e in quickrecal_boosts]) if quickrecal_boosts else 0.0
             
             # Find dominant emotions boosted
             emotion_boost_counts = defaultdict(float)
@@ -389,7 +471,7 @@ class MetricsStore:
             total_emotions = sum(emotion_counts.values())
             if total_emotions > 0:
                 probs = [count/total_emotions for count in emotion_counts.values()]
-                entropy = -sum(p * np.log(p) for p in probs if p > 0)
+                entropy = -sum(p * math.log(p) for p in probs if p > 0)
             else:
                 entropy = 0.0
             

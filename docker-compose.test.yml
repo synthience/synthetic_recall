@@ -1,0 +1,93 @@
+# docker-compose.test.yml
+# Adapted for testing - Uses network_mode: host and assumes nemo_qr_v1 image exists.
+# Variant controlled by HOST environment variable TITANS_VARIANT when starting CCE.
+
+services:
+  memory-core:
+    image: nemo_qr_v1:latest
+    container_name: test-memory-core
+    network_mode: host # Aligns with provided setup
+    volumes:
+      - ./:/workspace/project
+      # Dedicated storage for test runs, ensure this path exists or Docker can create it
+      - ./test_data/mc_storage:/workspace/project/memory/stored/synthians
+      - ${MODELS_PATH:-./models}:/workspace/models
+    environment:
+      - PORT=5010 # Ensure MC runs on its standard port
+      - LOG_LEVEL=INFO
+      - EMBEDDING_MODEL=all-mpnet-base-v2 # Or match your default
+      - MEMORY_STORAGE_PATH=/workspace/project/memory/stored/synthians # Path inside container
+      - PYTHONPATH=/workspace/project
+      - TF_CPP_MIN_LOG_LEVEL=2 # Reduce TensorFlow logging
+      # Add any other necessary env vars for MC (e.g., GPU config if used)
+    # Use the docker-entrypoint.sh script which handles proper initialization
+    entrypoint: ["/usr/local/bin/docker-entrypoint.sh"]
+    command: python -m synthians_memory_core.server
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5010/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  trainer-server:
+    image: nemo_qr_v1:latest
+    container_name: test-trainer-server
+    network_mode: host
+    volumes:
+      - ./:/workspace/project
+      - ./test_data/nm_logs:/workspace/project/logs # Map logs directory
+      - ./test_data/nm_state:/workspace/project/state # Optional: map state dir
+      - ${MODELS_PATH:-./models}:/workspace/models
+    environment:
+      - MEMORY_CORE_URL=http://localhost:5010 # Reachable via host network
+      - PORT=8001
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - LOG_LEVEL=INFO
+      - PYTHONPATH=/workspace/project
+      # Optional: Specify a default state to load if needed for tests
+      # - NM_DEFAULT_STATE_PATH=/workspace/project/state/nm_init.json
+      - METRICS_LOG_DIR=/workspace/project/logs # Path inside container
+    # Use the docker-entrypoint.sh script which handles proper initialization
+    entrypoint: ["/usr/local/bin/docker-entrypoint.sh"]
+    command: bash -c "python fix_numpy.py && python -m synthians_memory_core.synthians_trainer_server.http_server"
+    depends_on:
+      memory-core:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  context-cascade-engine:
+    image: nemo_qr_v1:latest
+    container_name: test-context-cascade-engine
+    network_mode: host
+    volumes:
+      - ./:/workspace/project
+      - ./test_data/cce_logs:/workspace/project/logs # Map logs directory
+      - ${MODELS_PATH:-./models}:/workspace/models
+    environment:
+      - MEMORY_CORE_URL=http://localhost:5010
+      - NEURAL_MEMORY_URL=http://localhost:8001
+      - PORT=8002 # Standard CCE port
+      - PYTHONPATH=/workspace/project
+      # *** Variant is controlled by HOST environment variable ***
+      # Pass the host's TITANS_VARIANT variable into the container
+      - TITANS_VARIANT=${TITANS_VARIANT:-NONE} # Default to NONE if not set on host
+      - LOG_LEVEL=INFO
+      - CCE_METRICS_ENABLED=True # Enable metrics for potential checks
+      - SEQUENCE_CONTEXT_LENGTH=50 # Or desired length for testing
+    # Use the docker-entrypoint.sh script which handles proper initialization
+    entrypoint: ["/usr/local/bin/docker-entrypoint.sh"]
+    command: bash -c "python fix_numpy.py && python -m uvicorn synthians_memory_core.orchestrator.server:app --host 0.0.0.0 --port 8002"
+    depends_on:
+      trainer-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/"] # Basic check, add /health if available
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+# Note: Removed livekit-server as it's not core to this testing.

@@ -1,0 +1,16 @@
+2025-03-30 20:57:52,687 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-03-30 20:57:52,687 - faiss.loader - INFO - Could not load library with AVX512 support due to:
+ModuleNotFoundError("No module named 'faiss.swigfaiss_avx512'")
+2025-03-30 20:57:52,687 - faiss.loader - INFO - Loading faiss with AVX2 support.
+2025-03-30 20:57:52,707 - faiss.loader - INFO - Successfully loaded faiss with AVX2 support.
+2025-03-30 20:57:52,714 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-03-30 20:57:52,715 - synthians_memory_core.vector_index - INFO - FAISS import successful
+2025-03-30 20:57:52,715 - synthians_memory_core.vector_index - WARNING - FAISS GPU support not available: module 'faiss' has no attribute 'StandardGpuResources'
+2025-03-30 21:01:09,847 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-03-30 21:01:09,847 - faiss.loader - INFO - Could not load library with AVX512 support due to:
+ModuleNotFoundError("No module named 'faiss.swigfaiss_avx512'")
+2025-03-30 21:01:09,848 - faiss.loader - INFO - Loading faiss with AVX2 support.
+2025-03-30 21:01:09,864 - faiss.loader - INFO - Successfully loaded faiss with AVX2 support.
+2025-03-30 21:01:09,870 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-03-30 21:01:09,870 - synthians_memory_core.vector_index - INFO - FAISS import successful
+2025-03-30 21:01:09,870 - synthians_memory_core.vector_index - WARNING - FAISS GPU support not available: module 'faiss' has no attribute 'StandardGpuResources'
