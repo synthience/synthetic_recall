@@ -27,8 +27,8 @@ async def test_faiss_vector_index_creation():
     })
     
     # Verify the index was created with the right parameters
-    assert index.dimension == dimension, f"Expected dimension {dimension}, got {index.dimension}"
-    logger.info(f"Created vector index with dimension {index.dimension}, GPU usage: {index.is_using_gpu}")
+    assert index.embedding_dim == dimension, f"Expected dimension {dimension}, got {index.embedding_dim}"
+    logger.info(f"Created vector index with dimension {index.embedding_dim}, GPU usage: {index.is_using_gpu}")
     
     # Create some test embeddings
     num_vectors = 100

@@ -5,8 +5,8 @@ from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
 from ...geometry_manager import GeometryManager
-from ..http_server import app, SynthiansTrainer
-from ..models import PredictNextEmbeddingRequest, TrainSequenceRequest
+from ..http_server import app
+from ..neural_memory import NeuralMemoryModule
 
 
 @pytest.fixture
@@ -16,14 +16,16 @@ def test_client():
 
 
 @pytest.fixture
-def mock_trainer():
-    """Create a mock SynthiansTrainer instance."""
-    with patch('synthians_memory_core.synthians_trainer_server.http_server.SynthiansTrainer', autospec=True) as mock:
-        mock_instance = MagicMock()
-        mock.return_value = mock_instance
-        # Configure mocked methods
-        mock_instance.predict_next.return_value = np.random.randn(768)
-        mock_instance.train_sequence.return_value = True
+def mock_neural_memory():
+    """Create a mock NeuralMemoryModule instance."""
+    with patch('synthians_memory_core.synthians_trainer_server.http_server.get_neural_memory', autospec=True) as mock_get:
+        mock_instance = MagicMock(spec=NeuralMemoryModule)
+        mock_get.return_value = mock_instance
+        
+        # Configure mocked methods for new Neural Memory API
+        mock_instance.retrieve.return_value = np.random.randn(768)
+        mock_instance.update_memory.return_value = (0.1, 0.2)  # loss, grad_norm
+        
         yield mock_instance
 
 
@@ -34,70 +36,55 @@ def test_health_endpoint(test_client):
     assert response.json()["status"] == "ok"
 
 
-def test_predict_next_embedding_stateless(test_client, mock_trainer):
-    """Test the predict_next_embedding endpoint with explicit previous state."""
+def test_retrieve_endpoint(test_client, mock_neural_memory):
+    """Test the retrieve endpoint of the Neural Memory API."""
     # Prepare request data
-    embeddings = [np.random.randn(768).tolist() for _ in range(3)]
-    previous_memory_state = {
-        "sequence": [np.random.randn(768).tolist() for _ in range(2)],
-        "surprise_history": [0.1, 0.2],
-        "momentum": np.random.randn(768).tolist()
-    }
+    input_embedding = np.random.randn(768).tolist()
     
     request_data = {
-        "embeddings": embeddings,
-        "previous_memory_state": previous_memory_state
+        "input_embedding": input_embedding
     }
     
-    # Send request
-    response = test_client.post("/predict_next_embedding", json=request_data)
+    # Make the request
+    response = test_client.post("/retrieve", json=request_data)
     
-    # Verify response
+    # Verify the response
     assert response.status_code == 200
-    assert "predicted_embedding" in response.json()
-    assert "memory_state" in response.json()
-    assert "surprise_score" in response.json()
+    result = response.json()
+    assert "retrieved_embedding" in result
+    assert len(result["retrieved_embedding"]) == 768
     
-    # Verify trainer was called correctly
-    mock_trainer.predict_next.assert_called_once()
-    args, _ = mock_trainer.predict_next.call_args
-    assert len(args) >= 2  # At least embeddings and previous state
-    
+    # Verify the mock was called correctly
+    mock_neural_memory.retrieve.assert_called_once()
+    # First positional arg should be the input embedding (as numpy array)
+    call_args = mock_neural_memory.retrieve.call_args[0]
+    assert len(call_args) >= 1
+    np.testing.assert_array_almost_equal(call_args[0], input_embedding)
 
-def test_train_sequence(test_client, mock_trainer):
-    """Test the train_sequence endpoint."""
+
+def test_update_memory_endpoint(test_client, mock_neural_memory):
+    """Test the update_memory endpoint of the Neural Memory API."""
     # Prepare request data
-    embeddings = [np.random.randn(768).tolist() for _ in range(5)]
+    input_embedding = np.random.randn(768).tolist()
     
     request_data = {
-        "embeddings": embeddings,
+        "input_embedding": input_embedding
     }
     
-    # Send request
-    response = test_client.post("/train_sequence", json=request_data)
+    # Make the request
+    response = test_client.post("/update_memory", json=request_data)
     
-    # Verify response
+    # Verify the response
     assert response.status_code == 200
-    assert response.json()["success"] == True
+    result = response.json()
+    assert "status" in result
+    assert result["status"] == "success"
+    assert "loss" in result
+    assert "grad_norm" in result
     
-    # Verify trainer was called correctly
-    mock_trainer.train_sequence.assert_called_once()
-    args, _ = mock_trainer.train_sequence.call_args
-    assert len(args[0]) == 5  # Embeddings length
-
-
-def test_predict_next_embedding_errors(test_client):
-    """Test error handling in predict_next_embedding endpoint."""
-    # Test with empty embeddings
-    request_data = {
-        "embeddings": []
-    }
-    response = test_client.post("/predict_next_embedding", json=request_data)
-    assert response.status_code == 400
-    
-    # Test with malformed embeddings (wrong dimension)
-    request_data = {
-        "embeddings": [np.random.randn(10).tolist() for _ in range(3)]
-    }
-    response = test_client.post("/predict_next_embedding", json=request_data)
-    assert response.status_code == 400
+    # Verify the mock was called correctly
+    mock_neural_memory.update_memory.assert_called_once()
+    # First positional arg should be the input embedding (as numpy array)
+    call_args = mock_neural_memory.update_memory.call_args[0]
+    assert len(call_args) >= 1
+    np.testing.assert_array_almost_equal(call_args[0], input_embedding)

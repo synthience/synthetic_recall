@@ -86,34 +86,61 @@ class MemoryEntry:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'MemoryEntry':
         """Create memory from dictionary."""
-        embedding = np.array(data["embedding"], dtype=np.float32) if data.get("embedding") else None
-        hyperbolic = np.array(data["hyperbolic_embedding"], dtype=np.float32) if data.get("hyperbolic_embedding") else None
+        mem_id = data.get("id", "unknown_id") # Get ID for logging
+        logger.debug("MemoryEntry.from_dict", f"Creating entry for ID: {mem_id}")
+        
+        try:
+            embedding = np.array(data["embedding"], dtype=np.float32) if data.get("embedding") else None
+            hyperbolic = np.array(data["hyperbolic_embedding"], dtype=np.float32) if data.get("hyperbolic_embedding") else None
+        except Exception as e:
+            logger.error("MemoryEntry.from_dict", f"Error processing embedding for ID {mem_id}", {"error": str(e)})
+            embedding = None
+            hyperbolic = None
+            
         # Handle legacy 'significance' field
         quickrecal = data.get("quickrecal_score", data.get("significance", 0.5))
 
         # Helper to parse timestamp (float or ISO string)
-        def parse_datetime(ts_data):
+        def parse_datetime(ts_data, field_name):
             if ts_data is None: return None
-            if isinstance(ts_data, str):
-                try: return datetime.fromisoformat(ts_data.replace('Z', '+00:00'))
-                except ValueError: return None # Handle parsing error
-            elif isinstance(ts_data, (int, float)):
-                try: return datetime.fromtimestamp(ts_data, timezone.utc)
-                except ValueError: return None # Handle invalid timestamp float
-            return None # Unknown type
+            try:
+                if isinstance(ts_data, str):
+                    # Handle potential Z suffix for UTC
+                    if ts_data.endswith('Z'): ts_data = ts_data[:-1] + '+00:00'
+                    return datetime.fromisoformat(ts_data)
+                elif isinstance(ts_data, (int, float)):
+                    return datetime.fromtimestamp(ts_data, timezone.utc)
+                # --- ADDED Logging ---
+                logger.warning("MemoryEntry.from_dict", f"Unsupported timestamp type for {field_name} in ID {mem_id}: {type(ts_data)}")
+                return None
+            except Exception as e:
+                 # --- ADDED Logging ---
+                 logger.error("MemoryEntry.from_dict", f"Error parsing {field_name} for ID {mem_id}", {"value": ts_data, "error": str(e)})
+                 return None
 
-        return cls(
-            content=data["content"],
-            embedding=embedding,
-            id=data.get("id"),
-            timestamp=parse_datetime(data.get("timestamp")) or datetime.now(timezone.utc),
-            quickrecal_score=quickrecal,
-            quickrecal_updated=parse_datetime(data.get("quickrecal_updated")),
-            metadata=data.get("metadata", {}),
-            access_count=data.get("access_count", 0),
-            last_access_time=parse_datetime(data.get("last_access_time")) or datetime.now(timezone.utc),
-            hyperbolic_embedding=hyperbolic
-        )
+        timestamp = parse_datetime(data.get("timestamp"), "timestamp") or datetime.now(timezone.utc)
+        last_access = parse_datetime(data.get("last_access_time"), "last_access_time") or datetime.now(timezone.utc)
+        qr_updated = parse_datetime(data.get("quickrecal_updated"), "quickrecal_updated")
+
+        try:
+            entry = cls(
+                content=data["content"],
+                embedding=embedding,
+                id=mem_id, # Use pre-fetched ID
+                timestamp=timestamp,
+                quickrecal_score=quickrecal,
+                quickrecal_updated=qr_updated,
+                metadata=data.get("metadata", {}),
+                access_count=data.get("access_count", 0),
+                last_access_time=last_access,
+                hyperbolic_embedding=hyperbolic
+            )
+            logger.debug("MemoryEntry.from_dict", f"Successfully created entry for ID: {mem_id}")
+            return entry
+        except Exception as e:
+             # --- ADDED Logging ---
+             logger.error("MemoryEntry.from_dict", f"Error during final object creation for ID {mem_id}", {"error": str(e)}, exc_info=True)
+             raise # Re-raise after logging if creation fails fundamentally
 
 class MemoryAssembly:
     """Represents a group of related memories forming a coherent assembly."""

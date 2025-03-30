@@ -187,61 +187,59 @@ class MemoryPersistence:
 
     async def load_memory(self, memory_id: str) -> Optional[MemoryEntry]:
         """Load a single memory entry from disk."""
+        logger.debug("MemoryPersistence.load_memory", f"Attempting to load memory {memory_id}")
         async with self._lock:
              try:
-                 if memory_id not in self.memory_index:
-                     # Fallback: check filesystem directly (maybe index is outdated)
-                     file_path = self.storage_path / f"{memory_id}.json"
-                     if not await asyncio.to_thread(os.path.exists, file_path):
-                          logger.warning("MemoryPersistence", f"Memory {memory_id} not found in index or filesystem.")
-                          return None
-                     # If found directly, update index info
-                     self.memory_index[memory_id] = {'path': f"{memory_id}.json"}
-                 else:
-                     file_path = self.storage_path / self.memory_index[memory_id]['path']
-
-                 # Check primary path first
-                 if not await asyncio.to_thread(os.path.exists, file_path):
-                      # Try backup path
-                      backup_path = file_path.with_suffix('.bak')
-                      if await asyncio.to_thread(os.path.exists, backup_path):
-                           logger.warning("MemoryPersistence", f"Using backup file for {memory_id}", {"path": str(backup_path)})
-                           file_path = backup_path
-                      else:
-                           logger.error("MemoryPersistence", f"Memory file not found for {memory_id}", {"path": str(file_path)})
-                           # Remove from index if file is missing
-                           if memory_id in self.memory_index: del self.memory_index[memory_id]
+                  if memory_id not in self.memory_index:
+                      # Fallback: check filesystem directly (maybe index is outdated)
+                      file_path = self.storage_path / f"{memory_id}.json"
+                      if not await asyncio.to_thread(os.path.exists, file_path):
+                           logger.warning("MemoryPersistence.load_memory", f"Memory {memory_id} not found in index or filesystem.")
                            return None
+                      # If found directly, update index info
+                      self.memory_index[memory_id] = {'path': f"{memory_id}.json"}
+                  else:
+                      file_path = self.storage_path / self.memory_index[memory_id]['path']
 
-                 async with aiofiles.open(file_path, 'r') as f:
-                     content = await f.read()
-                     memory_dict = json.loads(content)
+                  # Check primary path first
+                  if not await asyncio.to_thread(os.path.exists, file_path):
+                       # Try backup path
+                       backup_path = file_path.with_suffix('.bak')
+                       if await asyncio.to_thread(os.path.exists, backup_path):
+                            logger.warning("MemoryPersistence.load_memory", f"Using backup file for {memory_id}", {"path": str(backup_path)})
+                            file_path = backup_path
+                       else:
+                            logger.error("MemoryPersistence.load_memory", f"Memory file not found for {memory_id}", {"path": str(file_path)})
+                            # Remove from index if file is missing
+                            if memory_id in self.memory_index: del self.memory_index[memory_id]
+                            return None
 
-                 memory = MemoryEntry.from_dict(memory_dict)
-                 self.stats['loads'] = self.stats.get('loads', 0) + 1
-                 self.stats['successful_loads'] = self.stats.get('successful_loads', 0) + 1
-                 return memory
+                  logger.debug("MemoryPersistence.load_memory", f"Reading file: {file_path}")
+                  async with aiofiles.open(file_path, 'r') as f:
+                      content = await f.read()
 
+                  logger.debug("MemoryPersistence.load_memory", f"Parsing JSON for {memory_id}")
+                  memory_dict = json.loads(content)
+
+                  logger.debug("MemoryPersistence.load_memory", f"Creating MemoryEntry from dict for {memory_id}")
+                  memory = MemoryEntry.from_dict(memory_dict)
+
+                  logger.debug("MemoryPersistence.load_memory", f"Successfully loaded memory {memory_id}")
+                  self.stats['loads'] = self.stats.get('loads', 0) + 1
+                  self.stats['successful_loads'] = self.stats.get('successful_loads', 0) + 1
+                  return memory
+
+             except FileNotFoundError:
+                  logger.warning("MemoryPersistence.load_memory", f"Memory file not found for {memory_id} (FileNotFoundError)")
+                  return None
+             except json.JSONDecodeError as e:
+                  logger.error("MemoryPersistence.load_memory", f"JSON Decode Error loading memory {memory_id}", {"path": str(file_path), "error": str(e)})
+                  return None
              except Exception as e:
-                 logger.error("MemoryPersistence", f"Error loading memory {memory_id}", {"error": str(e)})
-                 self.stats['loads'] = self.stats.get('loads', 0) + 1
-                 self.stats['failed_loads'] = self.stats.get('failed_loads', 0) + 1
-                 # Attempt recovery from backup if primary load failed
-                 backup_path = self.storage_path / f"{memory_id}.json.bak"
-                 if await asyncio.to_thread(os.path.exists, backup_path):
-                      try:
-                           logger.info("MemoryPersistence", f"Attempting recovery from backup for {memory_id}")
-                           async with aiofiles.open(backup_path, 'r') as f:
-                                content = await f.read()
-                                memory_dict = json.loads(content)
-                           memory = MemoryEntry.from_dict(memory_dict)
-                           # Restore backup to primary file
-                           await asyncio.to_thread(shutil.copy2, backup_path, self.storage_path / f"{memory_id}.json")
-                           logger.info("MemoryPersistence", f"Successfully recovered {memory_id} from backup.")
-                           return memory
-                      except Exception as e_rec:
-                           logger.error("MemoryPersistence", f"Backup recovery failed for {memory_id}", {"error": str(e_rec)})
-                 return None
+                  logger.error("MemoryPersistence.load_memory", f"Unexpected Error loading memory {memory_id}", {"path": str(file_path), "error": str(e)}, exc_info=True)
+                  self.stats['loads'] = self.stats.get('loads', 0) + 1
+                  self.stats['failed_loads'] = self.stats.get('failed_loads', 0) + 1
+                  return None
 
     async def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory file from disk."""
@@ -250,23 +248,20 @@ class MemoryPersistence:
                  if memory_id not in self.memory_index:
                      # Check filesystem directly as fallback
                      file_path_direct = self.storage_path / f"{memory_id}.json"
-                     if await asyncio.to_thread(os.path.exists, file_path_direct):
-                         await asyncio.to_thread(os.remove, file_path_direct)
-                         logger.info("MemoryPersistence", f"Deleted memory file directly {memory_id} (was not in index)")
-                         self.stats['deletes'] = self.stats.get('deletes', 0) + 1
-                         return True
-                     logger.warning("MemoryPersistence", f"Memory {memory_id} not found for deletion.")
-                     return False
-
-                 file_path = self.storage_path / self.memory_index[memory_id]['path']
-                 backup_path = file_path.with_suffix('.bak')
+                     if not await asyncio.to_thread(os.path.exists, file_path_direct):
+                          logger.warning("MemoryPersistence", f"Memory {memory_id} not found for deletion")
+                          return False
+                     # If found directly, update index info
+                     self.memory_index[memory_id] = {'path': f"{memory_id}.json"}
+                 else:
+                     file_path = self.storage_path / self.memory_index[memory_id]['path']
 
                  deleted = False
                  if await asyncio.to_thread(os.path.exists, file_path):
                      await asyncio.to_thread(os.remove, file_path)
                      deleted = True
-                 if await asyncio.to_thread(os.path.exists, backup_path):
-                     await asyncio.to_thread(os.remove, backup_path)
+                 if await asyncio.to_thread(os.path.exists, file_path.with_suffix('.bak')):
+                     await asyncio.to_thread(os.remove, file_path.with_suffix('.bak'))
                      deleted = True # Mark deleted even if only backup existed
 
                  if deleted:
@@ -291,21 +286,42 @@ class MemoryPersistence:
             await self.initialize()  # Ensure index is loaded
             
         all_memories = []
+        logger.info("MemoryPersistence.load_all", "Acquiring lock...")
         async with self._lock:
             memory_ids = list(self.memory_index.keys())
-            logger.info("MemoryPersistence", f"Loading all {len(memory_ids)} memories from index.")
+            total_to_load = len(memory_ids)
+            logger.info("MemoryPersistence.load_all", f"Lock acquired. Found {total_to_load} IDs in index. Starting load.")
 
             # Consider batching if loading many memories
-            batch_size = 100
-            for i in range(0, len(memory_ids), batch_size):
+            batch_size = 50 # Reduced batch size for more granular logging
+            loaded_count = 0
+            for i in range(0, total_to_load, batch_size):
                  batch_ids = memory_ids[i:i+batch_size]
-                 load_tasks = [self.load_memory(mid) for mid in batch_ids]
-                 results = await asyncio.gather(*load_tasks)
-                 all_memories.extend(mem for mem in results if mem is not None)
-                 await asyncio.sleep(0.01) # Yield control between batches
+                 logger.info("MemoryPersistence.load_all", f"Processing batch {i//batch_size + 1}/{(total_to_load + batch_size - 1)//batch_size} (IDs: {batch_ids[:5]}...)")
+                 load_tasks = []
+                 for mid in batch_ids:
+                     logger.debug("MemoryPersistence.load_all", f"Creating load task for ID: {mid}")
+                     load_tasks.append(self.load_memory(mid)) # load_memory already logs internally now
 
-            logger.info("MemoryPersistence", f"Finished loading {len(all_memories)} memories.")
-            return all_memories
+                 results = await asyncio.gather(*load_tasks, return_exceptions=True) # Catch exceptions per task
+
+                 batch_loaded_count = 0
+                 for j, result in enumerate(results):
+                     batch_mem_id = batch_ids[j]
+                     if isinstance(result, MemoryEntry):
+                         all_memories.append(result)
+                         batch_loaded_count += 1
+                     elif isinstance(result, Exception):
+                          logger.error("MemoryPersistence.load_all", f"Error loading memory {batch_mem_id} within batch", {"error": str(result)}, exc_info=result)
+                     else:
+                          logger.warning("MemoryPersistence.load_all", f"load_memory for {batch_mem_id} returned None or unexpected type: {type(result)}")
+
+                 loaded_count += batch_loaded_count
+                 logger.info("MemoryPersistence.load_all", f"Batch {i//batch_size + 1} complete. Loaded {batch_loaded_count} memories in batch. Total loaded: {loaded_count}/{total_to_load}")
+                 await asyncio.sleep(0.05) # Slightly longer yield
+
+            logger.info("MemoryPersistence.load_all", f"Finished loading loop. Loaded {len(all_memories)} memories successfully. Releasing lock.")
+        return all_memories
 
     async def create_backup(self) -> bool:
         """Create a timestamped backup of the memory storage."""

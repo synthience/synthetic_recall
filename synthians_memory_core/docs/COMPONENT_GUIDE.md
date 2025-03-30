@@ -81,7 +81,7 @@ The API (`api/server.py`) exposes core functionalities, including:
 *   **Receives From Context Cascade Engine (CCE):**
     *   New memory data via `POST /process_memory`.
     *   Requests for sequence embeddings via `POST /api/memories/get_sequence_embeddings`.
-    *   Requests to update QuickRecal scores via `POST /api/memories/update_quickrecal_score` (**NOTE: Requires `update_memory` implementation**).
+    *   Requests to update QuickRecal scores via `POST /api/memories/update_quickrecal_score` (Receives `memory_id`, `boost` value).
 *   **Sends To Context Cascade Engine (CCE):**
     *   Response from `/process_memory` (includes `memory_id`, `embedding`, `quickrecal_score`, `metadata`).
     *   Response from `/retrieve_memories` (list of memory dictionaries).
@@ -91,8 +91,7 @@ The API (`api/server.py`) exposes core functionalities, including:
 
 ### 8. Current Status & Known Gaps
 
-*   **Status:** Core storage, retrieval, indexing, emotion, metadata, and persistence functionalities are largely implemented and robust. FAISS integration handles GPU and validation well. API provides broad coverage.
-*   **Critical Gap:** The feedback loop is **broken**. The `SynthiansMemoryCore` class **lacks the implemented `update_memory` and `get_memory_by_id` methods**. This prevents the `TrainerIntegrationManager` (and thus the CCE) from applying QuickRecal score boosts based on surprise metrics received from the Neural Memory Server.
+*   **Status:** Core storage, retrieval, indexing, emotion, metadata, and persistence functionalities are implemented and stable. The vector index uses `faiss.IndexIDMap` robustly. The API provides broad coverage, and the surprise feedback loop integration via `/api/memories/update_quickrecal_score` is functional.
 *   **Minor Gaps:** Contradiction detection is basic; assembly removal logic is simplified. Embedding generation could be further centralized.
 
 ---
@@ -125,7 +124,7 @@ The Neural Memory Server implements an adaptive, associative memory based on the
 *   `neural_memory.NeuralMemoryConfig`: Configuration class.
 *   `http_server.py`: FastAPI application exposing the Neural Memory API.
 *   `metrics_store.py`: `MetricsStore` for collecting operational metrics.
-*   `surprise_detector.py`: `SurpriseDetector` used by `/analyze_surprise` endpoint.
+*   *(Surprise Calculation):* Core surprise metrics (`loss`, `grad_norm`) are calculated and returned directly by the `POST /update_memory` endpoint as part of the test-time update process. The `/analyze_surprise` endpoint (using `SurpriseDetector`) provides a way to calculate surprise post-hoc between two embeddings.
 
 ### 4. Configuration
 
@@ -211,7 +210,7 @@ The Context Cascade Engine (CCE) serves as the central orchestrator for the Synt
 *   **Service Integration:** Communicates with the Memory Core and Neural Memory Server APIs.
 *   **Variant Management:** Selects and executes the logic for the active Titans variant (MAC, MAG, MAL, or NONE).
 *   **History Management:** Maintains a sequential history of embeddings and projections (`SequenceContextManager`) needed for attention calculations in variants.
-*   **Surprise Feedback:** Receives surprise metrics (loss, grad_norm) from the Neural Memory Server and initiates QuickRecal score updates in the Memory Core (**Note: Currently failing due to missing MC methods**).
+*   **Surprise Feedback:** Receives surprise metrics (loss, grad_norm) from the Neural Memory Server and initiates QuickRecal score updates in the Memory Core via `POST /api/memories/update_quickrecal_score`.
 *   **Context Propagation:** Ensures relevant information (embeddings, projections, metadata) is passed between stages.
 *   **Error Handling:** Manages communication errors with downstream services.
 
@@ -244,7 +243,7 @@ The CCE's `process_new_input` method executes the following orchestrated steps:
 2.  Call Neural Memory (`/get_projections`) to get `k_t`, `v_t`, `q_t`.
 3.  If MAG/MAL active, execute variant pre-update logic (calculating gates or `v'_t`).
 4.  Call Neural Memory (`/update_memory`) with `x_t` and any variant modifications (gates/projections). Receive `loss`, `grad_norm`.
-5.  Call Memory Core (`/api/memories/update_quickrecal_score`) with surprise metrics to boost QuickRecal (**Currently Failing**).
+5.  Call Memory Core (`/api/memories/update_quickrecal_score`) with surprise metrics to boost QuickRecal.
 6.  Call Neural Memory (`/retrieve`) with `x_t` to get raw associated embedding `y_t_raw` and the `q_t` used.
 7.  If MAC active, execute variant post-retrieval logic to get final `y_t_final`. Otherwise `y_t_final = y_t_raw`.
 8.  Store the full context `(timestamp, memory_id, x_t, k_t, v_t, q_t, y_t_final)` in `SequenceContextManager`.
@@ -256,7 +255,7 @@ The CCE's `process_new_input` method executes the following orchestrated steps:
 
 *   **Calls Synthians Memory Core API:**
     *   `POST /process_memory` (Input: content, embedding, metadata; Output: memory_id, embedding, score, metadata)
-    *   `POST /api/memories/update_quickrecal_score` (Input: memory_id, delta, reason; Output: status) (**Intended Call - Currently Failing**)
+    *   `POST /api/memories/update_quickrecal_score` (Input: memory_id, delta, reason; Output: status)
     *   `POST /api/memories/get_sequence_embeddings` (Passthrough - Input: filters; Output: sequence)
 *   **Calls Neural Memory Server API:**
     *   `POST /get_projections` (Input: input_embedding; Output: k, v, q projections)
@@ -271,7 +270,6 @@ The CCE's `process_new_input` method executes the following orchestrated steps:
 
 *   **Status:** Implements the refactored cognitive flow correctly, enabling proper timing for MAC, MAG, and MAL variants. Integrates with `SequenceContextManager` for history. Dynamically configures itself. Uses lazy loading for TensorFlow.
 *   **Gaps:**
-    *   **Dependent on Memory Core Fix:** The critical surprise feedback loop to update QuickRecal scores is non-functional until the Memory Core API is fixed.
     *   **Error Handling:** While basic error handling exists, more sophisticated strategies for handling failures in Memory Core or Neural Memory calls (e.g., retries, fallback logic) could be added.
     *   **State Management:** If the CCE were to become stateful (beyond the sequence history), careful management would be needed. Currently designed as mostly stateless per request cycle.
 
@@ -281,10 +279,9 @@ The CCE's `process_new_input` method executes the following orchestrated steps:
 
 *   **New Input:** User/System -> **CCE (`/process_memory`)** -> **Memory Core (`/process_memory`)** -> Returns `x_t`, `mem_id` to CCE.
 *   **Association Learning:** CCE -> **Neural Memory (`/get_projections`)** -> Returns `k_t, v_t, q_t` -> CCE -> **Variant Pre-Update (MAG/MAL)** -> CCE -> **Neural Memory (`/update_memory`)** -> Returns `loss`, `grad_norm`.
-*   **Surprise Feedback:** CCE -> **Memory Core (`/update_quickrecal_score`)** with `loss`/`grad_norm` -> Memory Core updates score (**BROKEN**).
+*   **Surprise Feedback:** CCE -> **Memory Core (`/update_quickrecal_score`)** with `loss`/`grad_norm` -> Memory Core updates score.
 *   **Associative Retrieval:** CCE -> **Neural Memory (`/retrieve`)** -> Returns `y_t_raw`, `q_t` -> CCE -> **Variant Post-Update (MAC)** -> Generates `y_t_final`.
 *   **History:** CCE updates `SequenceContextManager` with `(ts, mem_id, x_t, k_t, v_t, q_t, y_t_final)`.
 *   **Configuration:** CCE -> **Neural Memory (`/config`)** -> Returns NM/Attention config.
 
-This flow highlights the central role of the CCE in mediating all interactions and implementing the core logic of the bi-hemispheric model and its variants. The broken feedback link to the Memory Core is the most significant integration issue to resolve.
-```
+This flow highlights the central role of the CCE in mediating all interactions and implementing the core logic of the bi-hemispheric model and its variants.

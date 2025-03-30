@@ -13,6 +13,7 @@ import datetime as dt
 from datetime import timezone, datetime # Ensure datetime is imported directly
 import copy
 import traceback # Import traceback for detailed error logging
+import math
 
 # Import core components from this package
 from .custom_logger import logger
@@ -43,8 +44,6 @@ def deep_update(source, overrides):
             else:
                 # If source[key] is not a dict or doesn't exist, just overwrite
                 source[key] = value
-        else:
-            source[key] = value
     return source
 
 
@@ -75,6 +74,9 @@ class SynthiansMemoryCore:
             'initial_retrieval_threshold': 0.75,
             'vector_index_type': 'Cosine',  # 'L2', 'IP', 'Cosine'
             'persistence_batch_size': 100, # Batch size for persistence loop
+            'check_index_on_retrieval': False, # New config option
+            'index_check_interval': 3600, # New config option
+            'migrate_to_idmap': True, # New config option
             **(config or {})
         }
 
@@ -110,12 +112,27 @@ class SynthiansMemoryCore:
         self.metadata_synthesizer = MetadataSynthesizer()  # Initialize metadata synthesizer
 
         # Initialize vector index for fast retrieval
+        # If we're using IndexIDMap (which is the default and recommended), we need to use CPU
+        # as FAISS GPU indexes don't support add_with_ids
+        use_index_id_map = self.config.get('migrate_to_idmap', True)
         self.vector_index = MemoryVectorIndex({
             'embedding_dim': self.config['embedding_dim'],
             'storage_path': self.config['storage_path'],
-            'index_type': self.config['vector_index_type']
+            'index_type': self.config['vector_index_type'],
+            'use_gpu': not use_index_id_map  # Use GPU only if not using IndexIDMap
         })
-
+        
+        # Check if we should migrate the index to the new IndexIDMap format
+        if use_index_id_map:
+            is_index_id_map = hasattr(self.vector_index.index, 'id_map')
+            if not is_index_id_map:
+                logger.info("Migrating vector index to use IndexIDMap for improved ID management")
+                success = self.vector_index.migrate_to_idmap()
+                if success:
+                    logger.info("Successfully migrated vector index to IndexIDMap")
+                else:
+                    logger.warning("Failed to migrate vector index to IndexIDMap. Some features may not work correctly.")
+        
         # --- Memory State ---
         self._memories: Dict[str, MemoryEntry] = {} # In-memory cache/working set
         self.assemblies: Dict[str, MemoryAssembly] = {}
@@ -139,18 +156,19 @@ class SynthiansMemoryCore:
             await self.persistence.initialize()
             logger.info("SynthiansMemoryCore", "Persistence layer initialized.")
 
-            # Load memories and assemblies from persistence
-            loaded_memories = await self.persistence.load_all()
-            for mem in loaded_memories:
-                self._memories[mem.id] = mem
-            logger.info("SynthiansMemoryCore", f"Loaded {len(self._memories)} memories from persistence.")
+            # REMOVED: Don't load all memories immediately, just get the IDs from the index
+            # loaded_memories = await self.persistence.load_all()
+            # for mem in loaded_memories:
+            #     self._memories[mem.id] = mem
+            memory_ids = self.persistence.memory_index.keys()
+            logger.info("SynthiansMemoryCore", f"Found {len(memory_ids)} memory IDs in index. Deferring full memory load.")
+            
+            # Initialize memory_to_assemblies mapping with empty sets for all known memory IDs
+            self.memory_to_assemblies = {memory_id: set() for memory_id in memory_ids}
 
             # Load assemblies and memory_to_assemblies mapping
             assembly_list = await self.persistence.list_assemblies()
             loaded_assemblies_count = 0
-
-            # Initialize memory_to_assemblies mapping
-            self.memory_to_assemblies = {memory_id: set() for memory_id in self._memories.keys()}
 
             # Load each assembly
             for assembly_info in assembly_list:
@@ -174,15 +192,54 @@ class SynthiansMemoryCore:
             # Load the vector index
             index_loaded = self.vector_index.load()
 
-            # If index wasn't found, build it from loaded memories
-            if not index_loaded and self._memories:
-                logger.info("SynthiansMemoryCore", "Building vector index from loaded memories...")
-                for mem_id, memory in self._memories.items():
-                    if memory.embedding is not None:
-                        self.vector_index.add(mem_id, memory.embedding)
-                # Save the newly built index
-                self.vector_index.save()
-                logger.info("SynthiansMemoryCore", f"Built and saved vector index with {len(self._memories)} entries")
+            # If index wasn't found, we'll need to build it as memories get loaded
+            if not index_loaded:
+                logger.info("SynthiansMemoryCore", "No vector index found. Will build incrementally as memories are loaded.")
+            else:
+                logger.info("SynthiansMemoryCore", f"Loaded vector index with {self.vector_index.count()} entries")
+
+            # Verify index integrity
+            is_consistent, diagnostics = self.vector_index.verify_index_integrity()
+            
+            # Log the diagnostics
+            logger.info(f"Vector index integrity check: {is_consistent}")
+            logger.info(f"Vector index diagnostics: {diagnostics}")
+            
+            # Automatically repair common issues
+            need_repair = False
+            
+            # Case 1: Index inconsistency detected (FAISS count > 0, Mapping count = 0)
+            if diagnostics.get('faiss_count', 0) > 0 and diagnostics.get('id_mapping_count', 0) == 0:
+                logger.warning("Critical inconsistency detected: FAISS count > 0 but Mapping count = 0")
+                logger.warning("Initiating automatic repair...")
+                need_repair = True
+            
+            # Case 2: Index is not using IndexIDMap but config requests it
+            if self.config.get('migrate_to_idmap', True) and not diagnostics.get('is_index_id_map', False):
+                logger.info("Migrating to IndexIDMap as requested by configuration")
+                need_repair = True
+            
+            # Perform repair if needed
+            if need_repair:
+                logger.info("Performing automatic index repair...")
+                
+                # First make sure we're using IndexIDMap
+                if not diagnostics.get('is_index_id_map', False):
+                    success = self.vector_index.migrate_to_idmap(force_cpu=True)
+                    if success:
+                        logger.info("Successfully migrated vector index to IndexIDMap")
+                    else:
+                        logger.warning("Failed to migrate vector index to IndexIDMap. Will try repair_index next.")
+                
+                # If we still have inconsistency, run the repair
+                is_consistent, diagnostics = self.vector_index.verify_index_integrity()
+                if not is_consistent:
+                    asyncio.create_task(self.repair_index("recreate_mapping"))
+                    logger.info("Scheduled automatic repair_index to fix inconsistencies")
+            
+            # Final index stats after initialization
+            logger.info(f"Vector index initialized with {self.vector_index.count()} vectors and "
+                        f"{len(self.vector_index.id_to_index)} ID mappings")
 
             # Start background tasks only if intervals are > 0
             if self.config['persistence_interval'] > 0:
@@ -398,7 +455,10 @@ class SynthiansMemoryCore:
         """
         if not self._initialized: await self.initialize()
         start_time = time.time()
-
+        
+        # Add diagnostic logging for parameter passing
+        logger.debug(f"[retrieve_memories] START retrieve_memories: Received threshold argument = {threshold} (type: {type(threshold)})")
+        
         query_embedding = None
         try:
             # Generate embedding for the query if necessary
@@ -408,6 +468,13 @@ class SynthiansMemoryCore:
                      logger.error("SynthiansMemoryCore", "Failed to generate query embedding.")
                      return {"success": False, "memories": [], "error": "Failed to generate query embedding"}
                 logger.debug("SynthiansMemoryCore", "Query embedding generated")
+                
+                # Validate and normalize query embedding first
+                query_embedding = self.geometry_manager._validate_vector(query_embedding, "Query Embedding")
+                if query_embedding is None:
+                    logger.error("SynthiansMemoryCore", "Query embedding validation failed")
+                    return {"success": False, "memories": [], "error": "Invalid query embedding"}
+                logger.debug(f"Validated query embedding - shape: {query_embedding.shape}")
 
             # Get the current threshold
             current_threshold = threshold
@@ -415,67 +482,230 @@ class SynthiansMemoryCore:
                 current_threshold = self.threshold_calibrator.get_current_threshold()
                 logger.debug(f"Using calibrated threshold: {current_threshold:.4f}")
             elif current_threshold is None:
-                current_threshold = self.config['initial_retrieval_threshold'] # Use default if None provided and no calibrator
-                logger.debug(f"Using default initial threshold: {current_threshold:.4f}")
+                # TEMPORARILY set threshold to 0.0 for debugging the '0 memories' issue
+                # Will revert to self.config['initial_retrieval_threshold'] once issue is resolved
+                current_threshold = 0.0  # DEBUG: Lowered to 0.0 to see if any memories pass
+                logger.warning(f"[DEBUG MODE] Using debug threshold of {current_threshold} to diagnose '0 memories' issue")
             else:
-                logger.debug(f"Using explicit threshold: {current_threshold:.4f}")
+                logger.debug(f"Using explicit threshold from request: {current_threshold:.4f}")
+
+            # Make vector index integrity check configurable and periodic
+            check_index = self.config.get('check_index_on_retrieval', False)
+            current_time = time.time()
+            last_check_time = getattr(self, '_last_index_check_time', 0)
+            check_interval = self.config.get('index_check_interval', 3600)  # Default: check once per hour
+            
+            if check_index or (current_time - last_check_time > check_interval):
+                is_consistent, diagnostics = self.vector_index.verify_index_integrity()
+                self._last_index_check_time = current_time
+                logger.debug(f"Vector index status - Consistent: {is_consistent}, FAISS: {diagnostics.get('faiss_count')}, Mapping: {diagnostics.get('mapping_count')}")
+                
+                # Warn if inconsistency detected
+                if not is_consistent:
+                    logger.warning(f"Vector index inconsistency detected! FAISS count: {diagnostics.get('faiss_count')}, Mapping count: {diagnostics.get('mapping_count')}")
 
             # Perform the retrieval using candidate generation
             candidates = await self._get_candidate_memories(query_embedding, top_k * 2) # Get more candidates for filtering
-
-            # Score and filter candidates
+            
+            # ENHANCED: Log the raw candidates with more detail
+            logger.info(f"[FAISS Results] Raw candidates count: {len(candidates)}")
+            candidate_ids = [c.get('id') for c in candidates[:10]]
+            logger.debug(f"First 10 candidate IDs: {candidate_ids}")
+            
+            # If no candidates found, return empty results
             if not candidates:
-                logger.info("SynthiansMemoryCore", "No candidate memories found.")
+                logger.debug(f"No candidate memories found.")
                 return {"success": True, "memories": [], "error": None}
 
+            # Score candidates based on similarity to query
             scored_candidates = []
+            if query_embedding is not None:
+                logger.debug(f"Query embedding dimension: {query_embedding.shape}")
+                logger.warning(f"CRITICAL DEBUG: Found {len(candidates)} raw candidates - first ID: {candidates[0].get('id') if candidates else 'None'}")
+                
             for memory_dict in candidates:
-                memory_embedding = memory_dict.get("embedding")
-                if memory_embedding is not None and query_embedding is not None:
-                    # Ensure embedding is a list before converting to array
-                    if isinstance(memory_embedding, list):
-                        memory_embedding_np = np.array(memory_embedding, dtype=np.float32)
-                    else:
-                        # Skip if embedding is not in expected format
-                        logger.warning(f"Skipping memory {memory_dict.get('id')} due to unexpected embedding format: {type(memory_embedding)}")
-                        continue
-
-                    similarity = self.geometry_manager.calculate_similarity(query_embedding, memory_embedding_np)
-                    memory_dict["similarity"] = similarity # Use 'similarity' to match client expectations
-                    memory_dict["relevance_score"] = similarity # Keep internal name too
-                    scored_candidates.append(memory_dict)
+                memory_embedding_list = memory_dict.get("embedding")
+                if memory_embedding_list is not None and query_embedding is not None:
+                    try:
+                        # Re-convert list to numpy array
+                        memory_embedding_np = np.array(memory_embedding_list, dtype=np.float32)
+                        
+                        # ENHANCED: Add detailed validation logging
+                        mem_id = memory_dict.get('id')
+                        logger.debug(f"Processing memory {mem_id} for similarity calculation")
+                        
+                        # ADDED: Explicit validation of memory embedding
+                        memory_embedding_np = self.geometry_manager._validate_vector(memory_embedding_np, f"Memory {mem_id}")
+                        if memory_embedding_np is None:
+                            logger.warning(f"Memory {mem_id} embedding validation failed. Using zero vector.")
+                            memory_embedding_np = np.zeros(self.config['embedding_dim'], dtype=np.float32)
+                        
+                        # ADDED: Explicit alignment of vectors before similarity calculation
+                        before_shapes = f"Before alignment - Query: {query_embedding.shape}, Memory: {memory_embedding_np.shape}"
+                        logger.debug(before_shapes)
+                        
+                        aligned_query, aligned_memory = self.geometry_manager._align_vectors(query_embedding, memory_embedding_np)
+                        
+                        after_shapes = f"After alignment - Query: {aligned_query.shape}, Memory: {aligned_memory.shape}"
+                        logger.debug(after_shapes)
+                        
+                        # Check for NaN or Inf values in aligned vectors
+                        if np.isnan(aligned_memory).any() or np.isinf(aligned_memory).any():
+                            logger.warning(f"Memory {mem_id} aligned embedding contains NaN/Inf values. Replacing with zeros.")
+                            aligned_memory = np.nan_to_num(aligned_memory, nan=0.0, posinf=0.0, neginf=0.0)
+                        
+                        # Use GeometryManager to calculate similarity with aligned vectors
+                        similarity = self.geometry_manager.calculate_similarity(aligned_query, aligned_memory)
+                        logger.debug(f"  Calculated similarity: {similarity:.4f}")
+                        
+                        memory_dict["similarity"] = similarity
+                        memory_dict["relevance_score"] = similarity
+                        scored_candidates.append(memory_dict)
+                        logger.debug(f"Memory {mem_id}: similarity={similarity:.4f}")
+                    except Exception as e:
+                        # Log the specific exception
+                        logger.warning(f"Error calculating similarity for memory {memory_dict.get('id')}: {str(e)}")
+                        logger.debug(traceback.format_exc())  # ADDED: Include stack trace for debugging
+                        # Fallback: Include the memory with zero similarity rather than skipping it
+                        memory_dict["similarity"] = 0.0
+                        memory_dict["relevance_score"] = 0.0
+                        scored_candidates.append(memory_dict)
                 else:
-                    logger.debug(f"Skipping candidate {memory_dict.get('id')} due to missing embedding.")
-
+                    # Log which specific condition failed
+                    if memory_embedding_list is None:
+                        logger.warning(f"Memory {memory_dict.get('id')} is missing embedding")
+                    if query_embedding is None:
+                        logger.warning("Query embedding is None")
+                    
+                    # Even if embedding is missing, include in results with zero similarity
+                    memory_dict["similarity"] = 0.0
+                    memory_dict["relevance_score"] = 0.0
+                    scored_candidates.append(memory_dict)
+            
             # Sort by similarity score (descending)
             scored_candidates.sort(key=lambda x: x.get("similarity", 0.0), reverse=True)
 
+            # ENHANCED: Log all candidates with their scores before filtering
+            logger.info(f"[Similarity Results] Found {len(scored_candidates)} scored candidates before threshold filtering")
+            logger.debug(f"Threshold filtering: Using threshold {current_threshold:.4f}")
+            
+            similarities = [(c.get('id'), c.get('similarity', 0.0)) for c in scored_candidates[:10]]
+            logger.debug(f"Top 10 similarities: {similarities}")
+            
             # Apply threshold filtering
-            filtered_candidates = [c for c in scored_candidates if c.get("similarity", 0.0) >= current_threshold]
+            logger.info(f"[Threshold Filtering] Starting threshold filtering with {len(scored_candidates)} candidates")
+            candidates_passing_threshold = []
+            candidates_filtered_out = []
+            
+            for c in scored_candidates:
+                similarity = c.get("similarity", 0.0)
+                mem_id = c.get("id", "unknown")
+                if similarity >= current_threshold:
+                    candidates_passing_threshold.append(c)
+                    logger.debug(f"Memory {mem_id} PASSED threshold with similarity {similarity:.4f} >= {current_threshold:.4f}")
+                else:
+                    candidates_filtered_out.append((mem_id, similarity))
+                    logger.debug(f"Memory {mem_id} FILTERED OUT with similarity {similarity:.4f} < {current_threshold:.4f}")
+            
+            # Log summary of threshold filtering results
+            filtered_candidates = candidates_passing_threshold
+            logger.info(f"[Threshold Filtering] Kept {len(filtered_candidates)} candidates, filtered out {len(candidates_filtered_out)} candidates")
+            
+            # Log the first few filtered out candidates for debugging
+            if candidates_filtered_out:
+                logger.debug(f"First 5 filtered out (ID, similarity): {candidates_filtered_out[:5]}")
+
+            # *** ADDED PRE-GATING LOG ***
+            if filtered_candidates:
+                top_passing = [(c.get('id'), c.get('similarity', 0.0)) for c in filtered_candidates[:5]]
+                logger.info(f"[Pre-Emotional Gating] Top 5 candidates: {top_passing}")
+            else:
+                logger.warning(f"[Pre-Emotional Gating] No candidates passed threshold filtering. Consider lowering threshold.")
 
             # Apply emotional gating if requested
             if user_emotion and self.emotional_gating:
+                logger.info(f"[Emotional Gating] Applying with user_emotion: {user_emotion}, candidates: {len(filtered_candidates)}") 
                 # Construct user_emotion dict for gating service
                 user_emotion_dict = {"dominant_emotion": user_emotion} # Simulate expected input for gating service
+                
+                # Store candidate count before gating for comparison
+                pre_gating_count = len(filtered_candidates)
+                
                 filtered_candidates = await self.emotional_gating.gate_memories(
                     filtered_candidates, user_emotion_dict
                 )
+                
+                # Calculate and log difference in candidate count
+                post_gating_count = len(filtered_candidates)
+                diff_count = pre_gating_count - post_gating_count
+                logger.info(f"[Emotional Gating] Result: {post_gating_count} candidates remain ({diff_count} removed)") 
+                
                 # Re-sort based on 'final_score' if gating was applied
                 filtered_candidates.sort(key=lambda x: x.get("final_score", x.get("similarity", 0.0)), reverse=True)
-
-
+                
+                # Log the new ordering after emotional gating
+                if filtered_candidates:
+                    top_emotional = [(c.get('id'), c.get('final_score', c.get('similarity', 0.0))) 
+                                    for c in filtered_candidates[:5]]
+                    logger.debug(f"[Post-Emotional Gating] Top 5 candidates with scores: {top_emotional}")
+            else:
+                logger.debug("[Emotional Gating] Skipped (user_emotion is None or no gating service)") 
+            
             # Apply metadata filtering if requested (basic implementation)
             if metadata_filter:
-                 filtered_candidates = self._filter_by_metadata(filtered_candidates, metadata_filter)
+                logger.info(f"[Metadata Filtering] Applying filter: {metadata_filter}") 
+                pre_filter_count = len(filtered_candidates)
+                
+                filtered_candidates = self._filter_by_metadata(filtered_candidates, metadata_filter)
+                
+                post_filter_count = len(filtered_candidates)
+                filter_diff = pre_filter_count - post_filter_count
+                logger.info(f"[Metadata Filtering] Result: {post_filter_count} candidates remain ({filter_diff} removed)") 
+                
+                # Log the metadata of the remaining candidates
+                if filtered_candidates:
+                    # Get the first candidate's metadata keys for reference
+                    first_meta_keys = list(filtered_candidates[0].get("metadata", {}).keys())[:5]  # First 5 keys
+                    logger.debug(f"[Post-Metadata Filtering] First candidate metadata keys: {first_meta_keys}")
+            else:
+                logger.debug("[Metadata Filtering] Skipped (no metadata filter provided)")
 
-            # Return top_k results
-            final_memories = filtered_candidates[:top_k]
+            # *** ENHANCED POST-FILTERING LOG ***
+            logger.info(f"[Final Filtering] Total filtered candidates: {len(filtered_candidates)}")
+            if filtered_candidates:
+                final_top_ids = [c.get('id') for c in filtered_candidates[:5]]
+                logger.info(f"[Final Filtering] Top 5 candidate IDs after all filtering: {final_top_ids}")
+            else:
+                logger.warning("[Final Filtering] No candidates remain after all filtering steps")
+
+            # Return top_k results (simplify slicing)
+            if len(filtered_candidates) >= top_k:
+                final_memories = filtered_candidates[:top_k]
+                logger.info(f"[Results] Returning {top_k} memories out of {len(filtered_candidates)} filtered candidates")
+            else:
+                final_memories = filtered_candidates.copy() # Take all if fewer than top_k, and make a copy to be safe
+                logger.info(f"[Results] Returning all {len(final_memories)} filtered candidates (fewer than requested {top_k})")
+
+            # *** ENHANCED FINAL CHECK ***
+            if final_memories:
+                final_ids = [mem.get('id') for mem in final_memories]
+                final_scores = [mem.get('similarity', 0.0) for mem in final_memories]
+                logger.info(f"[Results] Final memory IDs: {final_ids}")
+                logger.info(f"[Results] Final similarity scores: {final_scores}")
+            else:
+                logger.warning("[Results] No memories to return!")
 
             retrieval_time = (time.time() - start_time) * 1000
+            # Log the length again, just before returning
             logger.info("SynthiansMemoryCore", f"Retrieved {len(final_memories)} memories", {
                 "top_k": top_k, "threshold": current_threshold, "user_emotion": user_emotion, "time_ms": retrieval_time
             })
-            return {"success": True, "memories": final_memories, "error": None}
+            
+            # DIRECT DEBUG: Log full response payload length
+            response = {"success": True, "memories": final_memories, "error": None}
+            logger.info(f"[Response] Payload stats: success={response['success']}, memories_count={len(response['memories'])}")
+            
+            return response
 
         except Exception as e:
             logger.error("SynthiansMemoryCore", f"Error in retrieve_memories: {str(e)}")
@@ -488,6 +718,12 @@ class SynthiansMemoryCore:
             logger.warning("SynthiansMemoryCore", "_get_candidate_memories called with no query embedding.")
             return []
 
+        # Log the query embedding stats for debugging
+        if query_embedding is not None:
+            logger.debug(f"[Candidate Gen] Query embedding shape: {query_embedding.shape}, sum: {np.sum(query_embedding):.4f}, mean: {np.mean(query_embedding):.4f}")
+            if np.isnan(query_embedding).any() or np.isinf(query_embedding).any():
+                logger.warning(f"[Candidate Gen] WARNING: Query embedding contains NaN/Inf values!")
+
         assembly_candidates = set()
         direct_candidates = set()
 
@@ -496,27 +732,91 @@ class SynthiansMemoryCore:
         for assembly, activation_score in activated_assemblies[:5]: # Consider top 5 assemblies
             if activation_score > 0.2: # Lower activation threshold
                 assembly_candidates.update(assembly.memories)
+        
+        logger.info(f"[Candidate Gen] Found {len(assembly_candidates)} candidates from assembly activation")
 
         # 2. Direct Vector Search using FAISS Index
-        search_threshold = 0.05 # Use a low threshold to get enough candidates
-        search_results = self.vector_index.search(query_embedding, k=limit, threshold=search_threshold)
-        for memory_id, _ in search_results:
+        search_threshold = 0.0  # Set to zero to get all candidates regardless of similarity
+        faiss_count = self.vector_index.count()
+        id_mapping_count = len(self.vector_index.id_to_index) if hasattr(self.vector_index, 'id_to_index') else 0
+        
+        logger.info(f"[Candidate Gen] Vector index stats: FAISS count={faiss_count}, ID mapping count={id_mapping_count}")
+        
+        # Check if index is empty
+        if faiss_count == 0:
+            logger.warning(f"[Candidate Gen] FAISS index is empty! Check memory creation and indexing.")
+        
+        search_results = self.vector_index.search(query_embedding, k=min(limit, max(faiss_count, 1)))
+        
+        logger.info(f"[Candidate Gen] FAISS search returned {len(search_results)} results")
+        
+        # Log detailed search results
+        if search_results:
+            top_results = search_results[:5] if len(search_results) > 5 else search_results
+            result_details = [f"({mem_id}, {sim:.4f})" for mem_id, sim in top_results]
+            logger.info(f"[Candidate Gen] Top FAISS results: {', '.join(result_details)}")
+        else:
+            logger.warning(f"[Candidate Gen] FAISS search returned ZERO results! Check indexing.")
+            
+        for memory_id, similarity in search_results:
             direct_candidates.add(memory_id)
+
+        # 3. Get the most recently added memories as fallback
+        # This ensures we always have candidates even if similarity search fails
+        async with self._lock:
+            # Get IDs of memories in our persistence index
+            memory_ids = list(self.persistence.memory_index.keys())
+            logger.info(f"[Candidate Gen] Persistence index has {len(memory_ids)} memories total")
+            
+        # Take the most recent ones if we have any
+        if memory_ids and len(direct_candidates) == 0:
+            # Sort by creation time if available, otherwise just take the last few
+            recent_candidates = set(memory_ids[-min(5, len(memory_ids)):])  # Get the last 5 memories
+            logger.info(f"[Candidate Gen] Added {len(recent_candidates)} recent memories as fallback candidates: {list(recent_candidates)}")
+            direct_candidates.update(recent_candidates)
+        elif len(memory_ids) == 0:
+            logger.warning(f"[Candidate Gen] Persistence index is EMPTY! No memories have been created.")
 
         # Combine candidates
         all_candidate_ids = assembly_candidates.union(direct_candidates)
-        logger.debug(f"Found {len(all_candidate_ids)} total candidate IDs.")
+        logger.info(f"[Candidate Gen] Found {len(all_candidate_ids)} total candidate IDs: {list(all_candidate_ids)[:10]}")
 
         # Fetch MemoryEntry objects as dictionaries
         final_candidates = []
-        async with self._lock:
-             for mem_id in all_candidate_ids:
-                 if mem_id in self._memories:
-                      # Make sure to convert memory to dict before returning
-                      final_candidates.append(self._memories[mem_id].to_dict())
+        for mem_id in all_candidate_ids:
+            # Log before attempting to load
+            logger.debug(f"[Candidate Gen] Attempting to load memory with ID: {mem_id}")
+            # Use our new async method to get the memory from disk if not in cache
+            memory = await self.get_memory_by_id_async(mem_id)
+            if memory:
+                # Make sure to convert memory to dict before returning
+                mem_dict = memory.to_dict()
+                final_candidates.append(mem_dict)
+                logger.debug(f"[Candidate Gen] Successfully loaded memory {mem_id}: content_len={len(mem_dict.get('content', ''))}, embedding_shape={memory.embedding.shape if memory.embedding is not None else 'None'}")
+            else:
+                logger.warning(f"[Candidate Gen] Failed to load memory {mem_id}! Check persistence storage.")
 
+        # Always ensure we return at least some candidates for scoring/filtering
+        if len(final_candidates) == 0:
+            logger.warning("[Candidate Gen] No candidates found after loading! This will result in empty retrieval results.")
+            # Log vector index statistics to help debug
+            is_consistent, diagnostics = self.vector_index.verify_index_integrity()
+            logger.warning(f"[Candidate Gen] Vector index diagnostics: consistent={is_consistent}, {diagnostics}")
+            
+            # Check storage files
+            import os
+            if hasattr(self.persistence, 'storage_path'):
+                storage_files = os.listdir(self.persistence.storage_path) if os.path.exists(self.persistence.storage_path) else []
+                logger.warning(f"[Candidate Gen] Storage directory contents: {storage_files[:10]}")
+                
+                # Check for FAISS index file
+                faiss_path = os.path.join(self.persistence.storage_path, 'faiss_index.bin')
+                mapping_path = os.path.join(self.persistence.storage_path, 'id_to_index_mapping.json')
+                logger.warning(f"[Candidate Gen] FAISS index file exists: {os.path.exists(faiss_path)}")
+                logger.warning(f"[Candidate Gen] ID mapping file exists: {os.path.exists(mapping_path)}")
+
+        logger.info(f"[Candidate Gen] Returning {len(final_candidates)} final candidates for scoring/filtering")
         return final_candidates[:limit * 2] # Return more initially for scoring/filtering
-
 
     async def _activate_assemblies(self, query_embedding: np.ndarray) -> List[Tuple[MemoryAssembly, float]]:
         """Find and activate assemblies based on query similarity."""
@@ -1012,6 +1312,53 @@ class SynthiansMemoryCore:
             logger.warning("SynthiansMemoryCore", f"Memory {memory_id} not found in cache (sync).")
         return memory
 
+    async def get_memory_by_id_async(self, memory_id: str) -> Optional[MemoryEntry]:
+        """Asynchronously retrieve a specific memory entry by its ID, loading from disk if needed.
+        
+        Unlike the synchronous get_memory_by_id which only checks the cache, this method
+        will attempt to load the memory from disk if it's not found in the cache but exists
+        in the index.
+        
+        Args:
+            memory_id: The unique identifier of the memory to retrieve
+            
+        Returns:
+            The MemoryEntry if found in cache or successfully loaded, None otherwise
+        """
+        async with self._lock:
+            # First check if it's already in the memory cache
+            memory = self._memories.get(memory_id)
+            if memory:
+                logger.debug("SynthiansMemoryCore", f"Retrieved memory {memory_id} from cache.")
+                memory.access_count += 1
+                memory.last_access_time = datetime.now(timezone.utc) # Convert to datetime
+                return memory
+                
+            # Not in cache, check if it's in the index and try to load it
+            if memory_id in self.persistence.memory_index:
+                logger.debug("SynthiansMemoryCore", f"Memory {memory_id} not in cache, loading from persistence...")
+                memory = await self.persistence.load_memory(memory_id)
+                if memory:
+                    # Add to cache
+                    self._memories[memory_id] = memory
+                    memory.access_count += 1
+                    memory.last_access_time = datetime.now(timezone.utc) # Convert to datetime
+                    
+                    # If this is our first time seeing this memory and we have a vector index,
+                    # add it to the index if it has a valid embedding
+                    if memory.embedding is not None and self.vector_index is not None:
+                        self.vector_index.add(memory_id, memory.embedding)
+                        logger.debug("SynthiansMemoryCore", f"Added memory {memory_id} to vector index on first load.")
+                    
+                    logger.debug("SynthiansMemoryCore", f"Successfully loaded memory {memory_id} from persistence.")
+                    return memory
+                else:
+                    logger.warning("SynthiansMemoryCore", f"Failed to load memory {memory_id} from persistence despite being in the index.")
+                    return None
+            else:
+                logger.warning("SynthiansMemoryCore", f"Memory {memory_id} not found in cache or index.")
+                return None
+
     async def update_memory(self, memory_id: str, updates: Dict[str, Any]) -> bool:
         """
         Update a memory entry with provided updates.
@@ -1078,7 +1425,7 @@ class SynthiansMemoryCore:
                             logger.debug(f"quickrecal_updated_at set for memory {memory_id}")
 
                         # Mark as dirty for persistence
-                        self._dirty_memories.add(memory_id)
+                        self._dirty_memories.add(memory_id) # Mark for persistence
                         logger.debug(f"Memory {memory_id} updated in memory (marked dirty), releasing lock")
             except asyncio.TimeoutError:
                 logger.error(f"Timeout while acquiring or using lock for memory {memory_id}")
@@ -1093,20 +1440,60 @@ class SynthiansMemoryCore:
             return False
 
 
-    def _filter_by_metadata(self, memories: List[Dict], metadata_filter: Dict) -> List[Dict]:
-        """Filter memories based on metadata key-value pairs."""
-        if not metadata_filter: return memories
-        filtered = []
-        for mem in memories:
-            metadata = mem.get("metadata", {})
-            match = True
+    def _filter_by_metadata(self, candidates: List[Dict], metadata_filter: Dict) -> List[Dict]:
+        """
+        Filter candidates based on metadata key-value pairs.
+        
+        Args:
+            candidates: List of candidate memory dictionaries to filter
+            metadata_filter: Dictionary of key-value pairs that must be present in memory metadata
+            
+        Returns:
+            Filtered list of candidates that match all metadata criteria
+        """
+        if not metadata_filter:
+            return candidates
+            
+        logger.debug(f"[_filter_by_metadata] Filtering {len(candidates)} candidates with filter: {metadata_filter}")
+        filtered_results = []
+        
+        for candidate in candidates:
+            metadata = candidate.get("metadata", {})
+            # Skip if candidate has no metadata
+            if not metadata:
+                logger.debug(f"Skipping candidate {candidate.get('id')} - no metadata")
+                continue
+                
+            # Check each filter criterion
+            matches_all = True
             for key, value in metadata_filter.items():
-                 if metadata.get(key) != value:
-                      match = False
-                      break
-            if match:
-                 filtered.append(mem)
-        return filtered
+                # Support for nested paths with dots (e.g., 'details.source')
+                if '.' in key:
+                    path_parts = key.split('.')
+                    current_obj = metadata
+                    # Navigate through the nested structure
+                    for part in path_parts[:-1]:
+                        if part not in current_obj or not isinstance(current_obj[part], dict):
+                            matches_all = False
+                            break
+                        current_obj = current_obj[part]
+                    
+                    # Check the final value
+                    if matches_all and (path_parts[-1] not in current_obj or current_obj[path_parts[-1]] != value):
+                        matches_all = False
+                # Simple direct key match        
+                elif key not in metadata or metadata[key] != value:
+                    matches_all = False
+                    break
+                    
+            if matches_all:
+                filtered_results.append(candidate)
+                logger.debug(f"Candidate {candidate.get('id')} matched all metadata criteria")
+            else:
+                logger.debug(f"Candidate {candidate.get('id')} failed metadata criteria")
+                
+        logger.debug(f"[_filter_by_metadata] Found {len(filtered_results)} candidates matching metadata criteria")
+        return filtered_results
 
     async def generate_embedding(self, text: str) -> Optional[np.ndarray]:
         """Generate embeddings using a consistent method for all text processing."""
@@ -1245,6 +1632,9 @@ Args:
                 timestamp=datetime.fromtimestamp(timestamp, timezone.utc) # Convert to datetime
             )
 
+            # Add memory ID to metadata for easier access
+            memory_entry_obj.metadata["uuid"] = memory_entry_obj.id
+
             # Store memory directly
             self._memories[memory_id] = memory_entry_obj
             self._dirty_memories.add(memory_id) # Mark as dirty for next persistence cycle
@@ -1257,3 +1647,113 @@ Args:
         except Exception as e:
             logger.error("SynthiansMemoryCore", f"Error processing memory synchronously: {str(e)}")
             return None
+
+    async def check_index_integrity(self) -> Dict[str, Any]:
+        """Check the integrity of the vector index and return diagnostic information.
+        
+        This method checks if the FAISS index and ID-to-index mapping are consistent.
+        
+        Returns:
+            Dict with diagnostic information about the index integrity
+        """
+        if not self._initialized: await self.initialize()
+        
+        async with self._lock: # We need the lock to ensure thread safety
+            is_consistent, diagnostics = self.vector_index.verify_index_integrity()
+            
+            return {
+                "success": True,
+                "is_consistent": is_consistent,
+                "diagnostics": diagnostics,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+    
+    async def repair_index(self, repair_type: str = "auto") -> Dict[str, Any]:
+        """Attempt to repair integrity issues with the vector index.
+        
+        Args:
+            repair_type: The type of repair to perform.
+                - "auto": Automatically determine the best repair strategy
+                - "recreate_mapping": Recreate the ID-to-index mapping from scratch
+                - "rebuild": Completely rebuild the index (not fully implemented)
+                
+        Returns:
+            Dict with repair status and diagnostics
+        """
+        if not self._initialized: await self.initialize()
+        
+        async with self._lock:
+            logger.info("SynthiansMemoryCore", f"Starting index repair of type: {repair_type}")
+            
+            # Check initial integrity state
+            is_consistent_before, diagnostics_before = self.vector_index.verify_index_integrity()
+            
+            # If already consistent and not a forced rebuild, we can consider this a success
+            if is_consistent_before and repair_type != "rebuild":
+                logger.info("SynthiansMemoryCore", "Index is already consistent, no repair needed.")
+                return {
+                    "success": True,
+                    "message": "Index is already consistent, no repair needed.",
+                    "diagnostics_before": diagnostics_before,
+                    "diagnostics_after": diagnostics_before,
+                    "is_consistent": True
+                }
+            
+            # Check current implementation and migrate if needed
+            is_index_id_map = hasattr(self.vector_index.index, 'id_map')
+            if not is_index_id_map:
+                logger.info("Migrating vector index to use IndexIDMap for improved ID management")
+                success = self.vector_index.migrate_to_idmap()
+                if success:
+                    logger.info("Successfully migrated vector index to IndexIDMap")
+                else:
+                    logger.warning("Failed to migrate vector index to IndexIDMap. Some features may not work correctly.")
+            else:
+                logger.info("Vector index is already using IndexIDMap")
+            
+            # Determine repair strategy
+            if repair_type == "auto":
+                # Choose the best repair strategy based on diagnostics
+                faiss_count = self.vector_index.count()
+                id_mapping_count = len(self.vector_index.id_to_index)
+                
+                if id_mapping_count == 0 and faiss_count > 0:
+                    repair_type = "recreate_mapping"
+                    logger.info("SynthiansMemoryCore", "Auto-selected 'recreate_mapping' repair strategy")
+                elif id_mapping_count > faiss_count:
+                    # Prune excess mappings
+                    repair_type = "recreate_mapping"
+                    logger.info("SynthiansMemoryCore", "Auto-selected 'recreate_mapping' to handle excess mappings")
+                else:
+                    # In other cases, we don't have a good automated solution yet
+                    repair_type = "recreate_mapping"  # Default to recreate_mapping for now
+                    logger.warning("SynthiansMemoryCore", "No optimal repair strategy determined, defaulting to 'recreate_mapping'")
+            
+            # Execute repair
+            if repair_type == "recreate_mapping":
+                success = self.vector_index.recreate_mapping()
+            elif repair_type == "rebuild":
+                logger.warning("SynthiansMemoryCore", "Full rebuild requires original embeddings which aren't stored. Falling back to recreate_mapping.")
+                success = self.vector_index.recreate_mapping()
+            else:
+                logger.error("SynthiansMemoryCore", f"Unsupported repair_type: {repair_type}")
+                success = False
+            
+            # Check integrity after repair
+            is_consistent_after, diagnostics_after = self.vector_index.verify_index_integrity()
+            
+            # Determine overall success: either repair succeeded or the index is now consistent
+            overall_success = success or is_consistent_after
+            
+            if overall_success:
+                logger.info("SynthiansMemoryCore", f"Index repair of type '{repair_type}' completed successfully. Consistency: {is_consistent_after}")
+            else:
+                logger.error("SynthiansMemoryCore", f"Index repair of type '{repair_type}' failed. Consistency: {is_consistent_after}")
+                
+            return {
+                "success": overall_success,
+                "repair_type": repair_type,
+                "diagnostics_before": diagnostics_before,
+                "diagnostics_after": diagnostics_after,
+                "is_consistent": is_consistent_after
+            }

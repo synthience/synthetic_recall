@@ -1,4 +1,21 @@
-# Synthians Architecture Changes
+# Synthians Architecture Changes & Evolution
+
+*This document tracks significant architectural shifts and decisions during the development of the Synthians Cognitive Architecture, focusing on the memory system.*
+
+---
+
+## 2025-03-30: Documentation Refresh & Consistency Pass
+
+*   **Context:** Following significant architectural stabilization and bug fixing, a pass was made to update and align all core documentation (`README.md`, `ARCHITECTURE.md`, `API_REFERENCE.md`, `client_usage.md`, placeholder component docs) with the current codebase.
+*   **Key Changes:**
+    1.  **Updated API Docs:** `API_REFERENCE.md` and `client_usage.md` were comprehensively updated to reflect the actual FastAPI endpoints, Pydantic models, asynchronous client methods (`SynthiansClient`), and recent features (e.g., `metadata_filter`, `update_quickrecal_score` integration endpoint).
+    2.  **Architecture Doc Alignment:** `ARCHITECTURE.md` was updated to accurately depict the Bi-Hemispheric flow, component responsibilities (Memory Core, Neural Memory, CCE), and the refined cognitive cycle involving surprise feedback.
+    3.  **Component Placeholders:** Ensured placeholder docs (`core/`, `trainer/`, `orchestrator/`, `testing/`) reflect the latest component names and intended functionality (e.g., `UnifiedQuickRecallCalculator`, `IndexIDMap`, `SurpriseDetector`).
+    4.  **READMEs Updated:** Top-level `README.md` and section `README.md` files were updated for clarity and navigation.
+*   **Impact:** Core documentation now provides a much more accurate and consistent representation of the system's current state, improving developer understanding and maintainability.
+
+---
+
 ## 2025-03-27T23:05:09Z - Lucidia Agent
 
 Okay, let's break down the implications of successfully integrating the Titans Neural Memory module, as implemented according to the paper, into your `synthians_trainer_server`. This moves beyond simple prediction to a more dynamic form of memory.

@@ -512,7 +512,8 @@ async def retrieve_memories(request: RetrieveMemoriesRequest):
     """Retrieve relevant memories."""
     try:
         # Add debug logging
-        logger.info("retrieve_memories", f"Received request: query='{request.query}', top_k={request.top_k}")
+        logger.info("retrieve_memories", f"Received request: query='{request.query}', top_k={request.top_k}, threshold={request.threshold}")
+        logger.debug(f"API retrieve_memories: Received request with threshold={request.threshold} (type: {type(request.threshold)})") # Log received value with type
         
         # Convert user_emotion from dict to string if needed
         user_emotion_str = None
@@ -522,20 +523,32 @@ async def retrieve_memories(request: RetrieveMemoriesRequest):
             elif isinstance(request.user_emotion, str):
                 user_emotion_str = request.user_emotion
         
-        # Retrieve memories with updated parameters
-        # Note: We no longer pass query_embedding as it's handled internally
+        # Retrieve memories with updated parameters - fully keyword-based to avoid positional argument confusion
         retrieve_result = await app.state.memory_core.retrieve_memories(
             query=request.query,
             top_k=request.top_k,
             threshold=request.threshold,  # Use threshold from request if provided
-            user_emotion=user_emotion_str
+            user_emotion=user_emotion_str,
+            metadata_filter=request.metadata_filter if hasattr(request, 'metadata_filter') else None,
+            search_strategy=request.search_strategy if hasattr(request, 'search_strategy') else None
         )
         
-        return RetrieveMemoriesResponse(
+        # Add detailed response debugging
+        memories = retrieve_result.get('memories', [])
+        logger.debug(f"API endpoint: Retrieved {len(memories)} memories from core")
+        if memories:
+            logger.debug(f"API endpoint: First memory ID = {memories[0].get('id')}")
+        
+        response = RetrieveMemoriesResponse(
             success=retrieve_result.get('success', False),
-            memories=retrieve_result.get('memories', []),
+            memories=memories,
             error=retrieve_result.get('error')
         )
+        
+        # Final API response check
+        logger.debug(f"API endpoint: Final response will contain {len(response.memories)} memories")
+        
+        return response
     except Exception as e:
         logger.error("retrieve_memories", f"Error: {str(e)}")
         import traceback
@@ -865,7 +878,7 @@ async def process_transcription(request: TranscriptionRequest, background_tasks:
 async def get_memory(memory_id: str = Path(..., title="Memory ID", description="The unique ID of the memory to retrieve")):
     """Retrieve a specific memory entry by its ID."""
     try:
-        memory = await app.state.memory_core.get_memory_by_id(memory_id)
+        memory = await app.state.memory_core.get_memory_by_id_async(memory_id)
         
         if memory is None:
             logger.warning("API", f"Memory not found: {memory_id}")

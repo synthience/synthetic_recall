@@ -185,7 +185,7 @@ class TrainerIntegrationManager:
         delta = request.delta
         
         # Retrieve the memory
-        memory = await self.memory_core.get_memory_by_id(memory_id)
+        memory = await self.memory_core.get_memory_by_id_async(memory_id)
         if not memory:
             return {"status": "error", "message": f"Memory with ID {memory_id} not found"}
         
