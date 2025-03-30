@@ -48,7 +48,8 @@ class SynthiansClient:
     async def retrieve_memories(self, query: str, top_k: int = 5, 
                                user_emotion: Optional[Dict[str, Any]] = None,
                                cognitive_load: float = 0.5,
-                               threshold: Optional[float] = None) -> Dict[str, Any]:
+                               threshold: Optional[float] = None,
+                               metadata_filter: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Retrieve relevant memories."""
         payload = {
             "query": query,
@@ -58,6 +59,8 @@ class SynthiansClient:
         }
         if threshold is not None:
             payload["threshold"] = threshold
+        if metadata_filter is not None:
+            payload["metadata_filter"] = metadata_filter
         async with self.session.post(
             f"{self.base_url}/retrieve_memories", json=payload
         ) as response:
@@ -109,6 +112,28 @@ class SynthiansClient:
         """Detect potential contradictions in memories."""
         async with self.session.post(
             f"{self.base_url}/detect_contradictions?threshold={threshold}"
+        ) as response:
+            return await response.json()
+    
+    async def get_memory_by_id(self, memory_id: str) -> Dict[str, Any]:
+        """Retrieve a specific memory by its ID."""
+        async with self.session.get(
+            f"{self.base_url}/api/memories/{memory_id}"
+        ) as response:
+            return await response.json()
+    
+    async def process_transcription(self, text: str, audio_metadata: Dict[str, Any] = None, 
+                                  importance: float = None) -> Dict[str, Any]:
+        """Process a transcription with audio features."""
+        payload = {
+            "text": text,
+            "audio_metadata": audio_metadata or {},
+        }
+        if importance is not None:
+            payload["importance"] = importance
+            
+        async with self.session.post(
+            f"{self.base_url}/process_transcription", json=payload
         ) as response:
             return await response.json()
 
