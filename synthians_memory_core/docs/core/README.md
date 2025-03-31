@@ -1,5 +1,9 @@
 # Memory Core Components Documentation
 
+<div align="center">
+  <img src="../assets/lucidia_titan_tablet.png" alt="Lucidia Titan Tablet" width="350">
+</div>
+
 This directory provides detailed documentation on the internal components of the `synthians_memory_core` package.
 
 ## Contents
