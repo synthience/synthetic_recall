@@ -147,13 +147,14 @@ class MemoryVectorIndex:
         """
         try:
             # Validate the embedding
-            if not self._validate_embedding(embedding):
+            embedding_validated = self._validate_embedding(embedding)
+            if embedding_validated is None:
                 logger.warning(f"Invalid embedding for memory {memory_id}, skipping")
                 return False
                 
             # Ensure embedding has correct shape
-            if len(embedding.shape) == 1:
-                embedding = embedding.reshape(1, -1)
+            if len(embedding_validated.shape) == 1:
+                embedding_validated = embedding_validated.reshape(1, -1)
                 
             # Generate a numeric ID for this memory if needed
             numeric_id = self._get_numeric_id(memory_id)
@@ -162,7 +163,7 @@ class MemoryVectorIndex:
             if hasattr(self.index, 'add_with_ids'):
                 # If using IndexIDMap
                 try:
-                    self.index.add_with_ids(embedding, np.array([numeric_id]))
+                    self.index.add_with_ids(embedding_validated, np.array([numeric_id]))
                     self.id_to_index[memory_id] = numeric_id
                     # Backup id mapping after each add for better recovery
                     self._backup_id_mapping()
@@ -176,7 +177,7 @@ class MemoryVectorIndex:
             if not hasattr(self.index, 'add_with_ids'):
                 # Standard add approach
                 index_before = self.count()
-                self.index.add(embedding)
+                self.index.add(embedding_validated)
                 if self.count() > index_before:
                     self.id_to_index[memory_id] = index_before  # First new index
                     # Backup id mapping after each add for better recovery
@@ -344,6 +345,11 @@ class MemoryVectorIndex:
             np.ndarray: A validated embedding vector, or None if invalid
         """
         try:
+            # Handle case where embedding is None
+            if embedding is None:
+                logger.error("Embedding is None, cannot validate")
+                return None
+                
             # Handle case where embedding is a dict (common error)
             if isinstance(embedding, dict):
                 logger.error("Embedding is a dict, not a vector. You may have passed a structured payload instead.")
@@ -351,7 +357,16 @@ class MemoryVectorIndex:
                 
             # Convert to numpy array if not already
             if not isinstance(embedding, np.ndarray):
-                embedding = np.array(embedding, dtype=np.float32)
+                try:
+                    embedding = np.array(embedding, dtype=np.float32)
+                except Exception as e:
+                    logger.error(f"Failed to convert embedding to numpy array: {e}")
+                    return None
+            
+            # Check if embedding is empty
+            if embedding.size == 0:
+                logger.error("Embedding is empty (zero elements)")
+                return None
             
             # Ensure embedding is 1D
             if len(embedding.shape) > 1:
@@ -363,7 +378,10 @@ class MemoryVectorIndex:
                     return None
             
             # Check for NaN or Inf values
-            if np.isnan(embedding).any() or np.isinf(embedding).any():
+            has_nan = np.isnan(embedding).any() if embedding.size > 0 else False
+            has_inf = np.isinf(embedding).any() if embedding.size > 0 else False
+            
+            if has_nan or has_inf:
                 logger.warning("Embedding contains NaN or Inf values. Replacing with zeros.")
                 embedding = np.where(np.isnan(embedding) | np.isinf(embedding), 0.0, embedding)
             
@@ -548,8 +566,8 @@ class MemoryVectorIndex:
                         self.id_to_index = {k: int(v) if isinstance(v, str) and v.isdigit() else v 
                                            for k, v in mapping_data.items()}
                         logger.info(f"Successfully loaded {len(self.id_to_index)} memory mappings from {mapping_path}")
-                except Exception as map_e:
-                    logger.warning(f"Error loading mapping file {mapping_path}: {map_e}. May need to rebuild mapping.")
+                except Exception as e:
+                    logger.error(f"Error loading mapping file {mapping_path}: {e}")
             else:
                 logger.warning(f"Mapping file not found at {mapping_path}. Will rely on IndexIDMap internal mapping if available.")
             
@@ -751,7 +769,7 @@ class MemoryVectorIndex:
                     logger.error(traceback.format_exc())
             
             # If no vectors extracted yet and we have ID mappings, try the standard approaches
-            if not vectors and len(old_id_to_index) > 0:
+            if len(vectors) == 0 and len(old_id_to_index) > 0:
                 # Approach 1: If the old index allows reconstruction
                 if hasattr(old_index, 'reconstruct'):
                     logger.info("Using vector reconstruction from original index")
@@ -796,7 +814,7 @@ class MemoryVectorIndex:
                     return False
                     
             # Check if we successfully extracted vectors
-            if not vectors:
+            if len(vectors) == 0:
                 logger.error("Failed to extract any vectors for migration")
                 return False
                 
@@ -806,7 +824,7 @@ class MemoryVectorIndex:
             self._initialize_index(force_cpu=True, use_id_map=True)
             
             # Add all vectors with their IDs
-            if vectors and ids:
+            if len(vectors) > 0 and len(ids) > 0:
                 # Convert to numpy arrays
                 vectors_array = np.vstack(vectors).astype(np.float32)
                 ids_array = np.array(ids, dtype=np.int64)
