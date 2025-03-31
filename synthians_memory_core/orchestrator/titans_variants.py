@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 from typing import Dict, Any, Optional, List, Tuple, Union, TYPE_CHECKING
+import datetime
 
 # Set recursion limit higher to handle potential deep call stacks
 sys.setrecursionlimit(5000)
@@ -27,21 +28,26 @@ _tf = None
 _tf_lock = threading.Lock()
 
 def _get_tf():
-    """Lazy-load TensorFlow only when needed.
+    """Get TensorFlow module with error handling.
     
     Returns:
-        The tensorflow module if successfully loaded, None otherwise.
+        TensorFlow module or None if not available
     """
-    global tf
-    if tf is None:
+    try:
+        # Try importing with increased recursion limit to avoid the circular import issue
+        import sys
+        default_limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(10000)  # Temporarily increase the recursion limit
+        
         try:
             import tensorflow as tensorflow_module
-            tf = tensorflow_module
-            logger.debug(f"Successfully imported TensorFlow version {tf.__version__}")
-        except ImportError as e:
-            logger.error(f"Error importing TensorFlow: {e}")
-            return None
-    return tf
+            return tensorflow_module
+        finally:
+            # Always restore the original recursion limit
+            sys.setrecursionlimit(default_limit)
+    except Exception as e:
+        logger.error(f"Error importing TensorFlow: {e}")
+        return None
 
 def _get_numpy():
     """Lazy-load NumPy only when needed.
@@ -215,8 +221,53 @@ class TitansVariantBase:
         if self.sequence_context is None:
             logger.warning(f"Cannot store context: sequence_context is not set for {self.name} variant")
             return
+        
+        # Convert inputs to NumPy arrays before adding to context
+        try:
+            np = _get_numpy()
+            if np is None:
+                logger.warning(f"{self.name}: NumPy not available, skipping context storage")
+                return  # Exit if numpy cannot be loaded
+
+            # Convert ALL inputs to numpy arrays robustly *before* adding
+            # Use empty arrays as fallbacks if conversion fails
+            try:
+                x_t_np = np.asarray(x_t, dtype=np.float32) if x_t is not None else np.zeros(1, dtype=np.float32)
+            except Exception as e:
+                logger.warning(f"{self.name}: Error converting x_t to numpy array: {e}, using zeros")
+                x_t_np = np.zeros(1, dtype=np.float32)
+                
+            try:
+                k_t_np = np.asarray(k_t, dtype=np.float32) if k_t is not None else np.zeros(1, dtype=np.float32)
+            except Exception as e:
+                logger.warning(f"{self.name}: Error converting k_t to numpy array: {e}, using zeros")
+                k_t_np = np.zeros(1, dtype=np.float32)
+                
+            try:
+                v_t_np = np.asarray(v_t, dtype=np.float32) if v_t is not None else np.zeros(1, dtype=np.float32)
+            except Exception as e:
+                logger.warning(f"{self.name}: Error converting v_t to numpy array: {e}, using zeros")
+                v_t_np = np.zeros(1, dtype=np.float32)
+                
+            try:
+                q_t_np = np.asarray(q_t, dtype=np.float32) if q_t is not None else np.zeros(1, dtype=np.float32)
+            except Exception as e:
+                logger.warning(f"{self.name}: Error converting q_t to numpy array: {e}, using zeros")
+                q_t_np = np.zeros(1, dtype=np.float32)
+                
+            try:
+                y_t_np = np.asarray(y_t, dtype=np.float32) if y_t is not None else np.zeros(1, dtype=np.float32)
+            except Exception as e:
+                logger.warning(f"{self.name}: Error converting y_t to numpy array: {e}, using zeros")
+                y_t_np = np.zeros(1, dtype=np.float32)
+
+            # Now call add_context with guaranteed numpy arrays
+            self.sequence_context.add_context(memory_id, x_t_np, k_t_np, v_t_np, q_t_np, y_t_np)
+            logger.debug(f"{self.name}: Successfully stored context for memory {memory_id} (context size: {len(self.sequence_context)})")
             
-        self.sequence_context.add_context(memory_id, x_t, k_t, v_t, q_t, y_t)
+        except Exception as e:
+            logger.error(f"{self.name}: Error storing context: {e}", exc_info=True)
+            # We don't re-raise the error as we want to continue processing even if context storage fails
     
     async def process_input(self, memory_id: str, x_t: Any, k_t: Any, 
                       v_t: Any, q_t: Any, y_t: Any) -> Dict[str, Any]:
@@ -324,118 +375,138 @@ class MACVariant(TitansVariantBase):
         """Implement MAC variant logic.
         
         1. Store context tuple (timestamp, memory_id, x_t, k_t, v_t, q_t, y_t)
-        2. Retrieve recent history pairs (k_i, y_i) from sequence_context
-        3. Calculate attended output using attention module: attended_y_t = AttentionModule(q_t, K_hist, Y_hist)
-        4. Return attended_y_t for use by downstream components
-        """
-        # Store the current context
-        try:
-            # Convert to numpy arrays if needed
-            np = _get_numpy()
-            if np is None:
-                logger.warning("MAC: NumPy not available, cannot store context")
-                return {
-                    "memory_id": memory_id,
-                    "attended_output": y_t,  # No change
-                    "metrics": {"error": "numpy_not_available"},
-                }
-                
-            # Convert inputs to numpy arrays for the sequence context
-            x_t_np = np.asarray(x_t, dtype=np.float32) if not isinstance(x_t, np.ndarray) else x_t
-            k_t_np = np.asarray(k_t, dtype=np.float32) if not isinstance(k_t, np.ndarray) else k_t
-            v_t_np = np.asarray(v_t, dtype=np.float32) if not isinstance(v_t, np.ndarray) else v_t
-            q_t_np = np.asarray(q_t, dtype=np.float32) if not isinstance(q_t, np.ndarray) else q_t
-            y_t_np = np.asarray(y_t, dtype=np.float32) if not isinstance(y_t, np.ndarray) else y_t
+        2. Apply attention to retrieved embedding y_t using historical context
+        3. Return modified y_t for use by CCE
+        
+        Args:
+            memory_id: ID of the memory being processed
+            x_t: Original input embedding
+            k_t: Key projection
+            v_t: Value projection
+            q_t: Query projection
+            y_t: Retrieved embedding from NM
             
-            self.store_context(memory_id, x_t_np, k_t_np, v_t_np, q_t_np, y_t_np)
+        Returns:
+            Dict with:
+                - 'y_t_final': Modified output (may be identical to input)
+                - 'metrics': Dictionary with attention metrics
+                - 'success': Boolean indicating if processing succeeded
+        """
+        # Initialize metrics with required fields
+        metrics = {
+            "attention_applied": False,
+            "attended_output_generated": False,
+            "history_size_used": 0,
+            "fallback_mode": False,
+        }
+            
+        # Store context in history - using the base class method to ensure consistency
+        # First ensure we have numpy arrays (done directly in the base class method)
+        self.store_context(memory_id, x_t, k_t, v_t, q_t, y_t)
+        
+        # Abort early if the output is None or invalid
+        if y_t is None:
+            logger.error(f"MAC: Invalid y_t (None) for memory {memory_id}")
+            metrics["error"] = "Invalid y_t (None)"
+            return {"y_t_final": y_t, "metrics": metrics, "success": False}
+        
+        # Make sure inputs are NumPy arrays
+        try:
+            x_t = self._ensure_numpy(x_t)
+            k_t = self._ensure_numpy(k_t)
+            v_t = self._ensure_numpy(v_t) 
+            q_t = self._ensure_numpy(q_t)
+            y_t = self._ensure_numpy(y_t)
         except Exception as e:
-            logger.error(f"MAC: Error storing context: {e}")
-            # Continue processing even if context storage fails
-        
-        # If no context history or context too short
-        if not self.sequence_context or len(self.sequence_context) < 2:
-            logger.info("MAC: Not enough context for attention, using original output")
-            return {
-                "memory_id": memory_id,
-                "attended_output": y_t,  # No change
-                "metrics": {},
-            }
-        
-        # Initialize attention module if not already done
-        self._initialize_attention()
-        
-        # If attention module initialization failed, use original output
-        if not self._attention_initialized or self.attention_module is None:
-            logger.warning("MAC: Attention module not available, using original output")
-            return {
-                "memory_id": memory_id,
-                "attended_output": y_t,  # No change
-                "metrics": {"attention_error": "module_not_initialized"},
-            }
-        
-        # Get historical keys and memory outputs
-        k_hist, y_hist = self.sequence_context.get_recent_ky_pairs(count=len(self.sequence_context) - 1)  # Exclude current
+            logger.error(f"MAC: Error converting inputs to NumPy arrays: {e}")
+            metrics["error"] = f"Error converting inputs: {str(e)}"
+            return {"y_t_final": y_t, "metrics": metrics, "success": False}
         
         try:
-            # Get TensorFlow only when needed
+            # Get historical context using synchronous method
+            try:
+                ky_pairs = self.sequence_context.get_recent_ky_pairs(max_pairs=20) 
+                # Note: Removed await since this should be synchronous
+            except AttributeError:
+                # Fallback if method doesn't exist
+                logger.warning("MAC: get_recent_ky_pairs not available, trying get_history")
+                history = self.sequence_context.get_history()
+                if not history:
+                    ky_pairs = []
+                else:
+                    # Extract k,y pairs from history
+                    ky_pairs = []
+                    for entry in history:
+                        if len(entry) >= 6:  # Ensure we have enough elements
+                            # Typical format is (timestamp, memory_id, x_t, k_t, v_t, q_t, y_t)
+                            # We need k_t (index 3) and y_t (index 6)
+                            k = entry[3] if len(entry) > 3 else None
+                            y = entry[6] if len(entry) > 6 else None
+                            if k is not None and y is not None:
+                                ky_pairs.append((k, y))
+            
+            metrics["history_size_used"] = len(ky_pairs)
+            
+            # If history is empty, return original y_t
+            if not ky_pairs:
+                logger.info("MAC: No historical context available, using original output")
+                metrics["fallback_mode"] = True
+                return {"y_t_final": y_t, "metrics": metrics, "success": True}
+                
+            # Initialize attention if needed
+            if not self._initialize_attention():
+                logger.warning("MAC: Attention module not initialized, using original output")
+                metrics["error"] = self._attention_error or "Attention initialization failed"
+                metrics["fallback_mode"] = True
+                return {"y_t_final": y_t, "metrics": metrics, "success": True}  # Return success=True with fallback
+            
+            # Get TensorFlow and apply attention
             tf = _get_tf()
             if tf is None:
-                logger.warning("MAC: TensorFlow not available, using original output")
-                return {
-                    "memory_id": memory_id,
-                    "attended_output": y_t,  # No change
-                    "metrics": {"attention_error": "tensorflow_not_available"},
-                }
-                
-            # Convert inputs to tensors
-            q_tensor = tf.convert_to_tensor(q_t, dtype='float32')
-            if len(q_tensor.shape) == 1:
-                q_tensor = tf.expand_dims(q_tensor, 0)  # Add batch dimension
-                
-            k_hist_tensor = tf.convert_to_tensor(k_hist, dtype='float32')
-            if len(k_hist_tensor.shape) == 2:  # [seq_len, key_dim]
-                k_hist_tensor = tf.expand_dims(k_hist_tensor, 0)  # Add batch dimension [1, seq_len, key_dim]
-                
-            y_hist_tensor = tf.convert_to_tensor(y_hist, dtype='float32')
-            if len(y_hist_tensor.shape) == 2:  # [seq_len, value_dim]
-                y_hist_tensor = tf.expand_dims(y_hist_tensor, 0)  # Add batch dimension [1, seq_len, value_dim]
+                logger.error("MAC: TensorFlow not available for attention")
+                metrics["error"] = "TensorFlow not available"
+                metrics["fallback_mode"] = True
+                return {"y_t_final": y_t, "metrics": metrics, "success": True}  # Return success=True with fallback
             
-            # Apply attention
-            attended_output_tensor = self.attention_module(
-                query=q_tensor,
+            # Convert k,y pairs to tensors
+            k_history = np.vstack([pair[0] for pair in ky_pairs])
+            y_history = np.vstack([pair[1] for pair in ky_pairs])
+            
+            # Ensure consistent shape with q_t (add batch dimension)
+            q_t_reshaped = q_t.reshape(1, -1) 
+            k_hist_tensor = tf.convert_to_tensor(k_history, dtype=tf.float32)
+            y_hist_tensor = tf.convert_to_tensor(y_history, dtype=tf.float32)
+            
+            # Apply attention mechanism
+            attended_output = self.attention_module(
+                query=q_t_reshaped,
                 key=k_hist_tensor,
-                value=y_hist_tensor,
-                training=False,
+                value=y_hist_tensor
             )
             
-            # Convert back to numpy array
-            attended_output = attended_output_tensor.numpy()
+            # Convert back to numpy and remove batch dimension
+            attended_output_np = attended_output.numpy().flatten()
             
-            # Remove batch dimension if it exists
-            if len(attended_output.shape) > 1 and attended_output.shape[0] == 1:
-                attended_output = attended_output[0]
-                
-            logger.info(f"MAC: Generated attended output using {len(k_hist)} historical values")
+            # Update metrics
+            metrics["attention_applied"] = True
+            metrics["attended_output_generated"] = True
             
-            return {
-                "memory_id": memory_id,
-                "attended_output": attended_output,
-                "metrics": {
-                    "attention_applied": True,
-                    "history_size": len(k_hist),
-                    "original_shape": str(y_t.shape) if hasattr(y_t, 'shape') else "unknown",
-                    "attended_shape": str(attended_output.shape) if hasattr(attended_output, 'shape') else "unknown"
-                },
-            }
+            return {"y_t_final": attended_output_np, "metrics": metrics, "success": True}
             
         except Exception as e:
-            logger.error(f"MAC: Error applying attention: {e}", exc_info=True)
-            # Fallback to original output
-            return {
-                "memory_id": memory_id,
-                "attended_output": y_t,  # No change
-                "metrics": {"attention_error": str(e)},
-            }
+            logger.error(f"MAC: Error in attention processing: {str(e)}")
+            # Ensure metrics includes the required fields even in error state
+            metrics["error"] = f"Error in attention processing: {str(e)}"
+            metrics["fallback_mode"] = True
+            return {"y_t_final": y_t, "metrics": metrics, "success": False}
+
+    def _ensure_numpy(self, x):
+        """Ensure input is a NumPy array"""
+        try:
+            return np.asarray(x, dtype=np.float32)
+        except Exception as e:
+            logger.error(f"MAC: Error converting input to NumPy array: {e}")
+            return x
 
 
 class MAGVariant(TitansVariantBase):
@@ -471,32 +542,68 @@ class MAGVariant(TitansVariantBase):
         self._attention_initialized = False
         self._attention_config = attention_config
         self.attention_module = None
+        self._attention_lock = threading.Lock()
+        self._attention_error = None
         
         logger.info(f"MAG: Initialized with config for {attention_config['num_heads']} attention heads")
         
     def _initialize_attention(self):
-        """Lazily initialize the attention module to avoid import-time recursion"""
+        """Initialize TensorFlow attention module.
+        
+        This is done lazily to minimize startup time and memory usage.
+        """
+        # Only initialize once
         if self._attention_initialized:
-            return
+            return True
             
-        tf = _get_tf()
-        if tf is None:
-            logger.error("MAG: Failed to initialize attention - TensorFlow not available")
-            return
-            
-        try:
-            logger.info("MAG: Initializing TensorFlow attention module")
-            self.attention_module = tf.keras.layers.MultiHeadAttention(
-                num_heads=self._attention_config["num_heads"],
-                key_dim=self._attention_config["key_dim"],
-                dropout=self._attention_config["dropout"],
-                name="MAG_Attention"
-            )
-            self._attention_initialized = True
-            logger.info("MAG: Successfully initialized attention module")
-        except Exception as e:
-            logger.error(f"MAG: Error initializing attention module: {e}", exc_info=True)
-    
+        with self._attention_lock:
+            if self._attention_initialized:
+                return True
+                
+            try:
+                # Get TensorFlow with robust error handling
+                tf = _get_tf()
+                if tf is None:
+                    logger.error("Could not import TensorFlow, attention will be unavailable")
+                    self._attention_error = "TensorFlow import failed"
+                    return False
+                    
+                # Get TensorFlow version
+                tf_version = tf.__version__
+                logger.debug(f"Using TensorFlow {tf_version} for attention")
+                
+                # Check if MultiHeadAttention exists
+                if not hasattr(tf.keras.layers, 'MultiHeadAttention'):
+                    logger.error("TensorFlow version does not support MultiHeadAttention")  
+                    self._attention_error = "TensorFlow version does not support MultiHeadAttention"
+                    return False
+                    
+                # Create attention module - with comprehensive error handling
+                try:
+                    # Define attention parameters
+                    num_heads = 4
+                    key_dim = 32
+                    self.attention_module = tf.keras.layers.MultiHeadAttention(
+                        num_heads=num_heads, 
+                        key_dim=key_dim,
+                        dropout=0.1
+                    )
+                    self._attention_initialized = True
+                    return True
+                except Exception as e:
+                    logger.error(f"Error creating MultiHeadAttention: {e}")
+                    self._attention_error = f"Error creating MultiHeadAttention: {e}"
+                    return False
+                    
+            except RecursionError as re:
+                logger.error(f"RecursionError during TensorFlow initialization: {re}")
+                self._attention_error = f"RecursionError during TensorFlow initialization"
+                return False
+            except Exception as e:
+                logger.error(f"Error initializing attention module: {e}")
+                self._attention_error = f"Error initializing attention: {e}"
+                return False
+
     async def process_input(
             self,
             memory_id: str,
@@ -509,149 +616,117 @@ class MAGVariant(TitansVariantBase):
         """Implement MAG variant logic.
         
         1. Store context tuple (timestamp, memory_id, x_t, k_t, v_t, q_t, y_t)
-        2. Calculate attention gates based on history (alpha, theta, eta)
-        3. Return gates for use by neural memory during update step
+        2. Retrieve historical key projections for attention
+        3. Calculate attention gates based on history (alpha, theta, eta)
+        4. Return gates for use by neural memory during update step
+        
+        Args:
+            memory_id: ID of the memory being processed
+            x_t: Input embedding
+            k_t: Key projection
+            v_t: Value projection
+            q_t: Query projection
+            y_t: Output embedding
+            
+        Returns:
+            Dictionary with gates and metrics for use by neural memory during update
         """
-        # Store the current context
-        try:
-            # Convert to numpy arrays if needed
-            np = _get_numpy()
-            if np is None:
-                logger.warning("MAG: NumPy not available, cannot store context")
-                return {
-                    "memory_id": memory_id,
-                    "attended_output": y_t,  # No change
-                    "metrics": {"error": "numpy_not_available"},
-                }
-                
-            # Convert inputs to numpy arrays for the sequence context
-            x_t_np = np.asarray(x_t, dtype=np.float32) if not isinstance(x_t, np.ndarray) else x_t
-            k_t_np = np.asarray(k_t, dtype=np.float32) if not isinstance(k_t, np.ndarray) else k_t
-            v_t_np = np.asarray(v_t, dtype=np.float32) if not isinstance(v_t, np.ndarray) else v_t
-            q_t_np = np.asarray(q_t, dtype=np.float32) if not isinstance(q_t, np.ndarray) else q_t
-            y_t_np = np.asarray(y_t, dtype=np.float32) if not isinstance(y_t, np.ndarray) else y_t
-            
-            self.store_context(memory_id, x_t_np, k_t_np, v_t_np, q_t_np, y_t_np)
-        except Exception as e:
-            logger.error(f"MAG: Error storing context: {e}")
-            # Continue processing even if context storage fails
+        # Initialize metrics dictionary
+        metrics = {}
+        metrics["gate_calculation_attempted"] = True
         
-        # Check if we have enough context for attention
-        if not self.sequence_context or len(self.sequence_context) < 2:
-            logger.info("MAG: Not enough context for attention, using default gates")
-            return {
-                "memory_id": memory_id,
-                "gates": None,  # No external gates
-                "metrics": {}
-            }
-            
-        # Initialize attention module if not already done
-        self._initialize_attention()
+        # First, store this context tuple in history
+        self.store_context(memory_id, x_t, k_t, v_t, q_t, y_t)
         
-        # If attention module initialization failed, use original output
-        if not self._attention_initialized or not self.attention_module:
-            logger.error("MAG: Attention module not initialized, cannot process input")
-            return {
-                "memory_id": memory_id,
-                "gates": None,
-                "error": "Attention module not initialized",
-                "metrics": {}
-            }
+        # Then, retrieve historical key projections for attention
+        keys = self.sequence_context.get_recent_keys()
         
-        # Get historical keys for attention
-        k_hist, _ = self.sequence_context.get_recent_kv_pairs(count=len(self.sequence_context) - 1)  # Exclude current
+        if not keys:
+            logger.warning("MAG: No history available for attention, skipping gate calculation")
+            metrics["gate_calculation_success"] = False
+            metrics["error"] = "No history available for attention"
+            metrics["history_size_used"] = 0
+            return {"success": False, "gates": None, "metrics": metrics}
+        
+        # Record the size of history used for attention - directly use the keys list
+        metrics["history_size_used"] = len(keys)
         
         try:
-            # Get TensorFlow
+            # Lazy initialization of attention
+            if not self._initialize_attention():
+                logger.warning("MAG: Attention module not initialized, skipping gate calculation")
+                metrics["gate_calculation_success"] = False
+                metrics["error"] = self._attention_error
+                return {"success": False, "gates": None, "metrics": metrics}
+            
+            # Convert to TensorFlow tensors if not already (avoiding lazy import)
             tf = _get_tf()
             if tf is None:
-                logger.error("MAG: TensorFlow not available, using default gates")
-                return {
-                    "memory_id": memory_id,
-                    "gates": None,
-                    "error": "TensorFlow not available",
-                    "metrics": {}
-                }
-            
-            # Convert numpy arrays to tensors for TF operations
-            q_tensor = tf.convert_to_tensor(q_t, dtype='float32')
-            if len(q_tensor.shape) == 1:
-                q_tensor = tf.expand_dims(q_tensor, 0)  # Add batch dimension
+                logger.error("MAG: Failed to import TensorFlow for attention calculation")
+                metrics["gate_calculation_success"] = False
+                metrics["error"] = "Failed to import TensorFlow for attention calculation"
+                return {"success": False, "gates": None, "metrics": metrics}
                 
-            k_hist_tensor = tf.convert_to_tensor(k_hist, dtype='float32')
-            if len(k_hist_tensor.shape) == 2:  # [seq_len, key_dim]
-                k_hist_tensor = tf.expand_dims(k_hist_tensor, 0)  # Add batch dimension
+            # Convert q_t and k_hist to appropriate tensors
+            try:
+                q_t_tf = tf.convert_to_tensor(q_t, dtype=tf.float32)
+                if len(q_t_tf.shape) == 1:
+                    q_t_tf = tf.expand_dims(q_t_tf, 0)  # Add batch dimension
+                    
+                k_hist_tf = tf.convert_to_tensor(keys, dtype=tf.float32)
+                if len(k_hist_tf.shape) == 2:  # [seq_len, key_dim]
+                    k_hist_tf = tf.expand_dims(k_hist_tf, 0)  # Add batch dimension [1, seq_len, key_dim]
+            except Exception as e:
+                logger.error(f"MAG: Error converting inputs to tensors: {e}")
+                metrics["gate_calculation_success"] = False
+                metrics["error"] = f"Error converting inputs to tensors: {str(e)}"
+                return {"success": False, "gates": None, "metrics": metrics}
             
-            # Apply self-attention mechanism (keys as values)
-            attention_output = self.attention_module(
-                query=q_tensor,
-                key=k_hist_tensor,
-                value=k_hist_tensor,  # Self-attention uses keys as values
-                training=False,
+            # Calculate attention between q_t and historical k_t values
+            # Returns attended_k which is a weighted combination of k_hist values
+            attended_output = self.attention_module(
+                query=q_t_tf,           # [1, D]  
+                key=k_hist_tf,           # [1, N, D]
+                value=k_hist_tf,         # Use k_hist as values too [1, N, D]
+                return_attention_scores=False
             )
             
-            # Convert back to numpy for API call
-            attention_output_np = attention_output.numpy()
-            if len(attention_output_np.shape) > 1:
-                attention_output_np = attention_output_np[0]  # Remove batch dimension
-                
-            logger.info(f"MAG: Applied attention to {len(k_hist)} historical memories")
+            # Convert the attended output to numpy for API call
+            attention_output_np = attended_output.numpy()
             
-            # Call Neural Memory's /calculate_gates endpoint with attention output
-            if not self.neural_memory_url:
-                logger.error("MAG: Neural Memory URL not set")
-                return {
-                    "memory_id": memory_id,
-                    "gates": None,
-                    "error": "Neural Memory URL not set",
-                    "metrics": {}
-                }
-                
-            try:
-                gate_response = self._make_request(
-                    "calculate_gates",
-                    payload={
-                        "attention_output": attention_output_np.tolist()
-                    }
-                )
-                
-                if not gate_response or "gates" not in gate_response:
-                    logger.error(f"MAG: Failed to get gates from Neural Memory: {gate_response}")
-                    return {
-                        "memory_id": memory_id,
-                        "gates": None,
-                        "error": "Failed to get gates",
-                        "metrics": {}
-                    }
-                    
-                logger.info(f"MAG: Got gates from Neural Memory: {gate_response['gates']}")
-                
-                # Return gates for use in neural memory update
-                return {
-                    "memory_id": memory_id,
-                    "gates": gate_response["gates"],
-                    "attention_output": attention_output_np.tolist(),
-                    "metrics": {}
-                }
-                
-            except Exception as e:
-                logger.error(f"MAG: Error calling Neural Memory: {e}")
-                return {
-                    "memory_id": memory_id,
-                    "gates": None,
-                    "error": f"Error calling Neural Memory: {e}",
-                    "metrics": {}
-                }
+            # Record the attention norm in metrics
+            metrics["attention_norm"] = float(np.linalg.norm(attention_output_np))
             
+            # Use attended_k to calculate gates via API call
+            api_response = self._make_request(
+                "/calculate_gates",
+                {"attention_output": attention_output_np.squeeze().tolist()}
+            )
+            
+            if api_response.get("success", False):
+                gates = {
+                    "alpha": api_response.get("alpha"),
+                    "theta": api_response.get("theta"),
+                    "eta": api_response.get("eta")
+                }
+                metrics["gate_calculation_success"] = True
+                metrics["calculated_gates"] = gates.copy()
+                
+                logger.info(f"MAG: Successfully calculated gates: alpha={gates['alpha']}, theta={gates['theta']}, eta={gates['eta']}")
+                return {"success": True, "gates": gates, "metrics": metrics}
+            else:
+                error_msg = api_response.get("error", "Unknown error in gate calculation")
+                logger.error(f"MAG: Error calculating gates: {error_msg}")
+                metrics["gate_calculation_success"] = False
+                metrics["error"] = error_msg
+                return {"success": False, "gates": None, "metrics": metrics}
+                
         except Exception as e:
-            logger.error(f"MAG: Error calculating gates: {e}", exc_info=True)
-            return {
-                "memory_id": memory_id,
-                "gates": None,
-                "error": str(e),
-                "metrics": {}
-            }
-            
+            logger.error(f"MAG: Error in process_input: {e}")
+            metrics["gate_calculation_success"] = False
+            metrics["error"] = f"Error in MAG process_input: {str(e)}"
+            return {"success": False, "gates": None, "metrics": metrics}
+    
     def _make_request(self, endpoint: str, payload: Dict = None) -> Dict:
         """Make a request to the Neural Memory API"""
         import aiohttp
@@ -771,9 +846,16 @@ class MALVariant(TitansVariantBase):
         Returns:
             Dict containing v_prime_t (modified value projection) and metrics
         """
+        # Initialize metrics dictionary
+        metrics = {}
+        metrics["v_prime_calculation_attempted"] = True
+        metrics["history_size_used"] = len(k_hist) if k_hist else 0
+        
         if not k_hist or not v_hist:
             logger.warning("MAL: No historical data available for attention. Returning original v_t.")
-            return {"v_prime_t": v_t, "metrics": {"attended": False, "reason": "no_history"}}
+            metrics["v_prime_calculation_success"] = False
+            metrics["error"] = "No historical data available for attention"
+            return {"success": False, "v_prime_t": v_t, "metrics": metrics}
         
         # Ensure the attention module is initialized
         if not self._attention_initialized:
@@ -782,14 +864,19 @@ class MALVariant(TitansVariantBase):
         # If attention initialization failed, fall back to original values
         if not self._attention_initialized or self.attention_module is None:
             logger.warning("MAL: Attention module not available. Returning original v_t.")
-            return {"v_prime_t": v_t, "metrics": {"attended": False, "reason": "no_attention_module"}}
+            metrics["v_prime_calculation_success"] = False
+            metrics["error"] = "Attention module not available"
+            return {"success": False, "v_prime_t": v_t, "metrics": metrics}
             
         # Get TensorFlow only when needed
         try:
             tf = _get_tf()
-            if tf is None:
-                logger.warning("MAL: TensorFlow not available. Returning original v_t.")
-                return {"v_prime_t": v_t, "metrics": {"attended": False, "reason": "no_tensorflow"}}
+            np = _get_numpy()
+            if tf is None or np is None:
+                logger.warning("MAL: TensorFlow or NumPy not available. Returning original v_t.")
+                metrics["v_prime_calculation_success"] = False
+                metrics["error"] = "TensorFlow or NumPy not available"
+                return {"success": False, "v_prime_t": v_t, "metrics": metrics}
             
             # Convert numpy arrays to tensors for TF operations
             q_tensor = tf.convert_to_tensor(q_t, dtype='float32')
@@ -798,16 +885,16 @@ class MALVariant(TitansVariantBase):
                 
             k_hist_tensor = tf.convert_to_tensor(k_hist, dtype='float32')
             if len(k_hist_tensor.shape) == 2:  # [seq_len, key_dim]
-                k_hist_tensor = tf.expand_dims(k_hist_tensor, 0)  # Add batch dimension [1, seq_len, key_dim]
-                
+                k_hist_tensor = tf.expand_dims(k_hist_tensor, 0)  # Add batch dimension
+            
             v_hist_tensor = tf.convert_to_tensor(v_hist, dtype='float32')
             if len(v_hist_tensor.shape) == 2:  # [seq_len, value_dim]
-                v_hist_tensor = tf.expand_dims(v_hist_tensor, 0)  # Add batch dimension [1, seq_len, value_dim]
-            
+                v_hist_tensor = tf.expand_dims(v_hist_tensor, 0)  # Add batch dimension
+        
             v_tensor = tf.convert_to_tensor(v_t, dtype='float32')
             if len(v_tensor.shape) == 1:
                 v_tensor = tf.expand_dims(v_tensor, 0)  # Add batch dimension
-            
+        
             # Apply attention mechanism
             attended_v_tensor = self.attention_module(
                 query=q_tensor,
@@ -815,6 +902,10 @@ class MALVariant(TitansVariantBase):
                 value=v_hist_tensor,
                 training=False,
             )
+            
+            # Record attention norm in metrics
+            attended_v_np = attended_v_tensor.numpy()
+            metrics["attention_norm"] = float(np.linalg.norm(attended_v_np))
             
             # Combine attended and current values
             if self.v_prime_gate is None:
@@ -827,6 +918,9 @@ class MALVariant(TitansVariantBase):
             # Calculate gate value
             gate = self.v_prime_gate(concat_v)
             
+            # Record the gate value (blend ratio) in metrics
+            metrics["gated_blend_ratio"] = float(tf.squeeze(gate).numpy())
+            
             # Combine original and attended values
             v_prime_tensor = gate * v_tensor + (1 - gate) * attended_v_tensor
             
@@ -834,23 +928,34 @@ class MALVariant(TitansVariantBase):
             v_prime_tensor = self.v_prime_projector(v_prime_tensor)
             
             # Convert back to numpy
-            v_prime = v_prime_tensor.numpy()
-            if len(v_prime.shape) > 1:
-                v_prime = v_prime[0]  # Remove batch dimension
+            v_prime_np = v_prime_tensor.numpy()
+            if len(v_prime_np.shape) > 1:
+                v_prime_np = v_prime_np[0]  # Remove batch dimension
+            
+            # Calculate the difference norm between v_t and v_prime_t
+            v_t_np = np.asarray(v_t, dtype=np.float32) if not isinstance(v_t, np.ndarray) else v_t
+            metrics["v_prime_diff_norm"] = float(np.linalg.norm(v_prime_np - v_t_np))
             
             logger.info(f"MAL: Generated augmented value projection from {len(k_hist)} historical values")
             
+            # Mark calculation as successful
+            metrics["v_prime_calculation_success"] = True
+            
             return {
-                "v_prime_t": v_prime,  # Augmented value projection
-                "metrics": {}
+                "success": True,
+                "v_prime_t": v_prime_np,  # Augmented value projection
+                "metrics": metrics
             }
             
         except Exception as e:
             logger.error(f"MAL calculate_v_prime failed: {str(e)}", exc_info=True)
             # Fallback to original value projection
+            metrics["v_prime_calculation_success"] = False
+            metrics["error"] = f"Error in MAL calculate_v_prime: {str(e)}"
             return {
+                "success": False,
                 "v_prime_t": v_t,  # Fallback to original
-                "metrics": {}
+                "metrics": metrics
             }
 
     async def process_input(

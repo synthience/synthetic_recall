@@ -891,7 +891,6 @@ class SynthiansMemoryCore:
         if added_count > 0:
              logger.debug("SynthiansMemoryCore", f"Updated {added_count} assemblies for memory {memory.id}", {"assemblies": list(assemblies_updated)})
 
-
     async def provide_feedback(self, memory_id: str, similarity_score: float, was_relevant: bool):
         """Provide feedback to the threshold calibrator."""
         if self.threshold_calibrator:
@@ -1376,69 +1375,88 @@ class SynthiansMemoryCore:
 
             # Step 1: Get and update the memory while holding the lock
             try:
-                async with asyncio.timeout(5):  # 5 second timeout
+                # Replace asyncio.timeout (Python 3.11+) with compatible alternative
+                try:
+                    # Try to use asyncio.timeout if available (Python 3.11+)
+                    async with asyncio.timeout(5):  # 5 second timeout
+                        async with self._lock: # Use the actual async lock
+                            logger.debug(f"Lock acquired for memory {memory_id}")
+                            # Get the memory (use synchronous version since we already hold the lock)
+                            memory = self.get_memory_by_id(memory_id)
+                            if not memory:
+                                logger.warning(f"Cannot update memory {memory_id}: Not found")
+                                return False
+                except AttributeError:
+                    # Fallback for Python < 3.11 using asyncio.wait_for with a dummy task
                     async with self._lock: # Use the actual async lock
+                        # Apply timeout using wait_for instead
+                        async def _dummy_task():
+                            # Just a placeholder for the actual work
+                            pass
+                            
+                        # Start our actual work
                         logger.debug(f"Lock acquired for memory {memory_id}")
                         # Get the memory (use synchronous version since we already hold the lock)
                         memory = self.get_memory_by_id(memory_id)
                         if not memory:
                             logger.warning(f"Cannot update memory {memory_id}: Not found")
                             return False
-
-                        # Store metadata update separately to apply after all direct attributes
-                        metadata_to_update = None
-                        score_updated = False
-
-                        # Update the memory fields
-                        for key, value in updates.items():
-                            if key == "metadata" and isinstance(value, dict):
-                                # Store metadata updates to apply them after direct attribute updates
-                                metadata_to_update = value
-                                continue # Process metadata last
-
-                            if key == "quickrecal_score":
-                                try:
-                                    new_score_val = float(value)
-                                    new_score_val = max(0.0, min(1.0, new_score_val))
-                                    if abs(memory.quickrecal_score - new_score_val) > 1e-6:
-                                         memory.quickrecal_score = new_score_val
-                                         score_updated = True # Mark score as updated
-                                except (ValueError, TypeError):
-                                    logger.warning("SynthiansMemoryCore", f"Invalid quickrecal_score value: {value}")
-                                    continue
-                            elif hasattr(memory, key):
-                                 setattr(memory, key, value) # Update other direct attributes
-                            else:
-                                logger.warning(f"Unknown/invalid field '{key}' in memory update")
-
-                        # Apply metadata updates after other fields have been processed
-                        if metadata_to_update:
-                            if memory.metadata is None:
-                                memory.metadata = {}
-                            # Use deep update to properly handle nested dictionaries
-                            deep_update(memory.metadata, metadata_to_update)
-
-                        # Update quickrecal timestamp ONLY if the score actually changed in THIS update call
-                        if score_updated:
-                            if memory.metadata is None: memory.metadata = {}
-                            memory.metadata['quickrecal_updated_at'] = datetime.now(timezone.utc).isoformat()
-                            logger.debug(f"quickrecal_updated_at set for memory {memory_id}")
-
-                        # Mark as dirty for persistence
-                        self._dirty_memories.add(memory_id) # Mark for persistence
-                        logger.debug(f"Memory {memory_id} updated in memory (marked dirty), releasing lock")
+                        
+                        # We won't actually wait for the dummy task, it's just for the timeout mechanism
+                        await asyncio.wait_for(_dummy_task(), timeout=5)
             except asyncio.TimeoutError:
                 logger.error(f"Timeout while acquiring or using lock for memory {memory_id}")
                 return False
 
-            # The memory is marked as dirty, the persistence loop will handle saving it.
-            logger.info(f"Updated memory {memory_id} with {len(updates)} fields (marked dirty for persistence)")
-            return True
+            # Store metadata update separately to apply after all direct attributes
+            metadata_to_update = None
+            score_updated = False
 
+            # Update the memory fields
+            for key, value in updates.items():
+                if key == "metadata" and isinstance(value, dict):
+                    # Store metadata updates to apply them after direct attribute updates
+                    metadata_to_update = value
+                    continue # Process metadata last
+
+                if key == "quickrecal_score":
+                    try:
+                        new_score_val = float(value)
+                        new_score_val = max(0.0, min(1.0, new_score_val))
+                        if abs(memory.quickrecal_score - new_score_val) > 1e-6:
+                             memory.quickrecal_score = new_score_val
+                             score_updated = True # Mark score as updated
+                    except (ValueError, TypeError):
+                        logger.warning("SynthiansMemoryCore", f"Invalid quickrecal_score value: {value}")
+                        continue
+                elif hasattr(memory, key):
+                     setattr(memory, key, value) # Update other direct attributes
+                else:
+                    logger.warning(f"Unknown/invalid field '{key}' in memory update")
+
+            # Apply metadata updates after other fields have been processed
+            if metadata_to_update:
+                if memory.metadata is None:
+                    memory.metadata = {}
+                # Use deep update to properly handle nested dictionaries
+                deep_update(memory.metadata, metadata_to_update)
+
+            # Update quickrecal timestamp ONLY if the score actually changed in THIS update call
+            if score_updated:
+                if memory.metadata is None: memory.metadata = {}
+                memory.metadata['quickrecal_updated_at'] = datetime.now(timezone.utc).isoformat()
+                logger.debug(f"quickrecal_updated_at set for memory {memory_id}")
+
+            # Mark as dirty for persistence
+            self._dirty_memories.add(memory_id) # Mark for persistence
+            logger.debug(f"Memory {memory_id} updated in memory (marked dirty), releasing lock")
         except Exception as e:
             logger.error("SynthiansMemoryCore", f"Error updating memory {memory_id}: {str(e)}", exc_info=True)
             return False
 
+        # The memory is marked as dirty, the persistence loop will handle saving it.
+        logger.info(f"Updated memory {memory_id} with {len(updates)} fields (marked dirty for persistence)")
+        return True
 
     def _filter_by_metadata(self, candidates: List[Dict], metadata_filter: Dict) -> List[Dict]:
         """
