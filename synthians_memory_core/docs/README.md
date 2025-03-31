@@ -11,6 +11,7 @@ This documentation provides comprehensive details on the system's architecture, 
 *   **Bi-Hemispheric Model:** The system loosely models the interaction between episodic/declarative memory (Memory Core - The Archive) and procedural/associative memory (Neural Memory - The Associator).
 *   **QuickRecal:** A dynamic relevance score for memories, influenced by factors like recency, emotion, and surprise.
 *   **Surprise Feedback:** The Neural Memory provides signals (loss, gradient norm) indicating how surprising new input is, which boosts the QuickRecal score of corresponding memories in the Core.
+*   **Performance-Aware Adaptation:** The system dynamically selects optimal processing variants based on Neural Memory performance metrics and trend analysis.
 *   **Asynchronous Processing:** Built with `asyncio` for efficient handling of I/O-bound operations.
 
 ## Navigation

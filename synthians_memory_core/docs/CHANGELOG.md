@@ -8,10 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Performance-Aware Variant Selection (Phase 5.5) enabling dynamic adaptation based on Neural Memory metrics
+- Trend analysis for Neural Memory performance metrics to proactively select optimal variants
+- Integration tests for Performance-Aware selection to verify functionality
+- Comprehensive documentation for the Performance-Aware selection system
 - Comprehensive documentation structure in the `docs/` directory
 - Placeholders for component deep dives to be filled in future updates
 
 ### Changed
+- Enhanced `VariantSelector` to consider performance metrics in addition to content and metadata
 - Reorganized documentation into logical sections (core, api, orchestrator, trainer, guides, testing)
 - Updated API_REFERENCE.md to include metadata_filter parameter for memory retrieval
 
