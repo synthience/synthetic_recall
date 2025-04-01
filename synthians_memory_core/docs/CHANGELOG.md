@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Enhanced LLM Guidance System (Phase 5.7.2) with history-aware decision making
+- Blended history summarization using embedding norms and pattern detection
+- New `meta_reasoning` field in LLM responses for improved transparency
+- Explicit instructions for LLM to interpret performance metrics and history patterns
+- Performance confidence assessment based on sample size and consistency
 - Performance-Aware Variant Selection (Phase 5.5) enabling dynamic adaptation based on Neural Memory metrics
 - Trend analysis for Neural Memory performance metrics to proactively select optimal variants
 - Integration tests for Performance-Aware selection to verify functionality
@@ -16,11 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Placeholders for component deep dives to be filled in future updates
 
 ### Changed
+- Updated LLM prompt template to version 5.7.2 with improved guidance context
+- Refined performance metric reporting with detailed trend description
+- Modified CCE to retrieve and pass history context to LLM guidance
 - Enhanced `VariantSelector` to consider performance metrics in addition to content and metadata
 - Reorganized documentation into logical sections (core, api, orchestrator, trainer, guides, testing)
 - Updated API_REFERENCE.md to include metadata_filter parameter for memory retrieval
 
 ### Fixed
+- Significantly enhanced error handling in the LLM guidance system:
+  - Implemented comprehensive exception handling hierarchy for different error types
+  - Added proper retry logic with exponential backoff for transient failures
+  - Improved error reporting with detailed error messages for better debugging
+  - Fixed JSON schema validation to ensure proper response structure
+  - Enhanced test coverage for various error scenarios including malformed responses
+  - Fixed edge cases in async response handling for both text and JSON formats
+- Improved error handling in history summarization and LLM guidance
+- Robust retry logic for LLM API calls with proper schema validation
 - Documentation now accurately reflects the latest codebase state
 - Links and references updated to match the new structure
 
