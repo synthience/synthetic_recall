@@ -156,7 +156,10 @@ class MetricsStore:
     def log_quickrecal_boost(self, memory_id: str, base_score: float, boost_amount: float,
                            emotion: Optional[str] = None, surprise_source: str = "neural_memory",
                            intent_id: Optional[str] = None, 
-                           metadata: Optional[Dict[str, Any]] = None) -> None:
+                           metadata: Optional[Dict[str, Any]] = None,
+                           loss: Optional[float] = None,
+                           grad_norm: Optional[float] = None,
+                           llm_modifier: Optional[float] = None) -> None:
         """Log a QuickRecal score boost event.
         
         Args:
@@ -167,9 +170,23 @@ class MetricsStore:
             surprise_source: Source of the surprise signal (neural_memory, direct, etc.)
             intent_id: Optional intent ID (uses current if not provided)
             metadata: Additional metadata to store with the boost event
+            loss: Optional loss value associated with the boost
+            grad_norm: Optional gradient norm associated with the boost
+            llm_modifier: Optional modifier applied by LLM guidance
         """
         event_time = datetime.datetime.utcnow()
         intent_id = intent_id or self._current_intent_id
+        
+        # Create a copy of metadata or initialize an empty dict
+        local_metadata = metadata.copy() if metadata else {}
+        
+        # Add performance metrics to metadata if provided
+        if loss is not None:
+            local_metadata["loss"] = float(loss)
+        if grad_norm is not None:
+            local_metadata["grad_norm"] = float(grad_norm)
+        if llm_modifier is not None:
+            local_metadata["llm_modifier"] = float(llm_modifier)
         
         event = {
             "timestamp": event_time.isoformat(),
@@ -180,7 +197,7 @@ class MetricsStore:
             "final_score": float(base_score + boost_amount),
             "emotion": emotion,
             "surprise_source": surprise_source,
-            "metadata": metadata or {}
+            "metadata": local_metadata
         }
         
         with self._lock:
@@ -200,7 +217,11 @@ class MetricsStore:
         
         # Optionally log to file
         self._maybe_write_event_log("quickrecal_boosts", event)
-        logger.debug(f"Logged QuickRecal boost: memory={memory_id}, amount={boost_amount:.4f}")
+        
+        # Fix the format specifier by moving the conditional outside the f-string format
+        loss_str = f"{loss:.4f}" if loss is not None else "N/A"
+        grad_str = f"{grad_norm:.4f}" if grad_norm is not None else "N/A"
+        logger.debug(f"Logged QuickRecal boost: memory={memory_id}, amount={boost_amount:.4f}, loss={loss_str}, grad={grad_str}")
     
     def log_retrieval(self, query_embedding: List[float], retrieved_memories: List[Dict[str, Any]],
                      user_emotion: Optional[str] = None, intent_id: Optional[str] = None,
@@ -447,7 +468,7 @@ class MetricsStore:
                 retrievals = [e for e in retrievals if e["timestamp"] >= cutoff_str]
             
             # Apply emotion filter if specified
-            if emotion_filter and emotion_filter != "all":
+            if emotion_filter:
                 memory_updates = [e for e in memory_updates if e.get("emotion") == emotion_filter]
                 quickrecal_boosts = [e for e in quickrecal_boosts if e.get("emotion") == emotion_filter]
             
@@ -470,10 +491,11 @@ class MetricsStore:
             emotion_counts = {k: v for k, v in self._emotion_counts.items() if v > 0}
             total_emotions = sum(emotion_counts.values())
             if total_emotions > 0:
-                probs = [count/total_emotions for count in emotion_counts.values()]
+                probs = [count / total_emotions for count in emotion_counts.values()]
                 entropy = -sum(p * math.log(p) for p in probs if p > 0)
+                emotion_entropy = float(entropy)
             else:
-                entropy = 0.0
+                emotion_entropy = 0.0
             
             # Calculate user emotion match rate
             match_rate = self._user_emotion_matches[0] / self._user_emotion_matches[1] \
@@ -535,7 +557,7 @@ class MetricsStore:
                 "avg_grad_norm": float(avg_grad_norm),
                 "avg_quickrecal_boost": float(avg_boost),
                 "dominant_emotions_boosted": dominant_emotions,
-                "emotional_entropy": float(entropy),
+                "emotional_entropy": float(emotion_entropy),
                 "emotion_bias_index": float(emotion_bias),
                 "user_emotion_match_rate": float(match_rate),
                 "cluster_update_hotspots": cluster_hotspots,

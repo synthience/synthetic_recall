@@ -46,6 +46,9 @@ class AnalyzeSurpriseRequest(BaseModel):
 class SetVariantRequest(BaseModel):
     variant: str
     reset_neural_memory: bool = False
+    
+class MetricsRequest(BaseModel):
+    limit: int = 20
 
 # --- Helper Functions ---
 
@@ -175,6 +178,18 @@ async def set_variant(request: SetVariantRequest):
         # Unexpected error
         logger.error(f"Unexpected error in set_variant: {e}")
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+@app.post("/get_recent_metrics")
+async def get_recent_metrics(request: MetricsRequest):
+    """Retrieve recent CCE responses metrics."""
+    orchestrator = get_orchestrator()
+    
+    try:
+        result = await orchestrator.get_recent_metrics(limit=request.limit)
+        return result
+    except Exception as e:
+        logger.error(f"Error retrieving recent metrics: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving recent metrics: {str(e)}")
 
 # --- Startup and Shutdown Events ---
 

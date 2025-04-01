@@ -1,0 +1,19 @@
+# Exclude large log files and other non-essential files from the AI digest
+
+# Log files
+**/logs/*.jsonl
+**/logs/*.log
+
+# Large binary or data files
+**/*.pkl
+**/*.pt
+**/*.bin
+**/*.model
+**/*.weights
+
+# Cache/temporary files
+**/__pycache__/
+**/.pytest_cache/
+**/.ipynb_checkpoints/
+
+
