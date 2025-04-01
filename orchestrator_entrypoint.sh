@@ -23,12 +23,17 @@ python -c "import numpy; print(f'NumPy version: {numpy.__version__}'); print(f'N
 # Set the dev mode flag
 export CCE_DEV_MODE=true
 
+# Test host.docker.internal resolution
+echo "Testing host.docker.internal resolution:"
+ping -c 1 host.docker.internal || echo "host.docker.internal resolution failed"
+
 # Log environment for debugging
 echo "Environment configuration:"
 echo "MEMORY_CORE_URL: $MEMORY_CORE_URL"
 echo "NEURAL_MEMORY_URL: $NEURAL_MEMORY_URL"
 echo "CCE_DEV_MODE: $CCE_DEV_MODE"
 echo "TITANS_VARIANT: $TITANS_VARIANT"
+echo "LLM_STUDIO_ENDPOINT: $LLM_STUDIO_ENDPOINT"
 
 # Start the orchestrator service
 echo "Starting orchestrator service..."

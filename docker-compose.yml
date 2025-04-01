@@ -41,6 +41,7 @@ services:
       - LOG_LEVEL=INFO
       - HOST=0.0.0.0
       - PORT=5010
+      - LLM_STUDIO_ENDPOINT=http://host.docker.internal:1234/v1/chat/completions
       - PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu118
     volumes:
       - ./:/workspace/project
@@ -117,11 +118,16 @@ services:
     volumes:
       - ./:/app
       - ./orchestrator_entrypoint.sh:/orchestrator_entrypoint.sh
+      - ./models:/app/models
     environment:
       - MEMORY_CORE_URL=http://synthians_core:5010
       - NEURAL_MEMORY_URL=http://trainer-server:8001
       - CCE_DEV_MODE=true
       - TITANS_VARIANT=NONE
+      - LLM_STUDIO_ENDPOINT=http://host.docker.internal:1234/v1/chat/completions
+      - DISABLE_LLM_ROUTER=false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: ["bash", "/orchestrator_entrypoint.sh"]
     ports:
       - "8002:8002"

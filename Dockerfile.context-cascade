@@ -4,6 +4,7 @@ FROM python:3.10-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV DEBIAN_FRONTEND=noninteractive
+ENV LLM_API_ENDPOINT=http://host.docker.internal:1234/v1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -32,3 +33,4 @@ EXPOSE 5030
 
 # Set the default command
 CMD ["python", "-m", "synthians_memory_core.context_cascade_orchestrator.server"]
+

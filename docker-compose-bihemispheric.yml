@@ -11,6 +11,7 @@ services:
       - MEMORY_CORE_URL=http://localhost:5010
       - PORT=8001
       - TF_CPP_MIN_LOG_LEVEL=2
+      - LLM_STUDIO_ENDPOINT=http://host.docker.internal:1234/v1/chat/completions
     command: bash -c "pip install -q fastapi uvicorn aiohttp pydantic tensorflow pandas && python fix_numpy.py python -m synthians_memory_core.synthians_trainer_server.http_server"
 
   context-cascade-orchestrator:
