@@ -479,8 +479,16 @@ async def process_memory(request: ProcessMemoryRequest, background_tasks: Backgr
                 metadata=metadata
             )
             
-            memory_id = result.id if result else None
-            quickrecal_score = result.quickrecal_score if result else None
+            # CRITICAL CHECK: Handle None result explicitly
+            if result is None:
+                logger.error("process_memory", "Core processing failed internally (returned None)")
+                return JSONResponse(
+                    status_code=500,
+                    content={"success": False, "error": "Core memory processing failed internally"}
+                )
+            
+            memory_id = result.id
+            quickrecal_score = result.quickrecal_score
             logger.info("process_memory", f"Memory processed successfully with ID: {memory_id}")
             
             # Return response with results
@@ -494,18 +502,24 @@ async def process_memory(request: ProcessMemoryRequest, background_tasks: Backgr
             
         except Exception as core_error:
             logger.error("process_memory", f"Memory core processing error: {str(core_error)}")
-            raise HTTPException(status_code=500, detail=f"Memory processing failed: {str(core_error)}")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Memory processing failed: {str(core_error)}"}
+            )
     
+    except HTTPException as http_exc:
+        # Re-raise HTTPExceptions (like validation errors)
+        logger.warning(f"HTTPException in process_memory: {http_exc.detail}")
+        raise http_exc
     except Exception as e:
         logger.error("process_memory", f"Process memory error: {str(e)}")
         import traceback
         logger.error("process_memory", traceback.format_exc())
         
-        return ProcessMemoryResponse(
-            success=False,
-            error=str(e)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": f"Internal server error: {str(e)}"}
         )
-
 
 @app.post("/retrieve_memories", response_model=RetrieveMemoriesResponse)
 async def retrieve_memories(request: RetrieveMemoriesRequest):
