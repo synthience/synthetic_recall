@@ -52,7 +52,7 @@ services:
     expose:
       - 5010
     ports:
-      - "5010:5010"
+      - "127.0.0.1:5020:5010"  # Use a different port on the host to avoid conflicts
     networks:
       - lucid-net
     # Use the faiss_setup_entrypoint.sh script for proper FAISS GPU initialization
@@ -145,3 +145,4 @@ networks:
 
 volumes:
   emotion_model_cache:
+

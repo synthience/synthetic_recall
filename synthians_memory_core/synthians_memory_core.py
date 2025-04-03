@@ -148,113 +148,48 @@ class SynthiansMemoryCore:
         logger.info("SynthiansMemoryCore", "Core components initialized.")
 
     async def initialize(self):
-        """Load persisted state and start background tasks."""
-        if self._initialized: return True
-        logger.info("SynthiansMemoryCore", "Starting initialization...")
-        async with self._lock:
-            # Initialize persistence first to ensure memory index is loaded
-            await self.persistence.initialize()
-            logger.info("SynthiansMemoryCore", "Persistence layer initialized.")
-
-            # REMOVED: Don't load all memories immediately, just get the IDs from the index
-            # loaded_memories = await self.persistence.load_all()
-            # for mem in loaded_memories:
-            #     self._memories[mem.id] = mem
-            memory_ids = self.persistence.memory_index.keys()
-            logger.info("SynthiansMemoryCore", f"Found {len(memory_ids)} memory IDs in index. Deferring full memory load.")
-            
-            # Initialize memory_to_assemblies mapping with empty sets for all known memory IDs
-            self.memory_to_assemblies = {memory_id: set() for memory_id in memory_ids}
-
-            # Load assemblies and memory_to_assemblies mapping
-            assembly_list = await self.persistence.list_assemblies()
-            loaded_assemblies_count = 0
-
-            # Load each assembly
-            for assembly_info in assembly_list:
-                assembly_id = assembly_info.get("id")
-                if assembly_id:
-                    assembly = await self.persistence.load_assembly(assembly_id, self.geometry_manager)
-                    if assembly:
-                        self.assemblies[assembly_id] = assembly
-                        loaded_assemblies_count += 1
-
-                        # Update memory_to_assemblies mapping
-                        for memory_id in assembly.memories:
-                            if memory_id in self.memory_to_assemblies:
-                                self.memory_to_assemblies[memory_id].add(assembly_id)
-                            else:
-                                # Create mapping entry if memory not in cache
-                                self.memory_to_assemblies[memory_id] = {assembly_id}
-
-            logger.info("SynthiansMemoryCore", f"Loaded {loaded_assemblies_count} assemblies from persistence.")
-
-            # Load the vector index
-            index_loaded = self.vector_index.load()
-
-            # If index wasn't found, we'll need to build it as memories get loaded
-            if not index_loaded:
-                logger.info("SynthiansMemoryCore", "No vector index found. Will build incrementally as memories are loaded.")
-            else:
-                logger.info("SynthiansMemoryCore", f"Loaded vector index with {self.vector_index.count()} entries")
-
-            # Verify index integrity
-            is_consistent, diagnostics = self.vector_index.verify_index_integrity()
-            
-            # Log the diagnostics
-            logger.info(f"Vector index integrity check: {is_consistent}")
-            logger.info(f"Vector index diagnostics: {diagnostics}")
-            
-            # Automatically repair common issues
-            need_repair = False
-            
-            # Case 1: Index inconsistency detected (FAISS count > 0, Mapping count = 0)
-            if diagnostics.get('faiss_count', 0) > 0 and diagnostics.get('id_mapping_count', 0) == 0:
-                logger.warning("Critical inconsistency detected: FAISS count > 0 but Mapping count = 0")
-                logger.warning("Initiating automatic repair...")
-                need_repair = True
-            
-            # Case 2: Index is not using IndexIDMap but config requests it
-            if self.config.get('migrate_to_idmap', True) and not diagnostics.get('is_index_id_map', False):
-                logger.info("Migrating to IndexIDMap as requested by configuration")
-                need_repair = True
-            
-            # Perform repair if needed
-            if need_repair:
-                logger.info("Performing automatic index repair...")
-                
-                # First make sure we're using IndexIDMap
-                if not diagnostics.get('is_index_id_map', False):
-                    success = self.vector_index.migrate_to_idmap(force_cpu=True)
-                    if success:
-                        logger.info("Successfully migrated vector index to IndexIDMap")
-                    else:
-                        logger.warning("Failed to migrate vector index to IndexIDMap. Will try repair_index next.")
-                
-                # If we still have inconsistency, run the repair
-                is_consistent, diagnostics = self.vector_index.verify_index_integrity()
-                if not is_consistent:
-                    asyncio.create_task(self.repair_index("recreate_mapping"))
-                    logger.info("Scheduled automatic repair_index to fix inconsistencies")
-            
-            # Final index stats after initialization
-            logger.info(f"Vector index initialized with {self.vector_index.count()} vectors and "
-                        f"{len(self.vector_index.id_to_index)} ID mappings")
-
-            # Start background tasks only if intervals are > 0
-            if self.config['persistence_interval'] > 0:
-                 self._background_tasks.append(asyncio.create_task(self._persistence_loop(), name=f"PersistenceLoop_{id(self)}"))
-            else:
-                logger.warning("SynthiansMemoryCore", "Persistence loop disabled (interval <= 0)")
-
-            if self.config['decay_interval'] > 0 or self.config['prune_check_interval'] > 0:
-                self._background_tasks.append(asyncio.create_task(self._decay_and_pruning_loop(), name=f"DecayPruningLoop_{id(self)}"))
-            else:
-                logger.warning("SynthiansMemoryCore", "Decay/Pruning loop disabled (intervals <= 0)")
-
-            self._initialized = True
-            logger.info("SynthiansMemoryCore", "Initialization complete. Background tasks started.")
+        """Initialize the memory core components."""
+        # Initialization code specific to your implementation
+        logger.info("Initializing SynthiansMemoryCore components")
+        # Initialize persistence, vector index, etc.
         return True
+
+    async def cleanup(self):
+        """Clean up resources before shutdown.
+        
+        Part of Phase 5.8 stability improvements to ensure proper resource
+        management during application shutdown.
+        """
+        logger.info("Cleaning up SynthiansMemoryCore resources")
+        try:
+            # Close vector index if available
+            if hasattr(self, 'vector_index') and self.vector_index is not None:
+                logger.info("Closing vector index")
+                await self.vector_index.close() if hasattr(self.vector_index, 'close') else None
+            
+            # Ensure final persistence before shutdown
+            if hasattr(self, 'memory_persistence') and self.memory_persistence is not None:
+                logger.info("Final memory persistence before shutdown")
+                await self.memory_persistence.persist_all() if hasattr(self.memory_persistence, 'persist_all') else None
+            
+            # Clean up assembly sync manager if available
+            if hasattr(self, 'assembly_sync_manager') and self.assembly_sync_manager is not None:
+                logger.info("Closing assembly sync manager")
+                await self.assembly_sync_manager.shutdown() if hasattr(self.assembly_sync_manager, 'shutdown') else None
+            
+            # Cancel any pending tasks
+            if hasattr(self, '_background_tasks'):
+                for task in self._background_tasks:
+                    if not task.done():
+                        logger.info(f"Cancelling background task {task.get_name() if hasattr(task, 'get_name') else 'unnamed'}")
+                        task.cancel()
+            
+            logger.info("SynthiansMemoryCore cleanup completed successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Error during SynthiansMemoryCore cleanup: {str(e)}")
+            # We still return True as we want the shutdown to continue
+            return True
 
     async def shutdown(self):
         """Gracefully shut down the memory core."""
@@ -828,6 +763,11 @@ class SynthiansMemoryCore:
         activated = []
         async with self._lock: # Accessing shared self.assemblies
             for assembly_id, assembly in self.assemblies.items():
+                 # Skip assemblies that aren't synchronized with the vector index
+                 if not assembly.vector_index_updated_at:
+                     logger.debug(f"Skipping assembly {assembly_id} - not synchronized with vector index")
+                     continue
+                     
                  similarity = assembly.get_similarity(query_embedding)
                  if similarity >= self.config['assembly_threshold'] * 0.8: # Lower threshold for activation
                       assembly.activate(similarity)

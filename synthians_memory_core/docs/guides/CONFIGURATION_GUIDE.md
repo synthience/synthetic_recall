@@ -31,6 +31,14 @@ These parameters configure the main memory storage and retrieval service, typica
 | `min_quickrecal_for_ltm`        | float             | 0.2                                   | Minimum QuickRecal score required to retain a memory after decay (0.0-1.0).                                | Core                    |
 | `assembly_threshold`            | float             | 0.75                                  | Minimum similarity threshold for memories to form an assembly (0.0-1.0).                                   | Core                    |
 | `max_assemblies_per_memory`     | int               | 3                                     | Maximum number of assemblies a single memory can belong to.                                                | Core                    |
+| `enable_assembly_pruning`       | bool              | True                                  | Whether to automatically prune assemblies based on configured criteria.                                    | Core                    |
+| `assembly_prune_min_memories`   | int               | 2                                     | Minimum number of memories an assembly must contain to avoid pruning.                                      | Core                    |
+| `assembly_prune_max_idle_days`  | float             | 30.0                                  | Maximum days an assembly can remain without activation before pruning.                                     | Core                    |
+| `assembly_prune_max_age_days`   | float             | 90.0                                  | Maximum age in days before an assembly is eligible for pruning.                                           | Core                    |
+| `assembly_prune_min_activation_level` | float        | 5                                     | Minimum number of activations required for an assembly to avoid age-based pruning.                        | Core                    |
+| `enable_assembly_merging`       | bool              | True                                  | Whether to automatically merge similar assemblies.                                                        | Core                    |
+| `assembly_merge_threshold`      | float             | 0.85                                  | Similarity threshold for merging two assemblies (0.0-1.0).                                               | Core                    |
+| `assembly_max_merges_per_run`   | int               | 10                                    | Maximum number of assembly merges to perform in a single maintenance cycle.                              | Core                    |
 | `adaptive_threshold_enabled`    | bool              | True                                  | Enable adaptive similarity threshold for retrieval based on feedback.                                       | `ThresholdCalibrator`   |
 | `initial_retrieval_threshold`   | float             | 0.75                                  | Initial similarity threshold for memory retrieval (0.0-1.0).                                               | `ThresholdCalibrator`   |
 | `persistence_interval`          | float             | 60.0                                  | Seconds between automated persistence operations.                                                          | Core                    |
@@ -88,6 +96,63 @@ self.vector_index = MemoryVectorIndex({
 })
 ```
 
+### 3.3. Memory Assembly Lifecycle Management
+
+The Memory Assembly system introduced in Phase 5.8 includes automatic lifecycle management features that can be configured to maintain assembly quality and prevent unbounded growth. These features include pruning of inactive or low-quality assemblies and merging of highly similar assemblies.
+
+#### 3.3.1 Assembly Pruning
+
+Assembly pruning automatically removes assemblies that meet certain criteria during background maintenance cycles. Pruning can be configured with the following parameters:
+
+```python
+# Enable or disable automatic assembly pruning
+enable_assembly_pruning = True
+
+# Minimum number of memories required to keep an assembly
+assembly_prune_min_memories = 2
+
+# Maximum days an assembly can exist without being activated
+assembly_prune_max_idle_days = 30.0
+
+# Maximum age in days for an assembly to be automatically pruned
+assembly_prune_max_age_days = 90.0
+
+# Minimum activation count required to prevent age-based pruning
+assembly_prune_min_activation_level = 5
+```
+
+Pruning operations target the following types of assemblies:
+
+1. **Empty Assemblies**: Assemblies with no memory members
+2. **Old Idle Assemblies**: Assemblies not activated for longer than `assembly_prune_max_idle_days`
+3. **Low-Activity Old Assemblies**: Assemblies older than `assembly_prune_max_age_days` with fewer than `assembly_prune_min_activation_level` activations
+
+#### 3.3.2 Assembly Merging
+
+Assembly merging combines assemblies with highly similar composite embeddings, reducing redundancy and improving retrieval consistency. Merging can be configured with the following parameters:
+
+```python
+# Enable or disable automatic assembly merging
+enable_assembly_merging = True
+
+# Similarity threshold for merging two assemblies (0.0-1.0)
+assembly_merge_threshold = 0.85
+
+# Maximum number of merges to perform in a single maintenance cycle
+assembly_max_merges_per_run = 10
+```
+
+When assemblies are merged:
+
+1. A new assembly is created containing all memory members from both source assemblies
+2. The composite embedding is recalculated based on the combined memory set
+3. All memory-to-assembly references are updated atomically
+4. Original assemblies are removed from all storage locations
+
+#### 3.3.3 Lifecycle Management Integration
+
+Lifecycle management runs automatically as part of the `_decay_and_pruning_loop` background task, following the same interval as the memory pruning process (`prune_check_interval`). This ensures regular maintenance of the assembly store without requiring additional background threads.
+
 ## 5. Recommended Configurations
 
 ### 5.1. Memory Core Production Configuration
@@ -104,7 +169,17 @@ memory_core_config = {
     'persistence_interval': 30.0,  # More frequent saves
     'adaptive_threshold_enabled': True,
     'initial_retrieval_threshold': 0.72,  # Slightly more permissive initial threshold
-    'use_gpu_for_index': True  # Use GPU acceleration if available
+    'use_gpu_for_index': True,  # Use GPU acceleration if available
+    
+    # Assembly lifecycle management
+    'enable_assembly_pruning': True,
+    'assembly_prune_min_memories': 3,  # Higher minimum for production
+    'assembly_prune_max_idle_days': 45.0,  # More generous idle window
+    'assembly_prune_max_age_days': 120.0,  # Longer retention
+    'assembly_prune_min_activation_level': 10,  # Higher activation threshold
+    'enable_assembly_merging': True,
+    'assembly_merge_threshold': 0.88,  # More conservative merging
+    'assembly_max_merges_per_run': 5  # More conservative merging pace
 }
 ```
 

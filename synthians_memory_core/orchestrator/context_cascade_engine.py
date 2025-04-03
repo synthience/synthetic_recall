@@ -441,28 +441,36 @@ class ContextCascadeEngine:
                             nm_performance["trend_decreasing"] = combined_trend < -trend_threshold
                             nm_performance["trend_slope"] = combined_trend
                             
-                            # Add human-readable trend status for LLM consumption
+                            # Add trend status text for the prompt
                             if combined_trend > trend_threshold:
-                                nm_performance["trend_status"] = "increasing"
+                                nm_performance["trend_status"] = f"Increasing (slope: {combined_trend:.3f})"
                             elif combined_trend < -trend_threshold:
-                                nm_performance["trend_status"] = "decreasing"
+                                nm_performance["trend_status"] = f"Decreasing (slope: {combined_trend:.3f})"
                             else:
-                                nm_performance["trend_status"] = "stable"
-                                
-                            logger.debug(f"Performance trend analysis: slope={combined_trend:.4f} (status={nm_performance['trend_status']}, confidence={confidence_level})")
+                                nm_performance["trend_status"] = f"Stable (slope: {combined_trend:.3f})"
                         except Exception as e:
                             logger.warning(f"Error calculating performance trends: {e}")
-                            nm_performance["trend_status"] = "unknown"
+                            nm_performance["trend_status"] = "Unable to calculate"
                     else:
-                        nm_performance["trend_status"] = "insufficient data"
+                        nm_performance["trend_status"] = "Insufficient data for trend"
                 else:
-                    nm_performance["trend_status"] = "insufficient data"
+                    nm_performance["trend_status"] = "Not enough history for trend analysis"
+                    
+                # Get recent history for context (Phase 5.7.2 Enhancement)
+                history_context = self.sequence_context_manager.get_recent_history(10)  # Get up to 10 recent entries
+                logger.info(f"Retrieved {len(history_context)} history entries for LLM context")
                 
+                # Get blended history summary using the new method
+                history_summary = self.memory_llm_router._summarize_history_blended(history_context)
+                logger.info(f"Generated blended history summary: {len(history_summary)} chars")
+                
+                # Request LLM guidance with all context, including history
                 llm_advice = await self.memory_llm_router.request_llama_guidance(
-                    user_input=content,
+                    user_input=content[:500],  # Truncate for LLM context
                     nm_performance=nm_performance,
                     metadata=llm_context,
-                    current_variant=self.active_variant_type.value
+                    current_variant=self.active_variant_type.value,
+                    history_summary=history_summary  # New parameter
                 )
                 logger.info(f"LLM Guidance received: {json.dumps(llm_advice)}")
                 # Extract potentially useful tags to add to metadata
@@ -1458,7 +1466,19 @@ class ContextCascadeEngine:
             step_context["loss"] = update_resp["loss"]
         if "grad_norm" in update_resp:
             step_context["grad_norm"] = update_resp["grad_norm"]
-             
+             # Update projections if returned (they should match if not MAL)
+            if update_resp.get("key_projection"): step_context["k_t"] = np.array(update_resp["key_projection"], dtype=np.float32)
+            if update_resp.get("value_projection"): step_context["v_t"] = np.array(update_resp["value_projection"], dtype=np.float32)
+            response_errors = {}
+                 
+            # Update NM performance history (Phase 5.2)
+            self.nm_performance_history.append({
+                "loss": update_resp.get("loss"),
+                "grad_norm": update_resp.get("grad_norm"),
+                "timestamp": time.time(),
+                "variant": self.active_variant_type.value
+            })
+
         logger.info("Neural Memory update successful")
         return {"success": True, **update_resp}
 
@@ -1755,12 +1775,21 @@ class ContextCascadeEngine:
     async def _switch_variant_internal(self, new_variant_type: TitansVariantType, reason: str) -> bool:
         """Switches to a new Titans variant and reinitializes the variant processor.
         
+        This method allows dynamic switching between TITANS variants during runtime,
+        which can be useful for experimentation and testing. It flushes existing 
+        context to prevent cross-variant contamination, resets the variant processor,
+        and provides an audit trail of variant switches.
+        
+        Note: In multi-worker CCE deployments, this method would need additional
+        synchronization mechanisms beyond the existing processing_lock check.
+        Currently, it's designed for single-worker CCE instances only.
+        
         Args:
             new_variant_type: The new variant type to switch to
             reason: Human-readable reason for the switch
             
         Returns:
-            True if the switch was successful, False otherwise
+            bool: True if the switch was successful, False otherwise.
         """
         if new_variant_type == self.active_variant_type:
             logger.debug(f"Already using variant {new_variant_type.value}, no switch needed")

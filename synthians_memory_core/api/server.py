@@ -308,12 +308,32 @@ async def get_stats():
     """Get system statistics."""
     try:
         uptime = time.time() - app.state.startup_time
-        # Get vector index stats
-        vector_index_stats = {
-            "count": app.state.memory_core.vector_index.count(),
-            "id_mappings": len(app.state.memory_core.vector_index.id_to_index),
-            "index_type": app.state.memory_core.vector_index.config.get('index_type', 'Unknown')
-        }
+        
+        # Get vector index enhanced stats with drift information
+        vector_index_stats = await app.state.memory_core.vector_index.get_stats()
+        
+        # Add basic count stats if not already in the enhanced stats
+        if "count" not in vector_index_stats:
+            vector_index_stats["count"] = app.state.memory_core.vector_index.count()
+        if "id_mappings" not in vector_index_stats:
+            vector_index_stats["id_mappings"] = len(app.state.memory_core.vector_index.id_to_index)
+        
+        # Add index type info
+        vector_index_stats["index_type"] = app.state.memory_core.vector_index.config.get('index_type', 'Unknown')
+        
+        # Get assembly sync stats if available
+        assembly_sync_stats = {}
+        if hasattr(app.state.memory_core, "assembly_sync_manager") and app.state.memory_core.assembly_sync_manager is not None:
+            # Get pending updates count
+            pending_updates = app.state.memory_core.assembly_sync_manager.get_pending_updates()
+            assembly_sync_stats = {
+                "pending_updates_count": len(pending_updates),
+                "retry_queue_size": len(pending_updates)  # Same value, different name for backward compatibility
+            }
+            
+            # Add more detailed stats if get_stats method exists
+            if hasattr(app.state.memory_core.assembly_sync_manager, "get_stats"):
+                assembly_sync_stats.update(app.state.memory_core.assembly_sync_manager.get_stats())
         
         return {
             "success": True,  # Add success field
@@ -330,7 +350,8 @@ async def get_stats():
                 "storage_path": app.state.memory_core.config.get('storage_path', '/app/memory/stored/synthians'),
                 "threshold": app.state.memory_core.config.get('contradiction_threshold', 0.75),
             },
-            "vector_index": vector_index_stats
+            "vector_index": vector_index_stats,
+            "assembly_sync": assembly_sync_stats
         }
     except Exception as e:
         logger.error("get_stats", f"Error retrieving stats: {str(e)}")
@@ -959,6 +980,20 @@ async def get_assembly(assembly_id: str):
                         "quickrecal_score": memory.quickrecal_score
                     })
             
+            # Get synchronization diagnostics
+            sync_diagnostics = {}
+            if hasattr(assembly, "get_sync_diagnostics"):
+                sync_diagnostics = assembly.get_sync_diagnostics()
+            
+            # Calculate if assembly is synchronized
+            is_synchronized = False
+            if assembly.vector_index_updated_at is not None:
+                from datetime import datetime, timezone, timedelta
+                now = datetime.now(timezone.utc)
+                # Consider assemblies synced within the last 24 hours as synchronized
+                max_allowed_drift = timedelta(hours=24) 
+                is_synchronized = (now - assembly.vector_index_updated_at) < max_allowed_drift
+            
             return {
                 "success": True,
                 "assembly_id": assembly_id,
@@ -966,7 +1001,11 @@ async def get_assembly(assembly_id: str):
                 "memory_count": len(assembly.memories),
                 "last_activation": assembly.last_activation,
                 "sample_memories": memories,
-                "total_memories": len(memory_ids)
+                "total_memories": len(memory_ids),
+                # Add synchronization information
+                "vector_index_updated_at": assembly.vector_index_updated_at,
+                "is_synchronized": is_synchronized,
+                "drift_seconds": sync_diagnostics.get("drift_seconds", None)
             }
     except Exception as e:
         logger.error("get_assembly", f"Error: {str(e)}")
@@ -1038,6 +1077,91 @@ async def update_quickrecal_score(request: UpdateQuickRecalScoreRequest):
     except Exception as e:
         logger.error("API", f"Error updating quickrecal score: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to update quickrecal score: {str(e)}")
+
+# --- Index Integrity and Repair Endpoints ---
+
+@app.get("/check_index_integrity", response_model=Dict[str, Any])
+async def check_index_integrity():
+    """
+    Check the integrity of the FAISS vector index and return detailed drift statistics.
+    
+    This endpoint verifies synchronization between the FAISS index and ID mappings,
+    providing comprehensive drift metrics for monitoring system health.
+    
+    Returns:
+        Dict containing integrity check results with drift statistics:
+        - success: Whether the check completed successfully
+        - is_healthy: Boolean indicating if the index is in a healthy state
+        - drift_count: Number of discrepancies between index and mappings
+        - drift_warning: Boolean flag if drift exceeds warning threshold
+        - drift_critical: Boolean flag if drift exceeds critical threshold
+        - faiss_count: Number of vectors in the FAISS index
+        - mapping_count: Number of entries in ID mapping
+        - error: Error message if the check failed
+    """
+    try:
+        logger.info("Performing FAISS index integrity check")
+        
+        # Get stats which include drift metrics
+        stats = app.state.memory_core.vector_index.get_stats()
+        
+        # Determine health based on drift metrics
+        is_healthy = True
+        if stats.get("drift_warning", False) or stats.get("drift_critical", False):
+            is_healthy = False
+            logger.warning(f"Index integrity check indicates unhealthy state: {stats}")
+        
+        return {
+            "success": True,
+            "is_healthy": is_healthy,
+            **stats
+        }
+    except Exception as e:
+        logger.error(f"Error checking index integrity: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/repair_index", response_model=Dict[str, Any])
+async def repair_index():
+    """
+    Repair the FAISS vector index by synchronizing with ID mappings.
+    
+    This endpoint attempts to restore consistency between the FAISS index and its ID mappings
+    by rebuilding the index if necessary. Part of Phase 5.8 stability improvements.
+    
+    Returns:
+        Dict containing repair results:
+        - success: Whether the repair was successful
+        - repaired: Whether any repairs were actually made
+        - before_stats: Index statistics before repair
+        - after_stats: Index statistics after repair
+        - error: Error message if repair failed
+    """
+    try:
+        logger.info("Starting FAISS index repair procedure")
+        
+        # Get stats before repair
+        before_stats = app.state.memory_core.vector_index.get_stats()
+        
+        # Perform repair operation
+        # Attempt to synchronize the index with mappings
+        repaired = app.state.memory_core.vector_index.repair_index()
+        
+        # Get stats after repair
+        after_stats = app.state.memory_core.vector_index.get_stats()
+        
+        logger.info(f"Index repair complete. Repaired: {repaired}")
+        logger.info(f"Before: {before_stats}")
+        logger.info(f"After: {after_stats}")
+        
+        return {
+            "success": True,
+            "repaired": repaired,
+            "before_stats": before_stats,
+            "after_stats": after_stats
+        }
+    except Exception as e:
+        logger.error(f"Error repairing index: {str(e)}")
+        return {"success": False, "error": str(e)}
 
 # Run the server when the module is executed directly
 if __name__ == "__main__":

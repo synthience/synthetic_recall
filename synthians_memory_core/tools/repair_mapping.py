@@ -13,6 +13,7 @@ import logging
 import hashlib
 import numpy as np
 from pathlib import Path
+import argparse
 
 # Add parent directory to path to allow importing modules
 parent_dir = Path(__file__).resolve().parent.parent.parent
@@ -52,18 +53,19 @@ def scan_memory_files(memory_dir):
     return id_mapping
 
 
-def save_mapping(id_mapping, storage_path):
+def save_mapping(id_mapping, mapping_file_path):
     """Save ID mapping to a JSON file.
     
     Args:
         id_mapping: Dictionary mapping memory IDs to their numeric IDs
-        storage_path: Path to save the mapping file
+        mapping_file_path: Full path to save the mapping file
         
     Returns:
         bool: True if successful, False otherwise
     """
     try:
-        mapping_path = os.path.join(storage_path, 'faiss_index.bin.mapping.json')
+        # Create parent directory if it doesn't exist
+        os.makedirs(os.path.dirname(mapping_file_path), exist_ok=True)
         
         # Create a serializable copy of the mapping
         serializable_mapping = {}
@@ -78,108 +80,64 @@ def save_mapping(id_mapping, storage_path):
             serializable_mapping[key] = value
         
         # Write the mapping to a file
-        with open(mapping_path, 'w') as f:
+        with open(mapping_file_path, 'w') as f:
             json.dump(serializable_mapping, f, indent=2)
         
-        logger.info(f"Saved {len(serializable_mapping)} ID mappings to {mapping_path}")
+        logger.info(f"Saved {len(serializable_mapping)} ID mappings to {mapping_file_path}")
         return True
     except Exception as e:
         logger.error(f"Error saving ID mapping: {str(e)}")
         return False
 
 
-def find_storage_path():
-    """Find the storage path by looking for common directory structures."""
-    possible_config_paths = [
-        os.path.join(parent_dir, 'synthians_memory_core', 'config', 'core_config.json'),
-        os.path.join(parent_dir, 'config', 'core_config.json'),
-        os.path.join(parent_dir, 'core_config.json')
-    ]
-    
-    # Try to find a config file
-    for config_path in possible_config_paths:
-        if os.path.exists(config_path):
-            logger.info(f"Found config file at {config_path}")
-            try:
-                with open(config_path, 'r') as f:
-                    config = json.load(f)
-                storage_path = config.get('storage_path')
-                if storage_path:
-                    return storage_path
-            except Exception as e:
-                logger.warning(f"Error reading config file {config_path}: {str(e)}")
-    
-    # If no config file found, try common storage paths
-    possible_storage_paths = [
-        os.path.join(parent_dir, 'storage'),
-        os.path.join(parent_dir, 'synthians_memory_core', 'storage'),
-        os.path.join(parent_dir, 'data', 'storage'),
-    ]
-    
-    for path in possible_storage_paths:
-        if os.path.exists(path):
-            logger.info(f"Found storage directory at {path}")
-            return path
-    
-    # Last resort: Just use a path in the current directory
-    default_path = os.path.join(parent_dir, 'storage')
-    os.makedirs(default_path, exist_ok=True)
-    logger.warning(f"No storage path found, using default: {default_path}")
-    return default_path
-
-
-def main():
-    """Main function to repair ID mapping."""
-    try:
-        # Find storage path without relying on config
-        storage_path = find_storage_path()
-        logger.info(f"Using storage path: {storage_path}")
-        
-        # Look for memories directory
-        memories_path = os.path.join(storage_path, 'memories')
-        if not os.path.exists(memories_path):
-            # Try to find the memories directory
-            for root, dirs, _ in os.walk(storage_path):
-                for dir_name in dirs:
-                    if dir_name == 'memories':
-                        memories_path = os.path.join(root, dir_name)
-                        break
-                if os.path.exists(memories_path):
-                    break
-        
-        if not os.path.exists(memories_path):
-            logger.warning("Could not find 'memories' directory, creating one")
-            os.makedirs(memories_path, exist_ok=True)
-        
-        logger.info(f"Using memories path: {memories_path}")
-        
-        # Scan memory files to rebuild ID mapping
-        id_mapping = scan_memory_files(memories_path)
-        
-        # Save mapping
-        success = save_mapping(id_mapping, storage_path)
-        
-        if success:
-            logger.info(f"Successfully rebuilt ID mapping with {len(id_mapping)} entries")
-            
-            # Print instructions for restarting the server
-            logger.info("""\n===========================================================\n
-\
-ID mapping has been repaired. Please restart the server to load the fixed mapping.\n\
-If problems persist, run the following in Python:\n\
-    from synthians_memory_core.synthians_memory_core import SynthiansMemoryCore\n\
-    import asyncio\n\
-    asyncio.run(SynthiansMemoryCore().repair_index('recreate_mapping'))\n\
-===========================================================\n""")
-        else:
-            logger.error("Failed to rebuild ID mapping")
-    
-    except Exception as e:
-        logger.error(f"Error during ID mapping repair: {str(e)}")
-        return 1
-    
-    return 0
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Repair the Synthians Memory Core ID mapping file")
+    parser.add_argument(
+        "--storage-path", 
+        type=str, 
+        required=True,
+        help="Path to the storage directory containing the 'stored' folder"
+    )
+    parser.add_argument(
+        "--corpus", 
+        type=str, 
+        default="synthians",
+        help="Corpus name (default: synthians)"
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    args = parse_args()
+    
+    storage_path = args.storage_path
+    corpus = args.corpus
+    
+    # Construct paths based on arguments
+    base_path = os.path.join(storage_path, "stored", corpus)
+    memory_dir = os.path.join(base_path, "memories")
+    mapping_file_path = os.path.join(base_path, "faiss_index.bin.mapping.json")
+
+    if not os.path.isdir(storage_path):
+        logger.error(f"Storage path does not exist or is not a directory: {storage_path}")
+        sys.exit(1)
+        
+    if not os.path.isdir(memory_dir):
+        logger.error(f"Memory directory does not exist within storage path: {memory_dir}")
+        logger.error(f"Ensure storage path '{storage_path}' contains 'stored/{corpus}/memories/' structure.")
+        sys.exit(1)
+
+    logger.info(f"Scanning memory files in: {memory_dir}")
+    id_mapping = scan_memory_files(memory_dir)
+
+    if id_mapping:
+        logger.info(f"Rebuilt ID mapping with {len(id_mapping)} entries.")
+        success = save_mapping(id_mapping, mapping_file_path)
+        if success:
+            logger.info("✅ Successfully repaired and saved the ID mapping.")
+        else:
+            logger.error("❌ Failed to save the repaired ID mapping.")
+            sys.exit(1)
+    else:
+        logger.warning("⚠️ No memory files found to build mapping. Mapping file not created/updated.")

@@ -1,4 +1,6 @@
-Okay, Phase 3 is complete, and the core bi-hemispheric loop is functional! Now, let's plan for Phase 4: **Implementing Titans Architecture Variants (MAC, MAG, MAL)**.
+## Phase 4: Implementing Titans Architecture Variants (MAC, MAG, MAL)
+
+### Overview
 
 This phase involves integrating attention mechanisms with the Neural Memory module, as described in Section 4 of the Titans paper, to enhance its capabilities.
 

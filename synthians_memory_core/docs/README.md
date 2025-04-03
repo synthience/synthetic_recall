@@ -31,7 +31,91 @@ This documentation provides comprehensive details on the system's architecture, 
 2.  Explore the **[Component Guide](./COMPONENT_GUIDE.md)** for details on individual parts.
 3.  If interacting programmatically, consult the **[API Reference & Client Usage](./api/README.md)**.
 4.  For setup and development workflows, see the **[Guides](./guides/README.md)**.
-
+## ARCHITECTURE OVERVIEW
 ---
+graph TD
+    subgraph "User/External Systems"
+        ClientApp[Client Application / Other Services]
+    end
 
+    subgraph "API Layer (FastAPI)"
+        APIServer[API Server (server.py)]
+        APIEndpoints[Endpoints (/process_memory, /retrieve_memories, etc.)]
+        EmbeddingModel[Embedding Model (SentenceTransformer)]
+        EmotionAnalyzerAPI[Emotion Analyzer (local/service)]
+        TranscriptionExtractorAPI[Transcription Feature Extractor]
+    end
+
+    subgraph "Orchestration Layer (Context Cascade Engine - CCE)"
+        Orchestrator[ContextCascadeEngine (orchestrator/context_cascade_engine.py)]
+        VariantSelector[VariantSelector]
+        MemoryLLMRouter[MemoryLLMRouter]
+        PerformanceTracker[NM Performance Tracker]
+    end
+
+    subgraph "Memory Core Layer (SynthiansMemoryCore - MC)"
+        MemoryCore[SynthiansMemoryCore (synthians_memory_core.py)]
+        Persistence[MemoryPersistence (memory_persistence.py)]
+        VectorIndex[Vector Index (FAISS via vector_index.py)]
+        QuickRecallCalc[UnifiedQuickRecallCalculator (hpc_quickrecal.py)]
+        GeometryMgr[GeometryManager (geometry_manager.py)]
+        ThresholdCalib[ThresholdCalibrator (adaptive_components.py)]
+        MetadataSynth[MetadataSynthesizer (tools.py - implied)]
+        TrainerIntegration[TrainerIntegrationManager (memory_core/trainer_integration.py)]
+        InterruptionHandler[InterruptionAwareMemoryHandler (interruption.py)]
+        MemoryStructures[MemoryEntry / MemoryAssembly (memory_structures.py)]
+        Utils[Utilities (custom_logger.py, etc.)]
+    end
+
+    subgraph "External Services"
+        NeuralMemory[Neural Memory (Trainer Server - Separate Service)]
+        LLMService[LLM Guidance Service (e.g., Llama 3.2)]
+    end
+
+    %% Connections
+    ClientApp -- HTTP Request --> APIEndpoints
+    APIEndpoints -- Calls --> APIServer
+
+    %% API Server Internal Dependencies
+    APIServer -- Uses --> EmbeddingModel
+    APIServer -- Uses --> EmotionAnalyzerAPI
+    APIServer -- Uses --> TranscriptionExtractorAPI
+
+    %% API to Orchestrator/Core Interaction (Based on Cheat Sheet)
+    APIServer -- Request --> Orchestrator
+
+    %% Orchestrator Interactions (Based on Cheat Sheet)
+    Orchestrator -- Manages --> MemoryCore
+    Orchestrator -- Manages --> NeuralMemory
+    Orchestrator -- Uses --> VariantSelector
+    Orchestrator -- Uses --> MemoryLLMRouter
+    Orchestrator -- Uses --> PerformanceTracker
+    Orchestrator -- Gets Guidance --> LLMService
+    Orchestrator -- Sends Updates/Retrievals --> TrainerIntegration
+
+    %% Memory Core Internal Interactions
+    MemoryCore -- Manages --> MemoryStructures
+    MemoryCore -- Uses --> QuickRecallCalc
+    MemoryCore -- Uses --> GeometryMgr
+    MemoryCore -- Uses --> Persistence
+    MemoryCore -- Uses --> ThresholdCalib
+    MemoryCore -- Uses --> MetadataSynth
+    MemoryCore -- Uses --> TrainerIntegration
+    MemoryCore -- Uses --> InterruptionHandler
+    MemoryCore -- Uses --> Utils
+    
+    Persistence -- Interacts --> VectorIndex
+    GeometryMgr -- May Use --> EmbeddingModel
+    QuickRecallCalc -- Uses --> GeometryMgr
+    QuickRecallCalc -- Uses --> EmotionAnalyzerAPI
+    TrainerIntegration -- HTTP API Calls --> NeuralMemory
+
+    %% Implicit Dependencies
+    MetadataSynth -- Uses --> EmotionAnalyzerAPI
+
+    %% Components used by API directly (or via Core)
+    APIServer -- Feedback --> ThresholdCalib
+    APIServer -- Retrieval/Processing --> MemoryCore
+    APIServer -- Calculation --> QuickRecallCalc
+    APIServer -- Analysis --> EmotionAnalyzerAPI 
 *This documentation is actively maintained alongside the codebase.*

@@ -17,6 +17,24 @@ MC_URL = "http://localhost:5010"
 NM_URL = "http://localhost:8001"
 CCE_URL = "http://localhost:8002"
 
+# --- OpenMP Environment Variable Fixture ---
+@pytest.fixture(autouse=True)
+def setup_omp_env():
+    """Set up OpenMP environment variable to avoid runtime conflicts."""
+    # Save original value if it exists
+    original_value = os.environ.get("KMP_DUPLICATE_LIB_OK", None)
+    
+    # Set the environment variable
+    os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+    
+    yield
+    
+    # Restore original value or remove if it wasn't set
+    if original_value is not None:
+        os.environ["KMP_DUPLICATE_LIB_OK"] = original_value
+    else:
+        os.environ.pop("KMP_DUPLICATE_LIB_OK", None)
+
 # --- Health Check Fixture (Function-Scoped) ---
 @pytest_asyncio.fixture(autouse=False)  # Not auto-using by default to avoid affecting other tests
 async def check_services_responsive(request):

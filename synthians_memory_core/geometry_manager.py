@@ -132,6 +132,53 @@ class GeometryManager:
 
         return aligned_a, aligned_b
 
+    def _align_vector(self, vector: np.ndarray, target_dim: int) -> Optional[np.ndarray]:
+        """Align a single vector to the specified target dimension.
+        
+        This uses the configured alignment strategy (pad/truncate) to resize the vector.
+        
+        Args:
+            vector: The vector to align
+            target_dim: The target dimension to align to
+            
+        Returns:
+            The aligned vector or None if validation fails
+        """
+        # Validate input
+        vector = self._validate_vector(vector, "Vector to align")
+        if vector is None:
+            return None
+            
+        dim = vector.shape[0]
+        if dim == target_dim:
+            return vector  # Already aligned
+            
+        # Log warning about dimension mismatch
+        if self.dim_mismatch_warnings < self.max_dim_mismatch_warnings:
+            logger.warning("GeometryManager", f"Vector dimension mismatch: got {dim}, expected {target_dim}. Applying strategy: {self.config['alignment_strategy']}")
+            self.dim_mismatch_warnings += 1
+            if self.dim_mismatch_warnings == self.max_dim_mismatch_warnings:
+                logger.warning("GeometryManager", "Max dimension mismatch warnings reached.")
+                
+        strategy = self.config['alignment_strategy']
+        
+        # Apply alignment strategy
+        if strategy == 'pad':
+            if dim < target_dim:
+                return np.pad(vector, (0, target_dim - dim))
+            else:  # Truncate if padding isn't the strategy and dim > target
+                return vector[:target_dim]
+        elif strategy == 'truncate':
+            if dim > target_dim:
+                return vector[:target_dim]
+            else:  # Pad if truncating isn't the strategy and dim < target
+                return np.pad(vector, (0, target_dim - dim))
+        else:  # Default to truncate/pad based on relative size
+            if dim > target_dim:
+                return vector[:target_dim]
+            else:
+                return np.pad(vector, (0, target_dim - dim))
+
     def _align_vectors(self, vec_a: np.ndarray, vec_b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Backward compatibility method that forwards to align_vectors.
         

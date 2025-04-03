@@ -221,6 +221,36 @@ class VoiceStateManager:
         self._room = room
         await self.setup_tts_track(room)
 
+    async def setup_tts_track(self, room: rtc.Room) -> None:
+        """Set up TTS track for audio output through LiveKit."""
+        try:
+            # First clean up any existing track to prevent resource leaks
+            await self.cleanup_tts_track()
+            
+            # Create a new audio source and track
+            self.logger.info("Setting up TTS audio track")
+            # Standard audio parameters for voice communications
+            sample_rate = 48000  # 48kHz is common for high-quality voice
+            num_channels = 1     # Mono is typically used for voice
+            
+            self._tts_source = rtc.AudioSource(sample_rate=sample_rate, num_channels=num_channels)
+            
+            # Create a local audio track from the source
+            self._tts_track = rtc.LocalAudioTrack.create_audio_track("tts-output", self._tts_source)
+            
+            # Publish the track to the room
+            if self._room and self._room.local_participant:
+                self.logger.info("Publishing TTS track")
+                await self._room.local_participant.publish_track(self._tts_track)
+                self.logger.info("TTS track published successfully")
+        except Exception as e:
+            self._last_error = str(e)
+            self.logger.error(f"Error setting up TTS track: {e}", exc_info=True)
+            # Clean up in case of partial setup
+            await self.cleanup_tts_track()
+            # Re-raise to allow proper error handling
+            raise
+
     def on(self, event_name: str, handler: Optional[Callable] = None) -> Callable:
         """Register an event handler, with optional decorator usage."""
         def decorator(func):

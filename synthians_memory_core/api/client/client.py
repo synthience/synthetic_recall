@@ -34,12 +34,16 @@ class SynthiansClient:
         async with self.session.get(f"{self.base_url}/stats") as response:
             return await response.json()
     
-    async def process_memory(self, content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def process_memory(self, content: str, metadata: Optional[Dict[str, Any]] = None, embedding: Optional[List[float]] = None) -> Dict[str, Any]:
         """Process and store a new memory."""
         payload = {
             "content": content,
             "metadata": metadata or {}
         }
+        # Add embedding if provided
+        if embedding is not None:
+            payload["embedding"] = embedding
+            
         async with self.session.post(
             f"{self.base_url}/process_memory", json=payload
         ) as response:
@@ -134,6 +138,14 @@ class SynthiansClient:
             
         async with self.session.post(
             f"{self.base_url}/process_transcription", json=payload
+        ) as response:
+            return await response.json()
+    
+    async def repair_index(self, repair_type: str = "auto") -> Dict[str, Any]:
+        """Repair the vector index."""
+        payload = {"repair_type": repair_type}
+        async with self.session.post(
+            f"{self.base_url}/repair_index", json=payload
         ) as response:
             return await response.json()
 
