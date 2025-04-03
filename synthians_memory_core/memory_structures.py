@@ -320,7 +320,7 @@ class MemoryAssembly:
             # Validate embedding before adding to index
             validated_embedding = self.geometry_manager._validate_vector(
                 self.composite_embedding, 
-                f"Assembly {self.assembly_id} Composite Embedding"
+                f"Assembly {self.assembly_id} Composite Emb"
             )
             
             if validated_embedding is None:
@@ -417,6 +417,7 @@ class MemoryAssembly:
             bool: True if the assembly is synchronized, False otherwise
         """
         if self.vector_index_updated_at is None:
+            logger.debug(f"Assembly {self.assembly_id} has no sync timestamp")
             return False
             
         # Calculate drift in seconds
@@ -424,11 +425,13 @@ class MemoryAssembly:
         drift_seconds = (now - self.vector_index_updated_at).total_seconds()
         
         # Check if drift is within acceptable range
-        return drift_seconds <= max_allowed_drift_seconds
-        
+        is_synced = drift_seconds <= max_allowed_drift_seconds
+        logger.debug(f"Assembly {self.assembly_id} sync check: drift={drift_seconds:.1f}s, max={max_allowed_drift_seconds}s, result={is_synced}")
+        return is_synced
+
     def boost_memory_score(self, memory_id: str, base_score: float, 
-                          boost_mode: str = "linear", boost_factor: float = 0.3,
-                          max_allowed_drift_seconds: int = 3600) -> float:
+                           boost_mode: str = "linear", boost_factor: float = 0.3,
+                           max_allowed_drift_seconds: int = 3600) -> float:
         """Boost a memory's relevance score based on assembly activation, if synchronized.
         
         This method implements the Phase 5.8 boosting logic to enhance memory retrieval
@@ -447,20 +450,32 @@ class MemoryAssembly:
         """
         # Only boost if memory is part of this assembly
         if memory_id not in self.memories:
+            logger.debug(f"Memory {memory_id} not in assembly {self.assembly_id}, no boost applied")
             return base_score
             
-        # Only boost if assembly is properly synchronized
-        if not self.is_synchronized(max_allowed_drift_seconds):
-            # Log this event for diagnostic purposes if assembly has high activation
-            if self.activation_level > 0.3:
-                logger.warning(
-                    f"Assembly {self.assembly_id} has activation {self.activation_level:.2f} "
-                    f"but is not synchronized (last update: {self.vector_index_updated_at})"
-                )
+        # Check synchronization status based on allowed drift
+        if self.vector_index_updated_at is None:
+            logger.debug(f"Assembly {self.assembly_id} has no sync timestamp, no boost applied")
+            return base_score
+            
+        # Calculate drift in seconds
+        now = datetime.now(timezone.utc)
+        drift_seconds = (now - self.vector_index_updated_at).total_seconds()
+        
+        # Add a small epsilon (0.1 second) to account for floating point precision issues
+        epsilon = 0.1
+        
+        # Check if drift is within acceptable range
+        if drift_seconds > (max_allowed_drift_seconds + epsilon):
+            logger.debug(
+                f"Assembly {self.assembly_id} not synchronized for boosting. "
+                f"Drift: {drift_seconds:.3f}s exceeds max allowed: {max_allowed_drift_seconds}s"
+            )
             return base_score
             
         # Only boost if assembly has meaningful activation
         if self.activation_level <= 0.01:
+            logger.debug(f"Assembly {self.assembly_id} activation too low ({self.activation_level:.2f}), no boost applied")
             return base_score
             
         # Calculate boost based on mode
@@ -480,13 +495,13 @@ class MemoryAssembly:
         boosted_score = base_score + boost
         clamped_score = max(0.0, min(1.0, boosted_score))
         
-        # Log if significant boost was applied
-        if boosted_score > base_score + 0.05:
-            logger.debug(
-                f"Assembly {self.assembly_id[:8]} boosted memory {memory_id[:8]} "
-                f"from {base_score:.3f} to {clamped_score:.3f} "
-                f"(activation: {self.activation_level:.2f})"
-            )
+        # Always log boost application for debugging
+        logger.debug(
+            f"Assembly {self.assembly_id[:8]} boosting memory {memory_id[:8]} "
+            f"from {base_score:.3f} to {clamped_score:.3f} "
+            f"(activation: {self.activation_level:.3f}, boost: {boost:.3f}, "
+            f"drift: {drift_seconds:.3f}s, max allowed: {max_allowed_drift_seconds}s)"
+        )
             
         return clamped_score
 

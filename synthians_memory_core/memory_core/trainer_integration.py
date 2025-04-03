@@ -269,4 +269,8 @@ class TrainerIntegrationManager:
                 
             return result
         else:
-            return {"status": "error", "message": f"Failed to update quickrecal score for memory {memory_id}"}
+            # Raise exception instead of returning error dict to ensure
+            # proper propagation to API error handlers
+            error_msg = f"Failed to update quickrecal score for memory {memory_id} in core."
+            logger.error(f"[TrainerIntegration] {error_msg}")
+            raise RuntimeError(error_msg)

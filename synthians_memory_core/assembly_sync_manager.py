@@ -290,3 +290,32 @@ class AssemblySyncManager:
                 for assembly_id, info in self.pending_updates.items()
             ]
         }
+    
+    async def process_pending_updates(self, vector_index=None) -> int:
+        """Process all pending updates immediately (used mainly for testing).
+        
+        Args:
+            vector_index: Optional vector index to use for synchronization. If not provided,
+                          the manager's configured vector index will be used.
+                          
+        Returns:
+            int: Number of assemblies that were processed
+        """
+        if not vector_index:
+            vector_index = self.vector_index
+            
+        if not vector_index:
+            logger.error("No vector index available for processing pending updates")
+            return 0
+            
+        # Make a list of all pending assemblies to process
+        async with self.update_lock:
+            assembly_ids = list(self.pending_updates.keys())
+        
+        processed_count = 0
+        for assembly_id in assembly_ids:
+            await self._process_retry(assembly_id)
+            processed_count += 1
+            
+        logger.info(f"Manually processed {processed_count} pending assembly updates")
+        return processed_count
