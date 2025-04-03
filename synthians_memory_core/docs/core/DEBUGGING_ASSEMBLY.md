@@ -1,9 +1,5 @@
 
-
-
-
 ---
-
 ## Deep Dive Documentation: Debugging `test_assembly_persistence_integrity`
 
 **Initial State:**
@@ -71,6 +67,116 @@ The core strategy involved:
     *   **Fix (in `test_phase_5_8_stability.py`):** Changed the assertion to compare the `tags` set to a `set` literal: `assert loaded_assembly.tags == {"test", "integrity"}`.
     *   **Outcome:** Final assertion passed.
 
+**Assembly Activation Issues**
+
+### Debugging Memory Assemblies
+
+#### Common Assembly Processing Issues
+
+This document provides troubleshooting guidance for common issues with Memory Assembly activation and boosting in the Synthians Memory Core.
+
+#### Recent Issues Fixed
+
+##### Assembly Activation AttributeError
+
+**Symptom:** Tests fail with AttributeError: 'SynthiansMemoryCore' object has no attribute 'assembly_threshold'
+
+**Root Cause:** The code was trying to access `self.assembly_threshold` directly as an instance attribute, but it's actually stored in the `self.config` dictionary.
+
+**Solution:** 
+```python
+# Incorrect
+if similarity < self.assembly_threshold:
+    # ...
+
+# Corrected
+assembly_threshold = self.config.get('assembly_threshold', 0.0001)  # Default value as fallback
+if similarity < assembly_threshold:
+    # ...
+```
+
+##### Missing Assembly Drift Calculation
+
+**Symptom:** Assembly drift checking fails with inconsistent variable references
+
+**Root Cause:** The time variables for calculating drift were inconsistently defined and referenced
+
+**Solution:**
+```python
+# Define the time variables once at the beginning of the method
+now = datetime.now(timezone.utc)
+drift_limit = self.config.get('max_allowed_drift_seconds', 3600)  # Default 1 hour
+max_activation_time = now - timedelta(seconds=drift_limit)
+
+# Then use consistently in the drift check
+if assembly.vector_index_updated_at < max_activation_time:
+    # Skip assembly due to drift
+```
+
+##### No Assembly Candidates Found
+
+**Symptom:** Log message "Found 0 candidates from assembly activation" despite assemblies being successfully activated
+
+**Root Cause:** 
+1. The threshold for using assemblies (`activation_score > 0.2`) was too high
+2. No proper checking if assembly had valid memories
+
+**Solution:**
+```python
+# Enhanced checking for assemblies
+for assembly, activation_score in activated_assemblies[:5]:
+    if activation_score > 0.01:  # Lower threshold
+        if hasattr(assembly, 'memories') and assembly.memories:
+            assembly_candidates.update(assembly.memories)
+        else:
+            logger.warning(f"[Candidate Gen] Assembly has no memories or memories attribute is missing")
+```
+
+#### Debugging Assembly Activation with Logging
+
+Enhanced logging has been added to trace the assembly activation process:
+
+```python
+# Assembly search results
+logger.debug(f"[Assembly Debug] Query embedding snippet: {query_embedding[:5]}")
+logger.debug(f"[Assembly Debug] Assembly activation threshold: {assembly_threshold}")
+
+# Examining each potential assembly
+logger.debug(f"[ACTIVATE_DBG] Examining result: ID='{asm_id_with_prefix}', Sim={similarity:.4f}")
+logger.debug(f"[ACTIVATE_DBG] Extracted assembly_id: '{assembly_id}'")
+logger.debug(f"[ACTIVATE_DBG] Assembly '{assembly_id}' present in self.assemblies? {assembly_present_in_dict}")
+
+# Synchronization checks
+logger.debug(f"[ACTIVATE_DBG] Checking sync for '{assembly_id}': updated_at={assembly.vector_index_updated_at}")
+logger.debug(f"[ACTIVATE_DBG] Checking drift for '{assembly_id}': drift={drift_seconds:.2f}s, limit={drift_limit}s")
+
+# Success notification
+logger.debug(f"[ACTIVATE_DBG] ACTIVATE SUCCESS for '{assembly_id}'")
+```
+
+#### Tips for Testing Assembly Activation
+
+1. **Add Debug Logging:** Add the `[ACTIVATE_DBG]` prefix to debug logs for easy filtering
+
+2. **Check Thresholds:** Ensure assembly_threshold is appropriate for your similarity calculation method (L2 vs Cosine)
+
+3. **Verify Vector Index:** Explicitly add assembly embeddings to the vector index in tests:
+   ```python
+   # Test assembly creation
+   assembly = MemoryAssembly(...)
+   
+   # Explicitly add to vector index
+   vector_add_result = await memory_core.vector_index.add_async(f"asm:{assembly.assembly_id}", assembly.composite_embedding)
+   assert vector_add_result, "Failed to add assembly to vector index"
+   
+   # Update timestamp to mark as synchronized
+   assembly.vector_index_updated_at = datetime.now(timezone.utc)
+   ```
+
+4. **Validate Similarity Calculation:** For L2 distance, lower values mean higher similarity - ensure the similarity conversion is correct
+
+5. **Inspect Candidate Generation:** Add detailed logging to see which assemblies contribute memories to the candidate pool
+
 **Final Result:**
 
 `test_assembly_persistence_integrity` now **PASSED** successfully when run individually and *without* the `KMP_DUPLICATE_LIB_OK=TRUE` workaround flag. This indicates the persistence layer's asynchronous file handling and object serialization/deserialization logic is correct and non-blocking.
@@ -80,5 +186,3 @@ The core strategy involved:
 While this specific test now passes reliably, the initial `OMP: Error #15` crash indicates an underlying OpenMP runtime conflict in the environment. This conflict **must still be properly resolved** (e.g., using Conda, or carefully managing pip installs with `intel-openmp`) to ensure the overall stability and numerical correctness of the application, especially for operations involving NumPy and FAISS in other tests or the main application code. Failure to do so may lead to unpredictable hangs, crashes, or silent errors in other parts of the system.
 
 ---
-
-This documentation captures the iterative debugging journey and the specific fixes applied. Congratulations again on squashing those bugs!

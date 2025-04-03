@@ -10,7 +10,7 @@ import uuid
 import json
 import os
 import datetime as dt
-from datetime import timezone, datetime # Ensure datetime is imported directly
+from datetime import timezone, datetime, timedelta # Ensure datetime is imported directly
 import copy
 import traceback # Import traceback for detailed error logging
 import math
@@ -148,11 +148,50 @@ class SynthiansMemoryCore:
         logger.info("SynthiansMemoryCore", "Core components initialized.")
 
     async def initialize(self):
-        """Initialize the memory core components."""
-        # Initialization code specific to your implementation
-        logger.info("Initializing SynthiansMemoryCore components")
-        # Initialize persistence, vector index, etc.
-        return True
+        """Initialize the memory core components asynchronously."""
+        if self._initialized:
+            logger.info("SynthiansMemoryCore already initialized.")
+            return True
+
+        logger.info("Initializing SynthiansMemoryCore components...")
+        try:
+            # Initialize Persistence first (loads the memory index file)
+            if self.persistence:
+                await self.persistence.initialize()
+                logger.info("MemoryPersistence initialized.")
+            else:
+                logger.error("Persistence component is None during initialization!")
+                return False  # Cannot proceed without persistence
+
+            # Initialize Vector Index (loads FAISS index and mapping)
+            if self.vector_index:
+                initialized_ok = await self.vector_index.initialize()
+                if not initialized_ok:
+                    logger.error("Vector Index initialization failed!")
+                    # Decide if core can run without vector index (likely not)
+                    return False  # Fail initialization if vector index fails
+                logger.info("MemoryVectorIndex initialized.")
+            else:
+                logger.error("Vector Index component is None during initialization!")
+                return False  # Cannot proceed without vector index
+
+            # TODO: Load memories from persistence into cache if needed?
+            # (Currently done on demand by get_memory_by_id_async)
+
+            # TODO: Start background tasks if not disabled
+            # if not os.environ.get("DISABLE_BACKGROUND", "false").lower() in ("true", "1"):
+            #     self._start_background_tasks()
+
+            self._initialized = True
+            logger.info("SynthiansMemoryCore initialization complete.")
+            return True
+
+        except Exception as e:
+            logger.error(f"Critical error during SynthiansMemoryCore initialization: {e}", exc_info=True)
+            self._initialized = False  # Ensure it's marked as not initialized
+            if hasattr(self, 'vector_index') and self.vector_index:
+                 self.vector_index.state = "ERROR"  # Mark index state explicitly
+            return False
 
     async def cleanup(self):
         """Clean up resources before shutdown.
@@ -370,7 +409,7 @@ class SynthiansMemoryCore:
         # 9. Add to vector index for fast retrieval
         if normalized_embedding is not None and self.vector_index is not None:
             logger.debug("Adding memory to vector index...")
-            added_to_index = await self.vector_index.add(memory.id, normalized_embedding)
+            added_to_index = await self.vector_index.add_async(memory.id, normalized_embedding)
             if not added_to_index:
                 logger.error(f"Failed to add memory {memory.id} to vector index.")
                 return None
@@ -445,7 +484,7 @@ class SynthiansMemoryCore:
                     logger.warning(f"Vector index inconsistency detected! FAISS count: {diagnostics.get('faiss_count')}, Mapping count: {diagnostics.get('mapping_count')}")
 
             # Perform the retrieval using candidate generation
-            candidates = await self._get_candidate_memories(query_embedding, top_k * 2) # Get more candidates for filtering
+            candidates, assembly_activation_scores = await self._get_candidate_memories(query_embedding, top_k * 5) # Get more candidates for filtering
             
             # ENHANCED: Log the raw candidates with more detail
             logger.info(f"[FAISS Results] Raw candidates count: {len(candidates)}")
@@ -457,7 +496,19 @@ class SynthiansMemoryCore:
                 logger.debug(f"No candidate memories found.")
                 return {"success": True, "memories": [], "error": None}
 
-            # Score candidates based on similarity to query
+            # Step 2: Activate assemblies based on query embedding for later boost calculation
+            activated_assemblies_with_scores = []
+            if query_embedding is not None:
+                try:
+                    activated_assemblies_with_scores = await self._activate_assemblies(query_embedding)
+                    logger.debug(f"Activated {len(activated_assemblies_with_scores)} assemblies for retrieval operation")
+                    
+                    # Create a lookup dictionary for quick access to activation scores
+                    assembly_activation_scores = {asm.assembly_id: score for asm, score in activated_assemblies_with_scores}
+                except Exception as e:
+                    logger.error(f"Error during assembly activation: {e}")
+            
+            # Step 3: Score and sort candidate memories
             scored_candidates = []
             if query_embedding is not None:
                 logger.debug(f"Query embedding dimension: {query_embedding.shape}")
@@ -500,6 +551,84 @@ class SynthiansMemoryCore:
                         
                         memory_dict["similarity"] = similarity
                         memory_dict["relevance_score"] = similarity
+                        
+                        # ADDED: Calculate and apply assembly boost (Phase 5.8)
+                        assembly_boost = 0.0
+                        max_activation = 0.0
+                        boost_reason = "none"
+                        mem_id = memory_dict.get("id")
+                        associated_assembly_ids = set()
+                        
+                        # Get the assemblies associated with this memory
+                        async with self._lock:  # Need lock to access memory_to_assemblies safely
+                            mem_id_lower = mem_id.lower() if isinstance(mem_id, str) else mem_id
+                            associated_assembly_ids = self.memory_to_assemblies.get(mem_id, set())
+                            # Try lowercase version if not found
+                            if not associated_assembly_ids and mem_id != mem_id_lower:
+                                associated_assembly_ids = self.memory_to_assemblies.get(mem_id_lower, set())
+                                if associated_assembly_ids:
+                                    logger.debug(f"Found assemblies using lowercase memory ID: {mem_id_lower}")
+                        
+                        # Enhanced debug logging
+                        logger.debug(f"Memory {mem_id} is associated with assemblies: {associated_assembly_ids}")
+                        logger.debug(f"Available activation scores: {assembly_activation_scores}")
+                        
+                        # Use the pre-calculated assembly activation scores from earlier
+                        # Remove incorrect line that tried to redefine assembly_activation_scores locally
+                        
+                        if associated_assembly_ids:
+                            # Find max activation score from the activated assemblies
+                            active_assemblies = []
+                            for asm_id in associated_assembly_ids:
+                                activation = assembly_activation_scores.get(asm_id, 0.0)
+                                logger.debug(f"Assembly {asm_id} activation: {activation}")
+                                if activation > 0:
+                                    # Check if assembly is synchronized with vector index
+                                    if asm_id in self.assemblies and self.assemblies[asm_id].vector_index_updated_at:
+                                        active_assemblies.append((asm_id, activation))
+                                        logger.debug(f"Adding assembly {asm_id} with activation {activation} to active_assemblies")
+                                    else:
+                                        logger.debug(f"Assembly {asm_id} not synchronized, skipping boost")
+                            
+                            if active_assemblies:
+                                # Find max activation among synchronized assemblies
+                                max_asm_id, max_activation = max(active_assemblies, key=lambda x: x[1], default=("", 0.0))
+                                logger.debug(f"Max activation for memory {mem_id}: {max_activation} from assembly {max_asm_id}")
+                                
+                                # Calculate boost based on configuration
+                                boost_mode = self.config.get('assembly_boost_mode', 'linear')
+                                boost_factor = self.config.get('assembly_boost_factor', 0.2)
+                                
+                                if boost_mode == "linear":
+                                    assembly_boost = max_activation * boost_factor
+                                    boost_reason = f"linear(act:{max_activation:.2f}*f:{boost_factor:.2f})"
+                                elif boost_mode == "multiplicative":
+                                    assembly_boost = similarity * max_activation * boost_factor
+                                    boost_reason = f"multiplicative(sim:{similarity:.2f}*act:{max_activation:.2f}*f:{boost_factor:.2f})"
+                                else:
+                                    # Default additive behavior
+                                    assembly_boost = max_activation * boost_factor
+                                    boost_reason = f"default(act:{max_activation:.2f}*f:{boost_factor:.2f})"
+                                
+                                # Clamp boost to prevent exceeding 1.0 total score
+                                assembly_boost = min(assembly_boost, max(0.0, 1.0 - similarity))
+                                
+                                # Update relevance score with boost
+                                memory_dict["relevance_score"] = min(1.0, similarity + assembly_boost)
+                                logger.debug(f"Memory {mem_id}: Applied assembly boost {assembly_boost:.4f} from assembly {max_asm_id} (activation: {max_activation:.4f})")
+                            else:
+                                boost_reason = "no_activated_assemblies"
+                        else:
+                            boost_reason = "no_associated_assemblies"
+                        
+                        # Store boost information in the memory dictionary
+                        memory_dict["boost_info"] = {
+                            "base_similarity": float(similarity),
+                            "assembly_boost": float(assembly_boost),
+                            "max_activation": float(max_activation),
+                            "boost_reason": boost_reason
+                        }
+                        
                         scored_candidates.append(memory_dict)
                         logger.debug(f"Memory {mem_id}: similarity={similarity:.4f}")
                     except Exception as e:
@@ -523,75 +652,52 @@ class SynthiansMemoryCore:
                     scored_candidates.append(memory_dict)
             
             # Sort by similarity score (descending)
-            scored_candidates.sort(key=lambda x: x.get("similarity", 0.0), reverse=True)
+            sorted_candidates = sorted(scored_candidates, key=lambda x: x.get("similarity", 0.0), reverse=True)
 
             # ENHANCED: Log all candidates with their scores before filtering
-            logger.info(f"[Similarity Results] Found {len(scored_candidates)} scored candidates before threshold filtering")
+            logger.info(f"[Similarity Results] Found {len(sorted_candidates)} scored candidates before threshold filtering")
             logger.debug(f"Threshold filtering: Using threshold {current_threshold:.4f}")
             
-            similarities = [(c.get('id'), c.get('similarity', 0.0)) for c in scored_candidates[:10]]
+            similarities = [(c.get('id'), c.get('similarity', 0.0)) for c in sorted_candidates[:10]]
             logger.debug(f"Top 10 similarities: {similarities}")
             
             # Apply threshold filtering
-            logger.info(f"[Threshold Filtering] Starting threshold filtering with {len(scored_candidates)} candidates")
-            candidates_passing_threshold = []
+            logger.info(f"[Threshold Filtering] Starting threshold filtering with {len(sorted_candidates)} candidates")
+            filtered_candidates = []
             candidates_filtered_out = []
             
-            for c in scored_candidates:
+            threshold_to_use = threshold if threshold is not None else self.threshold_calibrator.current_threshold if self.threshold_calibrator else self.config.get('initial_retrieval_threshold', 0.75)
+            
+            for c in sorted_candidates:
                 similarity = c.get("similarity", 0.0)
                 mem_id = c.get("id", "unknown")
-                if similarity >= current_threshold:
-                    candidates_passing_threshold.append(c)
-                    logger.debug(f"Memory {mem_id} PASSED threshold with similarity {similarity:.4f} >= {current_threshold:.4f}")
+                if similarity >= threshold_to_use:
+                    filtered_candidates.append(c)
+                    logger.debug(f"Memory {mem_id} PASSED threshold with similarity {similarity:.4f} >= {threshold_to_use:.4f}")
                 else:
                     candidates_filtered_out.append((mem_id, similarity))
-                    logger.debug(f"Memory {mem_id} FILTERED OUT with similarity {similarity:.4f} < {current_threshold:.4f}")
+                    logger.debug(f"Memory {mem_id} FILTERED OUT with similarity {similarity:.4f} < {threshold_to_use:.4f}")
             
             # Log summary of threshold filtering results
-            filtered_candidates = candidates_passing_threshold
             logger.info(f"[Threshold Filtering] Kept {len(filtered_candidates)} candidates, filtered out {len(candidates_filtered_out)} candidates")
             
             # Log the first few filtered out candidates for debugging
             if candidates_filtered_out:
                 logger.debug(f"First 5 filtered out (ID, similarity): {candidates_filtered_out[:5]}")
 
-            # *** ADDED PRE-GATING LOG ***
-            if filtered_candidates:
-                top_passing = [(c.get('id'), c.get('similarity', 0.0)) for c in filtered_candidates[:5]]
-                logger.info(f"[Pre-Emotional Gating] Top 5 candidates: {top_passing}")
-            else:
-                logger.warning(f"[Pre-Emotional Gating] No candidates passed threshold filtering. Consider lowering threshold.")
-
-            # Apply emotional gating if requested
+            # Step 4: Apply emotional gating if requested
             if user_emotion and self.emotional_gating:
                 logger.info(f"[Emotional Gating] Applying with user_emotion: {user_emotion}, candidates: {len(filtered_candidates)}") 
-                # Construct user_emotion dict for gating service
-                user_emotion_dict = {"dominant_emotion": user_emotion} # Simulate expected input for gating service
-                
-                # Store candidate count before gating for comparison
-                pre_gating_count = len(filtered_candidates)
-                
-                filtered_candidates = await self.emotional_gating.gate_memories(
-                    filtered_candidates, user_emotion_dict
-                )
-                
-                # Calculate and log difference in candidate count
-                post_gating_count = len(filtered_candidates)
-                diff_count = pre_gating_count - post_gating_count
-                logger.info(f"[Emotional Gating] Result: {post_gating_count} candidates remain ({diff_count} removed)") 
-                
-                # Re-sort based on 'final_score' if gating was applied
-                filtered_candidates.sort(key=lambda x: x.get("final_score", x.get("similarity", 0.0)), reverse=True)
-                
-                # Log the new ordering after emotional gating
-                if filtered_candidates:
-                    top_emotional = [(c.get('id'), c.get('final_score', c.get('similarity', 0.0))) 
-                                    for c in filtered_candidates[:5]]
-                    logger.debug(f"[Post-Emotional Gating] Top 5 candidates with scores: {top_emotional}")
-            else:
-                logger.debug("[Emotional Gating] Skipped (user_emotion is None or no gating service)") 
+                try:
+                    filtered_candidates = await self.emotional_gating.gate_memories_by_context(
+                        filtered_candidates, user_emotion_context=user_emotion
+                    )
+                    logger.info(f"[Emotional Gating] Result: {len(filtered_candidates)} candidates")
+                except Exception as e:
+                    logger.error(f"Error during emotional gating: {e}")
+                    # Continue with original filtered candidates if gating fails
             
-            # Apply metadata filtering if requested (basic implementation)
+            # Step 5: Apply metadata filtering if requested
             if metadata_filter:
                 logger.info(f"[Metadata Filtering] Applying filter: {metadata_filter}") 
                 pre_filter_count = len(filtered_candidates)
@@ -652,11 +758,17 @@ class SynthiansMemoryCore:
             logger.error(traceback.format_exc())
             return {"success": False, "memories": [], "error": str(e)}
 
-    async def _get_candidate_memories(self, query_embedding: Optional[np.ndarray], limit: int) -> List[Dict[str, Any]]:
-        """Retrieve candidate memories using assembly activation and direct vector search."""
+    async def _get_candidate_memories(self, query_embedding: Optional[np.ndarray], limit: int) -> Tuple[List[Dict[str, Any]], Dict[str, float]]:
+        """Retrieve candidate memories using assembly activation and direct vector search.
+        
+        Returns:
+            Tuple containing:
+            - List of candidate memories as dictionaries
+            - Dictionary mapping assembly_id to activation score
+        """
         if query_embedding is None:
             logger.warning("SynthiansMemoryCore", "_get_candidate_memories called with no query embedding.")
-            return []
+            return [], {}
 
         # Log the query embedding stats for debugging
         if query_embedding is not None:
@@ -666,15 +778,36 @@ class SynthiansMemoryCore:
 
         assembly_candidates = set()
         direct_candidates = set()
+        
+        # Create a dictionary to track assembly activation scores
+        assembly_activation_scores = {}
 
         # 1. Assembly Activation
         activated_assemblies = await self._activate_assemblies(query_embedding)
-        for assembly, activation_score in activated_assemblies[:5]: # Consider top 5 assemblies
-            if activation_score > 0.2: # Lower activation threshold
-                assembly_candidates.update(assembly.memories)
+        
+        # Enhanced logging to debug assembly activation
+        logger.debug(f"[Candidate Gen] Got {len(activated_assemblies)} activated assemblies from _activate_assemblies")
+        for assembly, score in activated_assemblies:
+            logger.debug(f"[Candidate Gen] Activated assembly: {assembly.assembly_id if hasattr(assembly, 'assembly_id') else 'unknown'}, score={score:.4f}")
+        
+        # Store activation scores in the dictionary
+        for assembly, activation_score in activated_assemblies:
+            # Use assembly_id attribute instead of id
+            if hasattr(assembly, 'assembly_id'):  # Safety check
+                assembly_activation_scores[assembly.assembly_id] = activation_score
+                logger.debug(f"Stored activation score {activation_score} for assembly {assembly.assembly_id}")
+        
+        # Use top 5 assemblies for candidate generation
+        for assembly, activation_score in activated_assemblies[:5]:
+            if activation_score > 0.01:  # Lower activation threshold to ensure assemblies are used
+                if hasattr(assembly, 'memories') and assembly.memories:
+                    assembly_candidates.update(assembly.memories)
+                    logger.debug(f"[Candidate Gen] Added {len(assembly.memories)} memories from assembly {assembly.assembly_id}")
+                else:
+                    logger.warning(f"[Candidate Gen] Assembly {assembly.assembly_id if hasattr(assembly, 'assembly_id') else 'unknown'} has no memories or memories attribute is missing")
         
         logger.info(f"[Candidate Gen] Found {len(assembly_candidates)} candidates from assembly activation")
-
+        
         # 2. Direct Vector Search using FAISS Index
         search_threshold = 0.0  # Set to zero to get all candidates regardless of similarity
         faiss_count = self.vector_index.count()
@@ -686,7 +819,7 @@ class SynthiansMemoryCore:
         if faiss_count == 0:
             logger.warning(f"[Candidate Gen] FAISS index is empty! Check memory creation and indexing.")
         
-        search_results = self.vector_index.search(query_embedding, k=min(limit, max(faiss_count, 1)))
+        search_results = await self.vector_index.search_async(query_embedding, k=min(limit, max(faiss_count, 1)))
         
         logger.info(f"[Candidate Gen] FAISS search returned {len(search_results)} results")
         
@@ -756,25 +889,128 @@ class SynthiansMemoryCore:
                 logger.warning(f"[Candidate Gen] ID mapping file exists: {os.path.exists(mapping_path)}")
 
         logger.info(f"[Candidate Gen] Returning {len(final_candidates)} final candidates for scoring/filtering")
-        return final_candidates[:limit * 2] # Return more initially for scoring/filtering
+        # Return both the candidates and activation scores
+        return final_candidates[:limit * 2], assembly_activation_scores
 
     async def _activate_assemblies(self, query_embedding: np.ndarray) -> List[Tuple[MemoryAssembly, float]]:
-        """Find and activate assemblies based on query similarity."""
-        activated = []
-        async with self._lock: # Accessing shared self.assemblies
-            for assembly_id, assembly in self.assemblies.items():
-                 # Skip assemblies that aren't synchronized with the vector index
-                 if not assembly.vector_index_updated_at:
-                     logger.debug(f"Skipping assembly {assembly_id} - not synchronized with vector index")
-                     continue
-                     
-                 similarity = assembly.get_similarity(query_embedding)
-                 if similarity >= self.config['assembly_threshold'] * 0.8: # Lower threshold for activation
-                      assembly.activate(similarity)
-                      activated.append((assembly, similarity))
-        # Sort by activation score
-        activated.sort(key=lambda x: x[1], reverse=True)
-        return activated
+        """Find and activate assemblies based on query similarity.
+        
+        Returns:
+            List of (assembly, similarity) tuples for activated assemblies.
+        """
+        if not self.vector_index:
+            logger.warning("Cannot activate assemblies: vector_index is None")
+            return []
+        
+        if query_embedding is None:
+            logger.warning("Cannot activate assemblies: query_embedding is None")
+            return []
+            
+        # Add detailed debug logging for the query embedding
+        logger.debug(f"[Assembly Debug] Query embedding shape: {query_embedding.shape}, norm: {np.linalg.norm(query_embedding)}")
+        logger.debug(f"[Assembly Debug] Query embedding snippet: {query_embedding[:5]}")
+        
+        # Fix: Use dictionary access instead of attribute access
+        now = datetime.now(timezone.utc)
+        drift_limit = self.config.get('max_allowed_drift_seconds', 3600)  # Default 1 hour if not specified
+        assembly_threshold = self.config.get('assembly_threshold', 0.1)  # Default threshold if not specified
+        logger.debug(f"[Assembly Debug] Assembly activation threshold: {assembly_threshold}")
+            
+        # Search the vector index for assembly vectors
+        prefix = "asm:"
+        logger.debug(f"[Assembly Debug] Searching for assemblies with prefix: {prefix}")
+        
+        try:
+            # Logging the current state of vector index to verify assemblies were added
+            stats = self.vector_index.get_stats()
+            logger.debug(f"[Assembly Debug] Vector index stats: {stats}")
+            
+            # FIXED: Remove id_prefix parameter, search all vectors and filter results afterward
+            search_results = await self.vector_index.search_async(
+                query_embedding, 
+                k=200  # Larger value to ensure we find all relevant assemblies after filtering
+            )
+            
+            # Post-search filtering for assemblies (ids starting with prefix)
+            asm_results = []
+            for memory_id, similarity in search_results:
+                if memory_id.startswith(prefix):
+                    asm_results.append((memory_id, similarity))
+            
+            logger.debug(f"[Assembly Debug] Found {len(asm_results)} potential assemblies after filtering")
+            
+            # Filter and keep only IDs that start with assembly prefix
+            asm_results = [r for r in search_results if r[0].startswith("asm:")]
+            logger.debug(f"Found {len(asm_results)} assembly IDs in search results")
+            
+            # Debug: show available assemblies
+            logger.debug(f"[ACTIVATE_DBG] Available assemblies in dictionary: {list(self.assemblies.keys())}")
+
+            activated_assemblies = []
+            max_activation_time = now - timedelta(seconds=drift_limit)
+
+            for asm_id_with_prefix, similarity in asm_results:
+                logger.debug(f"[ACTIVATE_DBG] Examining result: ID='{asm_id_with_prefix}', Sim={similarity:.4f}") # Log raw result
+
+                # Extract the actual assembly ID (remove "asm:" prefix)
+                assembly_id = asm_id_with_prefix[4:] if asm_id_with_prefix.startswith("asm:") else asm_id_with_prefix
+                logger.debug(f"[ACTIVATE_DBG] Extracted assembly_id: '{assembly_id}'") # Log extracted ID
+
+                # Check if assembly exists in the core's dictionary
+                assembly_present_in_dict = assembly_id in self.assemblies
+                logger.debug(f"[ACTIVATE_DBG] Assembly '{assembly_id}' present in self.assemblies? {assembly_present_in_dict}") # Log lookup result
+
+                # Skip results below threshold
+                local_assembly_threshold = self.config.get('assembly_threshold')
+                if similarity < local_assembly_threshold:
+                    logger.debug(f"[ACTIVATE_DBG] Skipping '{assembly_id}': similarity {similarity:.6f} below threshold {local_assembly_threshold}")
+                    continue
+
+                # FIXED: Get assembly from self.assemblies instead of persistence.get_assembly 
+                assembly = self.assemblies.get(assembly_id)
+                if assembly is None:
+                    logger.warning(f"[ACTIVATE_DBG] Assembly '{assembly_id}' lookup returned None. Skipping.")
+                    continue
+
+                logger.debug(f"[ACTIVATE_DBG] Found assembly object: Name='{assembly.name}', ID='{assembly.assembly_id}'")
+
+                # Check if the assembly is synchronized with the vector index
+                enable_sync = self.config.get('enable_assembly_sync', True)  # Default to True if not specified
+                if not enable_sync:
+                    logger.debug(f"[ACTIVATE_DBG] Sync check disabled for '{assembly_id}'.")
+                    # Synchronization is disabled, treat all assemblies as valid
+                    activated_assemblies.append((assembly, similarity))
+                    logger.debug(f"[ACTIVATE_DBG] Activated '{assembly_id}' (Sync Disabled)")
+                    continue
+
+                # Check synchronization status
+                updated_at = assembly.vector_index_updated_at
+                logger.debug(f"[ACTIVATE_DBG] Checking sync for '{assembly_id}': updated_at={updated_at}") # Log timestamp
+                if assembly.vector_index_updated_at is None:
+                    logger.debug(f"[ACTIVATE_DBG] Skipping '{assembly_id}': updated_at is None.")
+                    continue
+
+                # Check for embedding drift
+                drift_seconds = (now - updated_at).total_seconds()
+                logger.debug(f"[ACTIVATE_DBG] Checking drift for '{assembly_id}': drift={drift_seconds:.2f}s, limit={drift_limit}s") # Log drift
+                if assembly.vector_index_updated_at < max_activation_time:
+                    logger.debug(f"[ACTIVATE_DBG] Skipping '{assembly_id}': Drift limit exceeded.")
+                    continue
+
+                # All checks passed, add to activated assemblies
+                logger.info(f"[ACTIVATE_DBG] ACTIVATE SUCCESS for '{assembly_id}'")
+                activated_assemblies.append((assembly, similarity))
+                logger.debug(f"Activated assembly {assembly_id} with similarity {similarity}")
+                
+            # Log final activation count
+            logger.debug(f"[Assembly Debug] Total activated assemblies: {len(activated_assemblies)}")
+            
+            # Return the list of (assembly, similarity) tuples
+            return activated_assemblies
+                
+        except Exception as e:
+            logger.error(f"Error during assembly activation: {str(e)}", exc_info=True)
+            return []
 
     async def _update_assemblies(self, memory: MemoryEntry):
         """Find or create assemblies for a new memory."""
@@ -784,7 +1020,7 @@ class SynthiansMemoryCore:
         best_similarity = 0.0
         best_assembly_id = None
 
-        async with self._lock: # Accessing shared self.assemblies
+        async with self._lock: # Access shared self.assemblies
              for assembly_id, assembly in self.assemblies.items():
                   similarity = assembly.get_similarity(memory.embedding)
                   if similarity >= self.config['assembly_threshold']:
@@ -1115,11 +1351,15 @@ class SynthiansMemoryCore:
                       else:
                            logger.warning(f"Failed to delete memory {mem_id} from persistence.")
 
-             # Remove from vector index if needed (Requires remove method)
-             # if ids_to_remove_from_index:
-             #     # removed_count = self.vector_index.remove(ids_to_remove_from_index)
-             #     logger.warning(f"Vector index remove not implemented. Cannot remove {len(ids_to_remove_from_index)} pruned IDs.")
-
+             # Remove from vector index if needed
+             if ids_to_remove_from_index and self.vector_index is not None:
+                  for mem_id in ids_to_remove_from_index:
+                       try:
+                            removed = await self.vector_index.remove_vector_async(mem_id)
+                            if not removed:
+                                 logger.warning(f"Could not remove vector for {mem_id} during pruning (not found in index).")
+                       except Exception as e:
+                            logger.error(f"Error removing vector for {mem_id} during pruning: {e}")
 
              logger.info("SynthiansMemoryCore", f"Pruned {pruned_count} memories.")
 
@@ -1316,8 +1556,8 @@ class SynthiansMemoryCore:
         if not self._initialized: await self.initialize()
         
         try:
-            # Use the memory lock to avoid race conditions during updates
-            async with self._memory_lock:
+            # Use the main lock to avoid race conditions during updates
+            async with self._lock:
                 # Look up the memory first
                 memory = self._get_memory_by_id(memory_id)
                 if memory is None:
@@ -1366,7 +1606,7 @@ class SynthiansMemoryCore:
                 if memory.embedding is not None and self.vector_index is not None:
                     logger.debug(f"Updating vector index for memory {memory_id}")
                     try:
-                        updated_index = await self.vector_index.update_entry(memory_id, memory.embedding)
+                        updated_index = await self.vector_index.update_entry_async(memory_id, memory.embedding)
                         if not updated_index:
                             logger.error(f"CRITICAL: Failed to update vector index for memory {memory_id} during memory update.")
                             vector_update_success = False  # Mark failure
