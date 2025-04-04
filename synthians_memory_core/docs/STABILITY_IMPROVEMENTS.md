@@ -556,6 +556,65 @@ async def test_assembly_creation(client):
 
 This helps identify issues earlier in the test process.
 
+## Phase 5.8.4 Test Stability: The Bridge Memory Pattern
+
+In Phase 5.8.4, we introduced a novel approach to improve the reliability of assembly merging tests without requiring runtime configuration changes.
+
+### Problem: Intermittent Merging Test Failures
+
+The `test_05_assembly_merging` test was failing intermittently because:
+
+1. All test memories were joining a single assembly immediately due to their high similarity
+2. Without two distinct assemblies, the merge logic couldn't trigger
+3. Attempts to lower the merge threshold via API were unsuccessful
+
+### Solution: Strategic Vector Space Manipulation
+
+Instead of modifying system thresholds, we redesigned the test data generation strategy to create a predictable geometric pattern:
+
+```python
+# Create two distinct base embeddings for separate assemblies
+base_embed_a = np.random.rand(EMBEDDING_DIM).astype(np.float32)  # First assembly base
+base_embed_b = np.random.rand(EMBEDDING_DIM).astype(np.float32)  # Second assembly base
+
+# Normalize both embedding bases
+if np.linalg.norm(base_embed_a) > 0: base_embed_a /= np.linalg.norm(base_embed_a)
+if np.linalg.norm(base_embed_b) > 0: base_embed_b /= np.linalg.norm(base_embed_b)
+
+# Regular noise for assembly members
+noise_scale = 0.01  # Small noise for variations within each assembly
+
+# Create memories for Assembly A and B, wait for formation
+
+# Create bridge memories to trigger merge
+merge_embed_base = (base_embed_a + base_embed_b) / 2  # Midpoint embedding
+merge_embed_base /= np.linalg.norm(merge_embed_base)  # Normalize
+
+# Create strategically positioned bridge memories
+bridge_a_embed = (merge_embed_base + 0.1*base_embed_a + small_noise).tolist()
+bridge_b_embed = (merge_embed_base + 0.1*base_embed_b + small_noise).tolist()
+bridge_final_embed = (merge_embed_base + small_noise).tolist()
+```
+
+### Benefits of the Bridge Memory Pattern
+
+1. **Test Reliability**: Works consistently without requiring configuration changes
+2. **Comprehensive Validation**: Exercises the entire merge execution path under default settings
+3. **Clear Diagnostics**: Provides precise logging of each stage in the process
+4. **Self-contained**: Test remains independent of server-side configuration endpoints
+
+### Recommendations for Test Design
+
+For threshold-sensitive tests like assembly merging, consider:
+
+1. **Geometric Planning**: Design data that reliably evolves across thresholds rather than lowering thresholds
+2. **Phased Creation**: Create distinct structures first, then introduce connecting elements
+3. **Verification Points**: Add explicit checks to ensure each phase completes successfully before proceeding
+4. **Extended Wait Times**: Use generous wait times for asynchronous operations to complete
+5. **Robust Assertions**: Prefer validating state transitions rather than exact final counts
+
+Full implementation details can be found in `docs/test_fixes/assembly_merging_test_fixes.md`.
+
 ## Conclusion
 
 These stability improvements address the core issues that were causing test failures, providing:
@@ -565,5 +624,6 @@ These stability improvements address the core issues that were causing test fail
 3. Proper error propagation
 4. Improved assembly lifecycle handling
 5. Enhanced diagnostic capabilities
+6. Reliable test design patterns for threshold-sensitive behaviors
 
 By integrating these improvements, the Synthians Memory Core will be more resilient to edge cases and error conditions, leading to more consistent test results and better overall system stability.
