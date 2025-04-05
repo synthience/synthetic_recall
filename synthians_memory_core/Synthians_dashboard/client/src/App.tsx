@@ -16,6 +16,8 @@ import Config from "./pages/config";
 import Admin from "./pages/admin";
 import { useEffect } from "react";
 import { usePollingStore } from "./lib/store";
+import { FeaturesProvider } from "./contexts/FeaturesContext";
+import Phase59Tester from "./components/debug/Phase59Tester";
 
 function Router() {
   const { startPolling, stopPolling } = usePollingStore();
@@ -44,6 +46,7 @@ function Router() {
         <Route path="/chat" component={Chat} />
         <Route path="/config" component={Config} />
         <Route path="/admin" component={Admin} />
+        <Route path="/debug/phase59" component={Phase59Tester} />
         <Route component={NotFound} />
       </Switch>
     </DashboardShell>
@@ -52,10 +55,10 @@ function Router() {
 
 function App() {
   return (
-    <>
+    <FeaturesProvider>
       <Router />
       <Toaster />
-    </>
+    </FeaturesProvider>
   );
 }
 

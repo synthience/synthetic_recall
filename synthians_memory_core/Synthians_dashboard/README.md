@@ -9,6 +9,9 @@ The Synthians Cognitive Architecture Development Dashboard is a comprehensive we
 - **System Overview**: Real-time monitoring of core services health and performance metrics
 - **Component Dashboards**: Detailed views for Memory Core, Neural Memory, and Controlled Context Exchange (CCE)
 - **Assembly Inspector**: Browse and analyze memory assemblies and their relationships
+- **Memory Lineage & Explainability**: Visualize assembly merge history and understand activation mechanisms (Phase 5.9)
+- **Merge Diagnostics**: Track merge operations with detailed logs and cleanup status (Phase 5.9)
+- **Runtime Configuration**: View active configuration parameters for all services
 - **Real-time Logs**: Stream and filter logs from all system components
 - **Admin Controls**: Maintenance and configuration actions for system components
 - **Interactive Chat**: Directly engage with the Synthians AI through a chat interface
@@ -49,110 +52,64 @@ npm install
 cp .env.example .env
 ```
 
-Edit the `.env` file to include the addresses of your Synthians Cognitive Architecture services:
-
-```
-MEMORY_CORE_URL=http://localhost:8080
-NEURAL_MEMORY_URL=http://localhost:8081
-CCE_URL=http://localhost:8082
-```
-
 4. Start the development server:
 ```bash
 npm run dev
 ```
 
-The dashboard will be available at `http://localhost:5000`
+This will start the development server using `tsx server/index.ts`, which properly integrates the Vite frontend with the Express backend proxy.
 
-## 🏗️ Architecture
+5. Access the dashboard at [http://localhost:5000](http://localhost:5000)
 
-The Synthians Cognitive Dashboard follows a client-server architecture:
+## 🔄 Architecture
 
-### Client
+The dashboard follows a client-server architecture:
 
-The client is a React application with the following key features:
-- **Component-based Structure**: Modular components for different dashboard elements
-- **Real-time Data**: Uses TanStack Query for efficient data fetching and caching
-- **Responsive Design**: Mobile-friendly layout with adaptive components
+- **Client**: React application with TypeScript for type safety
+- **Server**: Express.js backend that proxies requests to the Synthians services
+- **Shared**: Common TypeScript interfaces used by both client and server
 
-### Server
-
-The server is an Express.js application that:
-- Serves the frontend application
-- Proxies API requests to the core Synthians services
-- Provides authentication and session management
-- Handles data transformation and aggregation
-
-### Core Services
-
-The dashboard integrates with three primary services:
-
-1. **Memory Core**: Manages episodic and semantic memory storage and retrieval
-2. **Neural Memory**: Handles vector embedding generation and maintenance
-3. **CCE (Controlled Context Exchange)**: Orchestrates information flow between components
-
-## 📁 Project Structure
+### Directory Structure
 
 ```
-/client             # Frontend application
-  /src
-    /components     # Reusable UI components
-    /hooks          # Custom React hooks
-    /lib            # Utilities and API clients
-    /pages          # Page components
-/server             # Backend Express server
-  /routes           # API route handlers
-  /storage          # Storage interfaces
-/shared             # Shared TypeScript schemas
-/docs               # Documentation
+├── client/            # Frontend React application
+│   ├── src/           # Source code
+│   │   ├── components/  # UI components
+│   │   ├── contexts/    # React contexts
+│   │   ├── hooks/       # Custom React hooks
+│   │   ├── lib/         # Utility functions and API clients
+│   │   ├── pages/       # Page components
+│   │   └── App.tsx      # Main application component
+├── server/            # Backend Express server
+│   ├── routes.ts      # API routes definition
+│   ├── config.ts      # Server configuration
+│   └── index.ts       # Server entry point
+├── shared/            # Shared TypeScript types
+│   └── schema.ts      # Type definitions for API responses
+└── docs/              # Documentation
 ```
 
-## 🧩 Core Components
+## 📚 Documentation
 
-### Memory Core
+Detailed documentation is available in the `docs/` directory:
 
-The Memory Core dashboard provides visibility into:
-- Memory storage statistics
-- Vector index health
-- Assembly metrics and status
-- Memory retrieval performance
+- [Architecture Overview](./docs/ARCHITECHTURE.md)
+- [Development Guide](./docs/DEVELOPMENT_GUIDE.md)
+- [API Reference](./docs/API_REFERENCE.md)
+- [Project Structure](./docs/PROJECT_STRUCTURE.md)
+- [Change Log](./docs/CHANGELOG.md)
 
-### Neural Memory
+## 🧪 Phase 5.9 Explainability Features
 
-The Neural Memory dashboard displays:
-- Training status and metrics
-- Emotional loop diagnostics
-- Vector embedding quality metrics
-- Runtime configuration
+The dashboard integrates the Phase 5.9 explainability features from the Memory Core service:
 
-### CCE (Controlled Context Exchange)
+- **Assembly Lineage**: Visualize the ancestry of memory assemblies through the merge history
+- **Merge Explanation**: Understand how assemblies were formed, including similarity scores and cleanup status
+- **Activation Explanation**: See why specific memories did or did not activate within an assembly
+- **Merge Log**: View comprehensive logs of recent merge operations across the system
+- **Runtime Configuration**: Inspect active configuration parameters affecting system behavior
 
-The CCE dashboard shows:
-- Active variant information
-- Response metrics
-- LLM guidance statistics
-- Performance indicators
-
-## 🔧 Development
-
-### Adding New Features
-
-1. For frontend changes:
-   - Add components to `client/src/components`
-   - Add pages to `client/src/pages`
-   - Update routing in `client/src/App.tsx`
-
-2. For backend changes:
-   - Add API routes to `server/routes.ts`
-   - Update storage interfaces in `server/storage.ts`
-   - Add schema definitions to `shared/schema.ts`
-
-### Code Style
-
-- Follow TypeScript best practices
-- Use functional components with hooks for React code
-- Add comprehensive comments for complex logic
-- Include type definitions for all functions and variables
+These features can be toggled via the `ENABLE_EXPLAINABILITY` flag in the Memory Core configuration.
 
 ## 🤝 Contributing
 
@@ -161,10 +118,3 @@ Contributions are welcome! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) for d
 ## 📜 License
 
 This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
-
-## 🙏 Acknowledgements
-
-- [Shadcn UI](https://ui.shadcn.com/) for component primitives
-- [TailwindCSS](https://tailwindcss.com/) for styling
-- [TanStack Query](https://tanstack.com/query) for data fetching
-- [Recharts](https://recharts.org/) for visualization components

@@ -53,9 +53,21 @@ async def trace_lineage(
         """Recursively trace the lineage starting from the current assembly."""
         nonlocal max_depth_reached, cycles_detected
         
+        # Add more detailed logging to diagnose depth issues
+        logger.debug("LineageTracer", f"Processing assembly at depth {depth}", {
+            "assembly_id": current_id, 
+            "current_depth": depth,
+            "max_depth": max_depth
+        })
+        
         # Stop if we've reached maximum depth
-        if depth > max_depth:
+        if depth >= max_depth:
             max_depth_reached = True
+            logger.debug("LineageTracer", f"Max depth reached at {depth}", {
+                "assembly_id": current_id,
+                "depth": depth,
+                "max_depth": max_depth
+            })
             lineage_entries.append({
                 "assembly_id": current_id,
                 "name": None,  # Name is not fetched for depth-limited entries
@@ -108,8 +120,8 @@ async def trace_lineage(
             "name": getattr(assembly, "name", None),
             "depth": depth,
             "status": status,
-            "created_at": getattr(assembly, "created_at", None),
-            "memory_count": len(getattr(assembly, "memory_ids", [])) if hasattr(assembly, "memory_ids") else None
+            "created_at": getattr(assembly, "creation_time", None),
+            "memory_count": len(getattr(assembly, "memories", set())) if hasattr(assembly, "memories") else None
         })
         
         # Recursively trace parent assemblies if this is a merged assembly

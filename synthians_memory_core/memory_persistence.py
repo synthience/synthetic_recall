@@ -134,17 +134,21 @@ class MemoryPersistence:
         Caller must already hold self._lock.
         """
         try:
-            logger.debug("MemoryPersistence", "Saving memory index to disk")
-            temp_path = self.index_path.with_suffix('.tmp')
-
-            async with aiofiles.open(temp_path, 'w') as f:
-                await f.write(json.dumps(self.memory_index, indent=2))
-
-            await asyncio.to_thread(shutil.move, temp_path, self.index_path)
-            self.stats['last_index_update'] = time.time()
-            logger.debug("MemoryPersistence", "Memory index saved successfully")
-            return True
-
+            logger.debug("MemoryPersistence", "Saving memory index to disk using safe_write_json")
+            
+            # Use the safe_write_json utility for atomic writes with directory creation
+            save_success = await MemoryPersistence.safe_write_json(
+                data=self.memory_index,
+                target_path=self.index_path
+            )
+            
+            if save_success:
+                self.stats['last_index_update'] = time.time()
+                logger.debug("MemoryPersistence", "Memory index saved successfully")
+                return True
+            else:
+                logger.error("MemoryPersistence", "Failed to save memory index")
+                return False
         except asyncio.TimeoutError:
             logger.error("MemoryPersistence", "Timeout saving memory index")
             return False
@@ -154,9 +158,9 @@ class MemoryPersistence:
                 "Error saving memory index",
                 {"path": str(self.index_path), "error": str(e)}
             )
-            if await asyncio.to_thread(os.path.exists, temp_path):
+            if await asyncio.to_thread(os.path.exists, self.index_path.with_suffix('.tmp')):
                 try:
-                    await asyncio.to_thread(os.remove, temp_path)
+                    await asyncio.to_thread(os.remove, self.index_path.with_suffix('.tmp'))
                 except Exception:
                     pass
             return False
@@ -166,76 +170,80 @@ class MemoryPersistence:
         async with self._lock:
             return await self._save_index_no_lock()
 
-    async def save_memory(self, memory: MemoryEntry) -> bool:
-        """Save a single MemoryEntry to disk and update the index."""
+    def _save_index_sync(self) -> bool:
+        """Synchronously save the memory index to disk."""
         try:
-            # Ensure there's a running loop
-            try:
-                loop = asyncio.get_running_loop()
-                if not loop.is_running():
-                    logger.warning(
-                        "MemoryPersistence",
-                        f"Attempted to save memory {memory.id} with no running event loop"
-                    )
-                    return False
-            except RuntimeError:
-                # No running event loop
-                logger.warning(
-                    "MemoryPersistence",
-                    f"Error saving memory {memory.id}: no running event loop"
-                )
-                return False
+            logger.debug("MemoryPersistence", "Saving memory index to disk synchronously")
+            temp_path = self.index_path.with_suffix('.tmp')
 
-            async with self._lock:
-                try:
-                    # Ensure memory has an ID
-                    if not hasattr(memory, 'id') or memory.id is None:
-                        memory.id = f"mem_{uuid.uuid4().hex[:12]}"
+            # PHASE 5.8: Ensure parent directory exists before saving
+            if not os.path.exists(os.path.dirname(temp_path)):
+                logger.info("MemoryPersistence", f"Creating parent directory for index: {os.path.dirname(temp_path)}")
+                os.makedirs(os.path.dirname(temp_path), exist_ok=True)
 
-                    # Build file path
-                    file_path = self.storage_path / f"{memory.id}.json"
+            with open(temp_path, 'w') as f:
+                f.write(json.dumps(self.memory_index, indent=2))
 
-                    # Convert memory -> dict
-                    memory_dict = memory.to_dict()
+            shutil.move(temp_path, self.index_path)
+            self.stats['last_index_update'] = time.time()
+            logger.debug("MemoryPersistence", "Memory index saved successfully synchronously")
+            return True
 
-                    # Save to disk
-                    async with aiofiles.open(file_path, 'w') as f:
-                        json_text = json.dumps(memory_dict, indent=2, default=MemoryPersistence._default_serializer)
-                        await f.write(json_text)
-
-                    # Update index
-                    self.memory_index[memory.id] = {
-                        'path': str(file_path.relative_to(self.storage_path)),
-                        'timestamp': memory.timestamp.isoformat()
-                            if hasattr(memory.timestamp, 'isoformat')
-                            else str(memory.timestamp) if hasattr(memory, 'timestamp')
-                            else time.time(),
-                        'quickrecal': getattr(memory, 'quickrecal_score', 0.5),
-                        'type': 'memory'
-                    }
-
-                    # Save index
-                    await asyncio.wait_for(self._save_index_no_lock(), timeout=5)
-
-                    self.stats['saves'] += 1
-                    self.stats['successful_saves'] = self.stats.get('successful_saves', 0) + 1
-                    logger.debug("MemoryPersistence", f"Memory {memory.id} saved successfully")
-                    return True
-
-                except Exception as e:
-                    logger.error(
-                        "MemoryPersistence",
-                        f"Error saving memory {getattr(memory, 'id', 'unknown')}: {str(e)}"
-                    )
-                    self.stats['saves'] += 1
-                    self.stats['failed_saves'] = self.stats.get('failed_saves', 0) + 1
-                    return False
-
-        except asyncio.TimeoutError:
+        except Exception as e:
             logger.error(
                 "MemoryPersistence",
-                f"Timeout saving memory {getattr(memory, 'id', 'unknown')}"
+                "Error saving memory index synchronously",
+                {"path": str(self.index_path), "error": str(e)}
             )
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+            return False
+
+    async def save_memory(self, memory: MemoryEntry) -> bool:
+        """Save a memory entry to disk and update the index.
+
+        Args:
+            memory: The memory entry to save
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if memory is None:
+            logger.error("MemoryPersistence", "Cannot save None memory")
+            return False
+        
+        # Create memories directory if it doesn't exist
+        memories_dir = self.storage_path / "memories"
+        os.makedirs(memories_dir, exist_ok=True)
+        
+        # Safe filename handling for Windows compatibility
+        mem_id = memory.id
+        safe_mem_id = self.sanitize_id_for_filename(mem_id)
+        file_path = memories_dir / f"{safe_mem_id}.json"
+        
+        # Convert memory to dictionary and sanitize any NaN/Inf values
+        mem_dict = memory.to_dict()
+        
+        # Perform atomic write
+        success = await MemoryPersistence.safe_write_json(
+            data=mem_dict,
+            target_path=file_path
+        )
+        
+        if success:
+            # Update index asynchronously
+            await self._update_index(memory)
+            
+            # Save the updated index to disk
+            await self._save_index()
+            
+            logger.debug("MemoryPersistence", f"Saved memory {mem_id} to {file_path}")
+            return True
+        else:
+            logger.error("MemoryPersistence", f"Failed to save memory {mem_id}")
             return False
 
     async def load_memory(self, item_id: str, geometry_manager=None) -> Optional[MemoryEntry]:
@@ -279,7 +287,8 @@ class MemoryPersistence:
         # Load without lock first, as _load_item_no_lock handles file reads
         # The lock is primarily for index and file *writes*
         print(f"[PERSISTENCE] load_assembly - Calling _load_item_no_lock with safe ID for {assembly_id}...")
-        item = await self._load_item_no_lock(assembly_id, geometry_manager, safe_filename=safe_assembly_id)
+        # Removed safe_filename keyword argument as _load_item_no_lock does not accept it
+        item = await self._load_item_no_lock(assembly_id, geometry_manager)
         print(f"[PERSISTENCE] load_assembly - _load_item_no_lock returned type: {type(item)} for {assembly_id}")
         
         if isinstance(item, MemoryAssembly):
@@ -387,152 +396,56 @@ class MemoryPersistence:
                 return False
 
     async def save_assembly(self, assembly: MemoryAssembly, geometry_manager=None) -> bool:
-        """
-        Save a single MemoryAssembly object to disk asynchronously.
-        Uses an atomic write pattern (write to temp, then rename).
-        Handles embedding validation and conversion if geometry_manager is provided.
+        """Save a memory assembly to disk and update the index.
 
         Args:
-            assembly: The MemoryAssembly object to save
-            geometry_manager: Optional geometry manager for handling embedding conversions
+            assembly: The memory assembly to save
+            geometry_manager: Optional geometry manager for validating embeddings
             
         Returns:
-            bool: True if the save was successful, False otherwise
+            bool: True if successful, False otherwise
         """
-        print(f"[PERSISTENCE] save_assembly START for {assembly.assembly_id if assembly else 'None'}")
-        if not assembly or not assembly.assembly_id:
-            logger.error("MemoryPersistence", "Cannot save assembly: invalid or missing ID")
-            print("[PERSISTENCE] save_assembly ERROR: Invalid or missing assembly ID")
+        if not assembly:
+            logger.error("MemoryPersistence", "Cannot save assembly: invalid assembly")
             return False
-
+        
+        # Safety check for assembly_id
+        if not hasattr(assembly, 'assembly_id') or not assembly.assembly_id:
+            logger.error("MemoryPersistence", "Cannot save assembly: missing assembly_id")
+            return False
+        
+        # Create assemblies directory if it doesn't exist
+        assemblies_dir = self.storage_path / "assemblies"
+        os.makedirs(assemblies_dir, exist_ok=True)
+        
+        # Safe filename handling for Windows compatibility
         assembly_id = assembly.assembly_id
-        print(f"[PERSISTENCE] save_assembly - ID: {assembly_id}")
-        try:
-            # Create assemblies directory if it doesn't exist
-            assembly_path = self.storage_path / 'assemblies'
-            os.makedirs(assembly_path, exist_ok=True)
+        safe_assembly_id = self.sanitize_id_for_filename(assembly_id)
+        file_path = assemblies_dir / f"{safe_assembly_id}.json"
+        
+        # Convert assembly to dictionary and sanitize any NaN/Inf values
+        assembly_dict = assembly.to_dict()
+        
+        # Perform atomic write
+        save_success = await MemoryPersistence.safe_write_json(
+            data=assembly_dict,
+            target_path=file_path
+        )
+        
+        if save_success:
+            # Update the memory index
+            # Construct the correct relative path including the subdirectory
+            correct_rel_path = str(Path("assemblies") / f"{safe_assembly_id}.json")
+            await self._update_index(assembly, path=correct_rel_path, item_type="assembly")
             
-            # Windows-safe assembly_id for filename (replace : with -)
-            safe_assembly_id = assembly_id.replace(':', '-')
+            # Save the updated index to disk
+            await self._save_index()
             
-            # Create file paths
-            file_path = assembly_path / f"{safe_assembly_id}.json"
-            temp_file_path = assembly_path / f"{safe_assembly_id}.{uuid.uuid4().hex[:8]}.tmp.json"
-            
-            print(f"[PERSISTENCE] save_assembly - File paths created: tmp={temp_file_path}, target={file_path}")
-            
-            # Convert to dict (Potentially blocking)
-            try:
-                print(f"[PERSISTENCE] save_assembly - Calling assembly.to_dict() for {assembly_id}...")
-                assembly_dict = assembly.to_dict()
-                print(f"[PERSISTENCE] save_assembly - assembly.to_dict() completed for {assembly_id}.")
-            except Exception as e:
-                logger.error(
-                    "MemoryPersistence",
-                    f"assembly.to_dict() failed for {assembly_id}: {str(e)}",
-                    exc_info=True
-                )
-                self.stats['failed_assembly_saves'] = self.stats.get('failed_assembly_saves', 0) + 1
-                print(f"[PERSISTENCE] save_assembly ERROR: to_dict failed for {assembly_id}: {e}")
-                return False
-
-            if not isinstance(assembly_dict, dict):
-                logger.error(
-                    "MemoryPersistence",
-                    f"Cannot save assembly {assembly_id}: to_dict() did not return dict."
-                )
-                self.stats['failed_assembly_saves'] = self.stats.get('failed_assembly_saves', 0) + 1
-                print(f"[PERSISTENCE] save_assembly ERROR: to_dict did not return dict for {assembly_id}")
-                return False
-
-            # Basic field checks
-            if not assembly_dict.get("assembly_id"):
-                logger.error(
-                    "MemoryPersistence",
-                    f"Assembly {assembly_id} missing 'assembly_id' field in its dict."
-                )
-                self.stats['failed_assembly_saves'] = self.stats.get('failed_assembly_saves', 0) + 1
-                print(f"[PERSISTENCE] save_assembly ERROR: assembly_id missing in dict for {assembly_id}")
-                return False
-
-            # JSON serialize (Potentially blocking)
-            try:
-                print(f"[PERSISTENCE] save_assembly - Starting json.dumps for {assembly_id}...")
-                json_data = json.dumps(assembly_dict, indent=2, default=MemoryPersistence._default_serializer)
-                print(f"[PERSISTENCE] save_assembly - json.dumps completed for {assembly_id}.")
-            except Exception as e:
-                logger.error(
-                    "MemoryPersistence",
-                    f"JSON serialization error for assembly {assembly_id}",
-                    {"error": str(e)},
-                    exc_info=True
-                )
-                self.stats['failed_assembly_saves'] = self.stats.get('failed_assembly_saves', 0) + 1
-                print(f"[PERSISTENCE] save_assembly ERROR: json.dumps failed for {assembly_id}: {e}")
-                return False
-                
-            print(f"[PERSISTENCE] save_assembly - Acquiring lock for {assembly_id}...")
-            async with self._lock:
-                print(f"[PERSISTENCE] save_assembly - Lock acquired for {assembly_id}.")
-                
-                # Write to file with atomic operation pattern for reliability
-                # temp_file_path = file_path.parent / f"{assembly_id}.{uuid.uuid4().hex[:8]}.tmp.json"
-                print(f"[PERSISTENCE] save_assembly - Writing to temp file: {temp_file_path}")
-                try:
-                    async with aiofiles.open(temp_file_path, 'w') as f:
-                        print(f"[PERSISTENCE] save_assembly - Temp file opened, writing content...")
-                        await f.write(json_data)
-                        print(f"[PERSISTENCE] save_assembly - Content written to temp file.")
-                    
-                    # Ensure temp file was written successfully
-                    print(f"[PERSISTENCE] save_assembly - Checking temp file existence {temp_file_path}...")
-                    exists = await asyncio.to_thread(os.path.exists, temp_file_path)
-                    print(f"[PERSISTENCE] save_assembly - Temp file exists: {exists}")
-                    if not exists:
-                        logger.error(f"Temp file not created at {temp_file_path}")
-                        print(f"[PERSISTENCE] save_assembly ERROR: Temp file not created at {temp_file_path}")
-                        # Attempt cleanup before returning
-                        if await asyncio.to_thread(os.path.exists, temp_file_path): 
-                            try: await asyncio.to_thread(os.remove, temp_file_path) 
-                            except: pass
-                        return False
-                        
-                    # Use atomic rename operation (blocking call in thread)
-                    print(f"[PERSISTENCE] save_assembly - Renaming temp file {temp_file_path} to {file_path}...")
-                    await asyncio.to_thread(shutil.move, temp_file_path, file_path)
-                    print(f"[PERSISTENCE] save_assembly - Rename completed.")
-                    
-                    # Update index after successful save
-                    self._update_index(assembly_id, file_path.relative_to(self.storage_path), "assembly")
-                    print(f"[PERSISTENCE] save_assembly - Index updated for {assembly_id}.")
-                    self.stats['assemblies_saved'] = self.stats.get('assemblies_saved', 0) + 1
-                    print(f"[PERSISTENCE] save_assembly - Save successful for {assembly_id}.")
-                    result = True
-
-                except Exception as e:
-                    logger.error(f"Error writing assembly file: {str(e)}", exc_info=True)
-                    print(f"[PERSISTENCE] save_assembly ERROR: Writing/renaming file failed for {assembly_id}: {e}")
-                    # Clean up temp file if it exists
-                    print(f"[PERSISTENCE] save_assembly - Cleaning up temp file {temp_file_path}...")
-                    if await asyncio.to_thread(os.path.exists, temp_file_path):
-                        try:
-                            await asyncio.to_thread(os.remove, temp_file_path)
-                            print(f"[PERSISTENCE] save_assembly - Temp file cleaned up.")
-                        except Exception as rm_err:
-                            print(f"[PERSISTENCE] save_assembly - Error cleaning temp file: {rm_err}")
-                            pass
-                    self.stats['failed_assembly_saves'] = self.stats.get('failed_assembly_saves', 0) + 1
-                    result = False
-                finally:
-                    print(f"[PERSISTENCE] save_assembly - Releasing lock for {assembly_id}.")
-            
-            print(f"[PERSISTENCE] save_assembly END for {assembly_id}, Result: {result}")
-            return result
-            
-        except Exception as e:
-            logger.error(f"Unexpected error saving assembly {assembly_id}: {str(e)}", exc_info=True)
-            print(f"[PERSISTENCE] save_assembly UNEXPECTED ERROR for {assembly_id}: {e}")
-            self.stats['errors'] = self.stats.get('errors', 0) + 1
+            logger.debug("MemoryPersistence", f"Saved assembly {assembly_id} to {file_path}")
+            self.stats['saves'] = self.stats.get('saves', 0) + 1
+            return True
+        else:
+            logger.error("MemoryPersistence", f"Failed to save assembly {assembly_id}")
             self.stats['failed_assembly_saves'] = self.stats.get('failed_assembly_saves', 0) + 1
             return False
 
@@ -583,228 +496,209 @@ class MemoryPersistence:
                 self.stats['failed_assembly_deletes'] = self.stats.get('failed_assembly_deletes', 0) + 1
                 return False
 
-    async def _load_item_no_lock(self, item_id: str, geometry_manager=None, safe_filename: str = None) -> Optional[Union[MemoryEntry, MemoryAssembly]]:
-        """
-        Internal helper to load EITHER a MemoryEntry or MemoryAssembly by ID.
-        No lock is acquired here; caller must hold self._lock.
-        """
-        print(f"[PERSISTENCE] _load_item_no_lock START for {item_id}")
-        from .memory_structures import MemoryEntry, MemoryAssembly
-
-        if not item_id:
-            logger.error("[_load_item_no_lock] Invalid or empty item_id")
-            print(f"[PERSISTENCE] _load_item_no_lock ERROR - Empty item_id")
-            return None
-
-        try:
-            print(f"[PERSISTENCE] _load_item_no_lock - Getting item info from memory_index for {item_id}")
-            item_info = self.memory_index.get(item_id)
-            item_type = None
-            file_path = None
-
-            print(f"[PERSISTENCE] _load_item_no_lock - Item info found: {item_info is not None}")
+    async def _load_item_no_lock(self, item_id: str, geometry_manager=None) -> Optional[Union[MemoryEntry, MemoryAssembly]]:
+        """Load a memory or assembly by ID with fallback to disk search.
+        This internal method is called by load_memory and load_assembly and
+        assumes the lock is already held by the caller.
+        
+        Args:
+            item_id: ID of the memory or assembly to load
+            geometry_manager: Optional geometry manager for validating embeddings
             
-            # Determine if this is an assembly based on the ID prefix
-            is_assembly = item_id.startswith("asm:")
-            print(f"[PERSISTENCE] _load_item_no_lock - Is assembly: {is_assembly}")
-
-            if item_info:
-                item_type = item_info.get('type', 'memory' if not is_assembly else 'assembly')
-                path_str = item_info.get('path')
-                if path_str:
-                    file_path = self.storage_path / path_str
-                else:
-                    print(f"[PERSISTENCE] _load_item_no_lock - Path missing, using fallback for {item_id}")
-                    if is_assembly:
-                        item_type = 'assembly'
-                        if safe_filename:
-                            file_path = self.storage_path / 'assemblies' / f"{safe_filename}.json"
-                        else:
-                            file_path = self.storage_path / 'assemblies' / f"{item_id}.json"
-                    else:
-                        item_type = 'memory'
-                        file_path = self.storage_path / f"{item_id}.json"
-            else:
-                # Fallback if not found in index
-                print(f"[PERSISTENCE] _load_item_no_lock - Item not in index, using fallback for {item_id}")
-                if is_assembly:
-                    item_type = 'assembly'
-                    if safe_filename:
-                        file_path = self.storage_path / 'assemblies' / f"{safe_filename}.json"
-                    else:
-                        file_path = self.storage_path / 'assemblies' / f"{item_id}.json"
-                else:
-                    item_type = 'memory'
-                    file_path = self.storage_path / f"{item_id}.json"
-
-                print(f"[PERSISTENCE] _load_item_no_lock - Checking existence of fallback path: {file_path}")
-                exists = await asyncio.to_thread(os.path.exists, file_path)
-                print(f"[PERSISTENCE] _load_item_no_lock - Fallback path exists: {exists}")
-                if not exists:
-                    logger.warning(
-                        f"[_load_item_no_lock] Item {item_id} not found in index or filesystem."
-                    )
-                    print(f"[PERSISTENCE] _load_item_no_lock END - Item not found for {item_id}")
-                    return None
-                # We do not update index in fallback until after load success
-
-            # If no file or file doesn't exist
-            print(f"[PERSISTENCE] _load_item_no_lock - Checking file existence: {file_path}")
-            exists = await asyncio.to_thread(os.path.exists, file_path)
-            print(f"[PERSISTENCE] _load_item_no_lock - File exists: {exists}")
-            if file_path is None or not exists:
-                logger.warning(
-                    f"[_load_item_no_lock] Could not locate file for item {item_id}, file_path: {str(file_path)}"
-                )
-                if item_id in self.memory_index:
-                    del self.memory_index[item_id]
-                print(f"[PERSISTENCE] _load_item_no_lock END - File not found for {item_id}")
-                return None
-
-            print(f"[PERSISTENCE] _load_item_no_lock - Loading {item_type} from {file_path}")
-            try:
-                print(f"[PERSISTENCE] _load_item_no_lock - Opening file {file_path}...")
-                async with aiofiles.open(file_path, 'r') as f:
-                    print(f"[PERSISTENCE] _load_item_no_lock - Reading file content...")
-                    content = await f.read()
-                    print(f"[PERSISTENCE] _load_item_no_lock - File content read, length: {len(content)}")
+        Returns:
+            MemoryEntry or MemoryAssembly if found, None otherwise
+        """
+        try:
+            # Check if item is in index
+            if item_id in self.memory_index:
+                index_entry = self.memory_index[item_id]
+                item_type = index_entry.get('type')
+                rel_path = index_entry.get('path')
                 
-                print(f"[PERSISTENCE] _load_item_no_lock - Parsing JSON with asyncio.to_thread...")
-                item_dict = await asyncio.to_thread(json.loads, content)
-                print(f"[PERSISTENCE] _load_item_no_lock - JSON parsed successfully")
-            except json.JSONDecodeError as je:
-                logger.error(f"[_load_item_no_lock] JSON parsing error for {item_id}: {str(je)}")
-                print(f"[PERSISTENCE] _load_item_no_lock ERROR - JSON parse error: {je}")
-                return None
-            except Exception as io_err:
-                logger.error(f"[_load_item_no_lock] File read error for {item_id}: {str(io_err)}")
-                print(f"[PERSISTENCE] _load_item_no_lock ERROR - File read error: {io_err}")
-                return None
-
-            # Distinguish between memory vs assembly
-            if item_type == "assembly" or is_assembly:
-                if geometry_manager is None:
-                    logger.error(
-                        "[_load_item_no_lock] Cannot load assembly: no geometry_manager provided."
-                    )
-                    print(f"[PERSISTENCE] _load_item_no_lock ERROR - No geometry_manager for assembly {item_id}")
+                if not rel_path:
+                    logger.error("MemoryPersistence", f"Invalid index entry for {item_id}: missing path")
                     return None
-                # Construct MemoryAssembly
-                try:
-                    print(f"[PERSISTENCE] _load_item_no_lock - Creating MemoryAssembly from dict for {item_id}...")
-                    instance = MemoryAssembly.from_dict(item_dict, geometry_manager)
-                    print(f"[PERSISTENCE] _load_item_no_lock - MemoryAssembly created successfully for {item_id}")
-                    
-                    # Validate composite embedding if present
-                    if hasattr(instance, 'composite_embedding') and instance.composite_embedding is not None:
-                        try:
-                            print(f"[PERSISTENCE] _load_item_no_lock - Validating composite embedding for {item_id}...")
-                            validated = geometry_manager._validate_vector(
-                                instance.composite_embedding,
-                                f"Loaded Composite Emb for {item_id}"
-                            )
-                            print(f"[PERSISTENCE] _load_item_no_lock - Composite embedding validation result: {validated is not None}")
-                            if validated is None:
-                                logger.warning(f"[_load_item_no_lock] Composite embedding validation failed for assembly {item_id}, setting to None.")
-                                instance.composite_embedding = None
-                            else:
-                                instance.composite_embedding = validated
-                        except Exception as e_val:
-                            logger.error(f"[_load_item_no_lock] Error validating composite embedding for assembly {item_id}: {str(e_val)}")
-                            print(f"[PERSISTENCE] _load_item_no_lock ERROR - Composite embedding validation: {e_val}")
-                            instance.composite_embedding = None
-                            
-                    # Validate hyperbolic embedding if present
-                    if hasattr(instance, 'hyperbolic_embedding') and instance.hyperbolic_embedding is not None:
-                        try:
-                            print(f"[PERSISTENCE] _load_item_no_lock - Validating hyperbolic embedding for {item_id}...")
-                            validated = geometry_manager._validate_vector(
-                                instance.hyperbolic_embedding,
-                                f"Loaded Hyperbolic Emb for {item_id}",
-                                space="hyperbolic"
-                            )
-                            print(f"[PERSISTENCE] _load_item_no_lock - Hyperbolic embedding validation result: {validated is not None}")
-                            if validated is None:
-                                logger.warning(f"[_load_item_no_lock] Hyperbolic embedding validation failed for assembly {item_id}, setting to None.")
-                                instance.hyperbolic_embedding = None
-                            else:
-                                instance.hyperbolic_embedding = validated
-                        except Exception as e_val:
-                            logger.error(f"[_load_item_no_lock] Error validating hyperbolic embedding for assembly {item_id}: {str(e_val)}")
-                            print(f"[PERSISTENCE] _load_item_no_lock ERROR - Hyperbolic embedding validation: {e_val}")
-                            instance.hyperbolic_embedding = None
-                            
-                except Exception as e:
-                    logger.error(f"[_load_item_no_lock] Error constructing MemoryAssembly {item_id}: {str(e)}", exc_info=True)
-                    print(f"[PERSISTENCE] _load_item_no_lock ERROR - MemoryAssembly construction: {e}")
-                    return None
-
-                # If not in index, update
-                if item_id not in self.memory_index:
-                    print(f"[PERSISTENCE] _load_item_no_lock - Updating index for {item_id}")
-                    self._update_index(
-                        item_id,
-                        file_path.relative_to(self.storage_path),
-                        "assembly"
-                    )
-                print(f"[PERSISTENCE] _load_item_no_lock END - Successfully loaded assembly {item_id}")
-                return instance
-
-            else:  # "memory" path
-                try:
-                    print(f"[PERSISTENCE] _load_item_no_lock - Creating MemoryEntry for {item_id}...")
-                    instance = MemoryEntry(**item_dict)
-                    print(f"[PERSISTENCE] _load_item_no_lock - MemoryEntry created successfully for {item_id}")
-                    if 'id' not in item_dict:
-                        instance.id = item_id
-                except Exception as e:
-                    logger.error(f"[_load_item_no_lock] Error constructing MemoryEntry {item_id}: {str(e)}", exc_info=True)
-                    print(f"[PERSISTENCE] _load_item_no_lock ERROR - MemoryEntry construction: {e}")
-                    return None
-
-                # If geometry_manager is available, optionally validate embeddings
-                if geometry_manager and instance.embedding is not None:
-                    # If embedding is a list
-                    if isinstance(instance.embedding, list):
-                        try:
-                            print(f"[PERSISTENCE] _load_item_no_lock - Validating memory embedding for {item_id}...")
-                            validated = geometry_manager._validate_vector(
-                                instance.embedding,
-                                f"Loaded Memory Emb {item_id}"
-                            )
-                            print(f"[PERSISTENCE] _load_item_no_lock - Memory embedding validation result: {validated is not None}")
-                            if validated is None:
-                                logger.warning(f"[_load_item_no_lock] Embedding validation failed for memory {item_id}, setting to None.")
-                                instance.embedding = None
-                            else:
-                                instance.embedding = validated
-                        except Exception as e_val:
-                            logger.error(f"[_load_item_no_lock] Error validating embedding for memory {item_id}: {str(e_val)}")
-                            print(f"[PERSISTENCE] _load_item_no_lock ERROR - Memory embedding validation: {e_val}")
-                            instance.embedding = None
-
-                if item_id not in self.memory_index:
-                    print(f"[PERSISTENCE] _load_item_no_lock - Updating index for memory {item_id}")
-                    self._update_index(
-                        item_id,
-                        file_path.relative_to(self.storage_path),
-                        "memory"
-                    )
-                print(f"[PERSISTENCE] _load_item_no_lock END - Successfully loaded memory {item_id}")
-                return instance
-
+                
+                # Load from indexed path
+                file_path = self.storage_path / rel_path
+                logger.debug("MemoryPersistence", f"Loading {item_type} {item_id} from indexed path: {file_path}")
+                
+                if not await asyncio.to_thread(os.path.exists, file_path):
+                    logger.warning("MemoryPersistence", f"File not found at indexed path: {file_path}")
+                    # Will try fallback paths below
+                else:
+                    # Load from indexed path
+                    if item_type == "memory":
+                        return await self._load_memory_from_file(file_path, item_id, geometry_manager)
+                    elif item_type == "assembly":
+                        return await self._load_assembly_from_file(file_path, item_id, geometry_manager)
+            
+            # Fallback: Try to find item in memories directory
+            safe_item_id = self.sanitize_id_for_filename(item_id)
+            memories_path = self.storage_path / "memories" / f"{safe_item_id}.json"
+            logger.debug("MemoryPersistence", f"_load_item_no_lock - Checking existence of fallback path: {memories_path}")
+            
+            memory_exists = await asyncio.to_thread(os.path.exists, memories_path)
+            logger.debug("MemoryPersistence", f"_load_item_no_lock - Fallback path exists: {memory_exists}")
+            
+            if memory_exists:
+                # Found memory file, load it and update index
+                logger.info("MemoryPersistence", f"Found {item_id} in memories directory, updating index")
+                memory = await self._load_memory_from_file(memories_path, item_id, geometry_manager)
+                if memory:
+                    # Update index with memory file location
+                    rel_path = memories_path.relative_to(self.storage_path)
+                    await self._update_index(memory)
+                return memory
+            
+            # Fallback: Try to find item in assemblies directory
+            safe_item_id = self.sanitize_id_for_filename(item_id)
+            assemblies_path = self.storage_path / "assemblies" / f"{safe_item_id}.json"
+            logger.debug("MemoryPersistence", f"_load_item_no_lock - Checking existence of fallback path: {assemblies_path}")
+            
+            assembly_exists = await asyncio.to_thread(os.path.exists, assemblies_path) 
+            logger.debug("MemoryPersistence", f"_load_item_no_lock - Fallback path exists: {assembly_exists}")
+            
+            if assembly_exists:
+                # Found assembly file, load it and update index
+                logger.info("MemoryPersistence", f"Found {item_id} in assemblies directory, updating index")
+                assembly = await self._load_assembly_from_file(assemblies_path, item_id, geometry_manager)
+                if assembly:
+                    # Update index with assembly file location
+                    rel_path = assemblies_path.relative_to(self.storage_path)
+                    await self._update_index(assembly)
+                return assembly
+            
+            # Item not found in index or on disk
+            logger.warning("MemoryPersistence", f"Item {item_id} not found in index or on disk")
+            return None
+            
         except Exception as e:
-            logger.error(f"[_load_item_no_lock] Unexpected error loading {item_id}: {str(e)}", exc_info=True)
-            print(f"[PERSISTENCE] _load_item_no_lock ERROR - Unexpected: {e}")
+            logger.error("MemoryPersistence", f"Error loading item {item_id}: {str(e)}", exc_info=True)
             return None
 
-    def _update_index(self, item_id: str, relative_path: Path, item_type: str):
-        """Update the in-memory index with minimal info (no lock)."""
-        self.memory_index[item_id] = {
-            'path': str(relative_path),
-            'timestamp': time.time(),
-            'type': item_type
-        }
+    async def _load_memory_from_file(self, file_path: Path, item_id: str, geometry_manager=None) -> Optional[MemoryEntry]:
+        """Load a MemoryEntry from a JSON file."""
+        try:
+            async with aiofiles.open(file_path, 'r') as f:
+                content = await f.read()
+                item_dict = await asyncio.to_thread(json.loads, content)
+                instance = MemoryEntry(**item_dict)
+                if 'id' not in item_dict:
+                    instance.id = item_id
+                if geometry_manager and instance.embedding is not None:
+                    try:
+                        validated = geometry_manager._validate_vector(
+                            instance.embedding,
+                            f"Loaded Memory Emb {item_id}"
+                        )
+                        if validated is None:
+                            logger.warning(f"[_load_memory_from_file] Embedding validation failed for memory {item_id}, setting to None.")
+                            instance.embedding = None
+                        else:
+                            instance.embedding = validated
+                    except Exception as e_val:
+                        logger.error(f"[_load_memory_from_file] Error validating embedding for memory {item_id}: {str(e_val)}")
+                        instance.embedding = None
+                return instance
+        except Exception as e:
+            logger.error(f"[_load_memory_from_file] Error loading memory {item_id}: {str(e)}", exc_info=True)
+            return None
+
+    async def _load_assembly_from_file(self, file_path: Path, item_id: str, geometry_manager=None) -> Optional[MemoryAssembly]:
+        """Load a MemoryAssembly from a JSON file."""
+        try:
+            async with aiofiles.open(file_path, 'r') as f:
+                content = await f.read()
+                item_dict = await asyncio.to_thread(json.loads, content)
+                instance = MemoryAssembly.from_dict(item_dict, geometry_manager)
+                if hasattr(instance, 'composite_embedding') and instance.composite_embedding is not None:
+                    try:
+                        validated = geometry_manager._validate_vector(
+                            instance.composite_embedding,
+                            f"Loaded Composite Emb for {item_id}"
+                        )
+                        if validated is None:
+                            logger.warning(f"[_load_assembly_from_file] Composite embedding validation failed for assembly {item_id}, setting to None.")
+                            instance.composite_embedding = None
+                        else:
+                            instance.composite_embedding = validated
+                    except Exception as e_val:
+                        logger.error(f"[_load_assembly_from_file] Error validating composite embedding for assembly {item_id}: {str(e_val)}")
+                        instance.composite_embedding = None
+                if hasattr(instance, 'hyperbolic_embedding') and instance.hyperbolic_embedding is not None:
+                    try:
+                        validated = geometry_manager._validate_vector(
+                            instance.hyperbolic_embedding,
+                            f"Loaded Hyperbolic Emb for {item_id}"
+                        )
+                        if validated is None:
+                            logger.warning(f"[_load_assembly_from_file] Hyperbolic embedding validation failed for assembly {item_id}, setting to None.")
+                            instance.hyperbolic_embedding = None
+                        else:
+                            instance.hyperbolic_embedding = validated
+                    except Exception as e_val:
+                        logger.error(f"[_load_assembly_from_file] Error validating hyperbolic embedding for assembly {item_id}: {str(e_val)}")
+                        instance.hyperbolic_embedding = None
+                return instance
+        except Exception as e:
+            logger.error(f"[_load_assembly_from_file] Error loading assembly {item_id}: {str(e)}", exc_info=True)
+            return None
+
+    async def _update_index(self, item, path=None, item_type=None):
+        """Update the memory index with a memory or assembly entry.
+        
+        Args:
+            item: MemoryEntry or MemoryAssembly to index
+            path: Optional relative path override
+            item_type: Optional type override ("memory" or "assembly")
+        """
+        try:
+            # Determine item ID and type
+            if hasattr(item, 'id'):
+                item_id = item.id
+                item_actual_type = "memory"
+            elif hasattr(item, 'assembly_id'):
+                item_id = item.assembly_id
+                item_actual_type = "assembly"
+            else:
+                item_id = str(item)  # Fallback to string representation
+                item_actual_type = item_type or "unknown"
+                
+            # Use provided type if specified
+            item_type = item_type or item_actual_type
+                
+            # Determine relative path with sanitized filename
+            if path:
+                rel_path = path
+            else:
+                safe_id = self.sanitize_id_for_filename(item_id)
+                base_dir = "assemblies" if item_type == "assembly" else "memories"
+                # Use Path for cross-platform compatibility
+                rel_path = str(Path(base_dir) / f"{safe_id}.json")
+            
+            # Create index entry
+            timestamp = datetime.now(timezone.utc).isoformat()
+            self.memory_index[item_id] = {
+                'path': rel_path,
+                'type': item_type,
+                'timestamp': timestamp
+            }
+            
+            logger.debug("MemoryPersistence", 
+                       f"Updated index for {item_type} {item_id} with path {rel_path}")
+            
+            # If the item is a Memory Assembly, update vector_index_updated_at
+            if hasattr(item, 'vector_index_updated_at') and item_type == "assembly":
+                # Update vector_index_updated_at timestamp
+                item.vector_index_updated_at = datetime.now(timezone.utc)
+                logger.debug("MemoryPersistence", 
+                            f"Updated vector_index_updated_at for assembly {item_id}")
+            
+            return True
+        except Exception as e:
+            logger.error("MemoryPersistence", f"Error updating index: {str(e)}", exc_info=True)
+            return False
 
     async def create_backup(self) -> bool:
         """Create a full storage backup (copies entire storage_path, ignoring itself)."""
@@ -850,18 +744,68 @@ class MemoryPersistence:
 
     async def shutdown(self):
         """Cleanup: final index save, etc."""
-        logger.info("MemoryPersistence", "Shutting down...")
+        logger.info("MemoryPersistence", "Shutting down persistence handler...")
+        
         try:
-            loop = asyncio.get_running_loop()
-            if not loop.is_running():
-                logger.warning("MemoryPersistence", "No running event loop in shutdown")
-                return
-        except RuntimeError:
-            logger.warning("MemoryPersistence", "No running event loop in shutdown")
-            return
-
-        await self._save_index()
-        logger.info("MemoryPersistence", "Shutdown complete.")
+            # First attempt - use a longer timeout for shutdown
+            try:
+                logger.info("MemoryPersistence", "Saving memory index during shutdown (async)")
+                save_success = await asyncio.wait_for(self._save_index(), timeout=10.0)
+                if save_success:
+                    logger.info("MemoryPersistence", "Memory index saved successfully (async)")
+                else:
+                    logger.warning("MemoryPersistence", "Async index save returned False, falling back to sync")
+                    raise Exception("Async save returned False")
+            except asyncio.TimeoutError:
+                logger.warning("MemoryPersistence", "Timeout during async index save, attempting sync")
+                # Fallback to synchronous save if async times out
+                try:
+                    logger.info("MemoryPersistence", "Performing sync index save")
+                    sync_success = self._save_index_sync()
+                    if sync_success:
+                        logger.info("MemoryPersistence", "Fallback synchronous index save complete")
+                    else:
+                        logger.error("MemoryPersistence", "Both async and sync index saves failed")
+                except Exception as sync_e:
+                    logger.error("MemoryPersistence", f"Error during sync fallback: {sync_e}", exc_info=True)
+            except Exception as e:
+                logger.error("MemoryPersistence", f"Error during shutdown index save: {e}", exc_info=True)
+                # Fallback to synchronous save if async fails
+                try:
+                    logger.info("MemoryPersistence", "Attempting sync save after async exception")
+                    sync_success = self._save_index_sync()
+                    if sync_success:
+                        logger.info("MemoryPersistence", "Fallback synchronous index save complete after exception")
+                    else:
+                        logger.error("MemoryPersistence", "Both async and sync index saves failed after exception")
+                except Exception as sync_e:
+                    logger.error("MemoryPersistence", f"Final sync fallback also failed: {sync_e}", exc_info=True)
+            
+            # Final check of persistence directories
+            try:
+                memories_dir = self.storage_path / "memories"
+                assemblies_dir = self.storage_path / "assemblies"
+                memories_exist = os.path.exists(memories_dir)
+                assemblies_exist = os.path.exists(assemblies_dir)
+                index_exists = os.path.exists(self.index_path)
+                
+                log_data = {
+                    "memories_dir_exists": memories_exist,
+                    "assemblies_dir_exists": assemblies_exist,
+                    "index_exists": index_exists,
+                    "storage_path": str(self.storage_path)
+                }
+                
+                if memories_exist and assemblies_exist and index_exists:
+                    logger.info("MemoryPersistence", "All persistence directories verified", log_data)
+                else:
+                    logger.warning("MemoryPersistence", "Some persistence directories missing", log_data)
+            except Exception as check_e:
+                logger.error("MemoryPersistence", f"Error checking persistence directories: {check_e}")
+        except Exception as outer_e:
+            logger.error("MemoryPersistence", f"Critical failure during shutdown: {outer_e}", exc_info=True)
+        
+        logger.info("MemoryPersistence", "Shutdown complete")
 
     def get_stats(self) -> Dict[str, Any]:
         """Return current persistence stats + index count (without forcing re-init)."""
@@ -908,3 +852,87 @@ class MemoryPersistence:
                 return str(obj) # Try string representation
             except:
                 return "[Unserializable Object]" # Last resort
+
+    @staticmethod
+    async def safe_write_json(data: Any, target_path: Path, serializer=None) -> bool:
+        """Atomically write data to a JSON file with proper directory creation.
+        
+        Args:
+            data: Data to serialize to JSON
+            target_path: Path object for the final destination file
+            serializer: Optional custom JSON serializer function
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        # Generate unique temp path to prevent collisions 
+        unique_suffix = f".{uuid.uuid4().hex[:8]}.tmp"
+        temp_path = target_path.with_suffix(unique_suffix)
+        
+        try:
+            # Ensure parent directory exists
+            parent_dir = os.path.dirname(temp_path)
+            if not await asyncio.to_thread(os.path.exists, parent_dir):
+                logger.info("MemoryPersistence", f"Creating parent directory: {parent_dir}")
+                await asyncio.to_thread(os.makedirs, parent_dir, exist_ok=True)
+                
+                # Verify directory was created
+                dir_exists = await asyncio.to_thread(os.path.exists, parent_dir)
+                if not dir_exists:
+                    logger.error("MemoryPersistence", f"Failed to create directory: {parent_dir}")
+                    return False
+            
+            # Serialize to JSON (potentially CPU-bound)
+            json_data = await asyncio.to_thread(
+                json.dumps, data, indent=2, 
+                default=serializer or MemoryPersistence._default_serializer
+            )
+            
+            # Write to temp file asynchronously
+            async with aiofiles.open(temp_path, 'w') as f:
+                await f.write(json_data)
+                await f.flush() # Ensure data is written to OS buffers
+            
+            # Verify temp file was written successfully
+            temp_exists = await asyncio.to_thread(os.path.exists, temp_path)
+            temp_size = await asyncio.to_thread(os.path.getsize, temp_path) if temp_exists else -1
+            
+            if not temp_exists or (temp_size == 0 and len(json_data) > 0):
+                logger.error("MemoryPersistence", 
+                             f"Temp file write verification failed: {temp_path} (Exists: {temp_exists}, Size: {temp_size})")
+                return False
+                
+            logger.debug("MemoryPersistence", f"Temp file written successfully (size: {temp_size}): {temp_path}")
+            
+            # Atomic move using shutil.move in thread
+            src = str(temp_path)
+            dst = str(target_path)
+            logger.debug("MemoryPersistence", f"Moving temp file '{src}' to final '{dst}'")
+            await asyncio.to_thread(shutil.move, src, dst)
+            
+            # Verify final file exists
+            final_exists = await asyncio.to_thread(os.path.exists, target_path)
+            if not final_exists:
+                logger.error("MemoryPersistence", f"Final file does not exist after move: {target_path}")
+                return False
+                
+            return True
+            
+        except Exception as e:
+            logger.error("MemoryPersistence", f"Error in safe_write_json: {str(e)}", exc_info=True)
+            # Cleanup temp file if it exists
+            try:
+                if 'temp_path' in locals() and await asyncio.to_thread(os.path.exists, temp_path):
+                    await asyncio.to_thread(os.remove, temp_path)
+            except Exception as cleanup_e:
+                logger.debug("MemoryPersistence", f"Error cleaning up temp file: {str(cleanup_e)}")
+            return False
+
+    @staticmethod
+    def sanitize_id_for_filename(item_id: str) -> str:
+        """Convert IDs to safe filenames by replacing invalid characters.
+        
+        This ensures IDs with characters like ':' that are invalid in Windows
+        filenames are properly sanitized.
+        """
+        return item_id.replace(":", "-")

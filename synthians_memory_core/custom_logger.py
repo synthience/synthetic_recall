@@ -49,21 +49,30 @@ class Logger:
 
         self.logger.log(level, log_message, exc_info=exc_info)
 
-    def info(self, context_or_msg: str, msg: Optional[str] = None, data: Optional[Dict[str, Any]] = None, **kwargs):
-        """Log info message"""
+    def debug(self, context_or_msg, msg=None, data=None, **kwargs):
+        self._log(logging.DEBUG, context_or_msg, msg, data, **kwargs)
+
+    def info(self, context_or_msg, msg=None, data=None, **kwargs):
         self._log(logging.INFO, context_or_msg, msg, data, **kwargs)
 
-    def warning(self, context_or_msg: str, msg: Optional[str] = None, data: Optional[Dict[str, Any]] = None, **kwargs):
-        """Log warning message"""
+    def warning(self, context_or_msg, msg=None, data=None, **kwargs):
         self._log(logging.WARNING, context_or_msg, msg, data, **kwargs)
 
-    def error(self, context_or_msg: str, msg: Optional[str] = None, data: Optional[Dict[str, Any]] = None, **kwargs):
-        """Log error message, accepting exc_info"""
+    def error(self, context_or_msg, msg=None, data=None, **kwargs):
         self._log(logging.ERROR, context_or_msg, msg, data, **kwargs)
-
-    def debug(self, context_or_msg: str, msg: Optional[str] = None, data: Optional[Dict[str, Any]] = None, **kwargs):
-        """Log debug message"""
-        self._log(logging.DEBUG, context_or_msg, msg, data, **kwargs)
 
 # Create a singleton logger instance
 logger = Logger()
+
+def get_logger(name="SynthiansMemory"):
+    """
+    Factory function to create a logger instance with the given name.
+    This function is used by the explainability and metrics modules.
+    
+    Args:
+        name: Name for the logger instance
+        
+    Returns:
+        Logger instance with the specified name
+    """
+    return Logger(name)

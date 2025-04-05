@@ -26,8 +26,17 @@ from synthians_memory_core.utils.transcription_feature_extractor import Transcri
 from synthians_memory_core.interruption import InterruptionAwareMemoryHandler
 from synthians_memory_core.memory_core.trainer_integration import TrainerIntegrationManager, SequenceEmbeddingsResponse, UpdateQuickRecalScoreRequest
 
-# Optional: Import sentence_transformers for embedding generation if not moved to GeometryManager
 from sentence_transformers import SentenceTransformer
+
+# Import the new explainability routes
+from synthians_memory_core.api.explainability_routes import router as explainability_router
+from synthians_memory_core.api.diagnostics_routes import router as diagnostics_router
+
+# Check for an environment variable to enable test endpoints
+TEST_ENDPOINTS_ENABLED = os.environ.get("ENABLE_TEST_ENDPOINTS", "false").lower() == "true"
+
+if TEST_ENDPOINTS_ENABLED:
+    logger.warning("!!! TEST ENDPOINTS ENABLED - DO NOT USE IN PRODUCTION !!!")
 
 # Define request/response models using Pydantic
 class ProcessMemoryRequest(BaseModel):
@@ -159,6 +168,35 @@ async def lifespan(app: FastAPI):
     # Create core instance on startup
     app.state.memory_core = SynthiansMemoryCore()
     await app.state.memory_core.initialize()
+    
+    # Mount routers conditionally based on feature flags
+    def mount_conditional_routers():
+        # Always mount essential routers
+        
+        # Conditionally mount explainability and diagnostics routers
+        memory_core = app.state.memory_core
+        # Force enable explainability for testing
+        if not memory_core.config.get("ENABLE_EXPLAINABILITY", False):
+            memory_core.config["ENABLE_EXPLAINABILITY"] = True
+            logger.info("API", "Forcing ENABLE_EXPLAINABILITY=True for testing")
+        
+        if memory_core and memory_core.config.get("ENABLE_EXPLAINABILITY", False):
+            # Import here to avoid circular imports
+            from synthians_memory_core.api.explainability_routes import router as explainability_router
+            from synthians_memory_core.api.diagnostics_routes import router as diagnostics_router
+            
+            logger.info("API", "Mounting explainability and diagnostics routers")
+            app.include_router(explainability_router)
+            app.include_router(diagnostics_router)
+            logger.info("API", "Mounted explainability and diagnostics routers", {
+                "routes_count": len(explainability_router.routes) + len(diagnostics_router.routes)
+            })
+        else:
+            logger.info("API", "Explainability features are disabled", {
+                "ENABLE_EXPLAINABILITY": memory_core.config.get("ENABLE_EXPLAINABILITY", False) if memory_core else False
+            })
+    
+    mount_conditional_routers()
     
     # Initialize emotion analysis model
     try:
@@ -305,59 +343,99 @@ async def health_check():
 
 @app.get("/stats")
 async def get_stats():
-    """Get system statistics."""
+    """Get system statistics.
+    
+    Returns system statistics including:
+    - Memory count
+    - Assembly count
+    - Embedding dimension
+    - Index health metrics
+    - Recent activity
+    - Runtime configuration (non-sensitive)
+    - Performance metrics (if available)
+    - Activation statistics (Phase 5.9)
+    """
     try:
-        uptime = time.time() - app.state.startup_time
+        memory_core = app.state.memory_core
         
-        # Get vector index enhanced stats with drift information
-        vector_index_stats = await app.state.memory_core.vector_index.get_stats()
+        # Basic memory statistics
+        memory_count = await memory_core.get_memory_count()
+        assembly_count = await memory_core.get_assembly_count()
         
-        # Add basic count stats if not already in the enhanced stats
-        if "count" not in vector_index_stats:
-            vector_index_stats["count"] = app.state.memory_core.vector_index.count()
-        if "id_mappings" not in vector_index_stats:
-            vector_index_stats["id_mappings"] = len(app.state.memory_core.vector_index.id_to_index)
+        # Get vector index status
+        index_status = await memory_core.check_index_health()
         
-        # Add index type info
-        vector_index_stats["index_type"] = app.state.memory_core.vector_index.config.get('index_type', 'Unknown')
-        
-        # Get assembly sync stats if available
-        assembly_sync_stats = {}
-        if hasattr(app.state.memory_core, "assembly_sync_manager") and app.state.memory_core.assembly_sync_manager is not None:
-            # Get pending updates count
-            pending_updates = app.state.memory_core.assembly_sync_manager.get_pending_updates()
-            assembly_sync_stats = {
-                "pending_updates_count": len(pending_updates),
-                "retry_queue_size": len(pending_updates)  # Same value, different name for backward compatibility
-            }
+        # Get information about activations (Phase 5.9)
+        activation_stats = {}
+        try:
+            # Load activation stats from the persisted file if it exists
+            stats_path = os.path.join(memory_core.data_dir, "stats", "assembly_activation_stats.json")
+            if os.path.exists(stats_path):
+                async with aiofiles.open(stats_path, "r") as f:
+                    content = await f.read()
+                    activation_stats = json.loads(content)
             
-            # Add more detailed stats if get_stats method exists
-            if hasattr(app.state.memory_core.assembly_sync_manager, "get_stats"):
-                assembly_sync_stats.update(app.state.memory_core.assembly_sync_manager.get_stats())
+            # Calculate total activations and top activated assemblies
+            total_activations = sum(activation_stats.values())
+            
+            # Get top 10 most activated assemblies
+            top_activated = []
+            for asm_id, count in sorted(activation_stats.items(), key=lambda x: x[1], reverse=True)[:10]:
+                try:
+                    assembly = await memory_core.persistence.load_assembly(asm_id)
+                    name = assembly.name if assembly else "Unknown"
+                    top_activated.append({
+                        "assembly_id": asm_id,
+                        "name": name,
+                        "activation_count": count
+                    })
+                except Exception as e:
+                    logger.warning("API", f"Error loading assembly for stats: {asm_id}", {"error": str(e)})
+        except Exception as e:
+            logger.warning("API", "Error loading activation stats", {"error": str(e)})
+            total_activations = 0
+            top_activated = []
         
-        return {
-            "success": True,  # Add success field
-            "api_server": {
-                "uptime_seconds": uptime,
-                "memory_count": len(app.state.memory_core._memories),
-                "embedding_dim": app.state.memory_core.config.get('embedding_dim', 768),
-                "geometry": app.state.memory_core.config.get('geometry', 'hyperbolic'),
-                "model": os.environ.get('EMBEDDING_MODEL', 'sentence-transformers/all-mpnet-base-v2')
+        # Assemble the response
+        response = {
+            "success": True,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "memories": {
+                "total_count": memory_count,
+                "indexed_count": index_status.get("indexed_memory_count", 0),
+                "embedding_dimension": memory_core.config.get("embedding_dim", 0)
             },
-            "memory": {
-                "total_memories": len(app.state.memory_core._memories),
-                "total_assemblies": len(app.state.memory_core.assemblies),
-                "storage_path": app.state.memory_core.config.get('storage_path', '/app/memory/stored/synthians'),
-                "threshold": app.state.memory_core.config.get('contradiction_threshold', 0.75),
+            "assemblies": {
+                "total_count": assembly_count,
+                "indexed_count": index_status.get("indexed_assembly_count", 0),
+                "last_merge_timestamp": index_status.get("last_merge_timestamp"),
+                "sync_status": index_status.get("sync_status", {}),
+                "total_activations_tracked": total_activations,
+                "top_activated": top_activated
             },
-            "vector_index": vector_index_stats,
-            "assembly_sync": assembly_sync_stats
+            "vector_index": {
+                "is_healthy": index_status.get("is_healthy", False),
+                "drift_count": index_status.get("drift_count", 0),
+                "drift_percentage": index_status.get("drift_percentage", 0),
+                "last_check_timestamp": index_status.get("last_check_timestamp")
+            },
+            "performance": {
+                "avg_store_latency_ms": index_status.get("avg_store_latency_ms", 0),
+                "avg_retrieve_latency_ms": index_status.get("avg_retrieve_latency_ms", 0),
+                "avg_merge_latency_ms": index_status.get("avg_merge_latency_ms", 0)
+            },
+            "feature_flags": {
+                "explainability_enabled": memory_core.config.get("ENABLE_EXPLAINABILITY", False),
+                "assembly_pruning_enabled": memory_core.config.get("assembly_pruning_enabled", False)
+            }
         }
+        
+        return response
     except Exception as e:
-        logger.error("get_stats", f"Error retrieving stats: {str(e)}")
+        logger.error("API", "Error retrieving system stats", {"error": str(e)}, exc_info=True)
         return {
             "success": False,
-            "error": str(e)
+            "error": f"Failed to retrieve system statistics: {str(e)}"
         }
 
 @app.post("/process_memory", response_model=ProcessMemoryResponse)
@@ -1128,40 +1206,171 @@ async def repair_index():
     This endpoint attempts to restore consistency between the FAISS index and its ID mappings
     by rebuilding the index if necessary. Part of Phase 5.8 stability improvements.
     
+    Enhanced to support full re-indexing from persistence to recover from severe drift or corruption.
+    This rebuilds the index by loading all memories and assemblies from storage and re-adding them.
+    
     Returns:
         Dict containing repair results:
         - success: Whether the repair was successful
         - repaired: Whether any repairs were actually made
         - before_stats: Index statistics before repair
         - after_stats: Index statistics after repair
+        - reindexed_count: Number of items successfully re-indexed (if applicable)
         - error: Error message if repair failed
     """
     try:
-        logger.info("Starting FAISS index repair procedure")
+        logger.info("[VECTOR_TRACE] Starting FAISS index repair procedure with re-indexing")
         
         # Get stats before repair
         before_stats = app.state.memory_core.vector_index.get_stats()
         
-        # Perform repair operation
-        # Attempt to synchronize the index with mappings
-        repaired = app.state.memory_core.vector_index.repair_index()
+        # Perform repair operation - provide persistence and geometry_manager
+        persistence = getattr(app.state.memory_core, "persistence", None)
+        geometry_manager = getattr(app.state.memory_core, "geometry_manager", None)
+        
+        # Detailed repair log
+        repair_result = None
+        
+        if persistence and geometry_manager:
+            logger.info("[VECTOR_TRACE] Persistence and GeometryManager available, performing full re-indexing repair")
+            # Call repair_index with parameters
+            repair_result = await app.state.memory_core.vector_index.repair_index(
+                persistence=persistence,
+                geometry_manager=geometry_manager
+            )
+        else:
+            logger.warning("[VECTOR_TRACE] Persistence or GeometryManager not available, falling back to basic repair")
+            # Fall back to basic repair without re-indexing
+            repair_result = app.state.memory_core.vector_index.repair_index()
         
         # Get stats after repair
         after_stats = app.state.memory_core.vector_index.get_stats()
         
-        logger.info(f"Index repair complete. Repaired: {repaired}")
-        logger.info(f"Before: {before_stats}")
-        logger.info(f"After: {after_stats}")
+        # Check if the repair improved the situation
+        improved = False
+        if after_stats.get("drift_count", 999) < before_stats.get("drift_count", 1000):
+            improved = True
+            
+        logger.info(f"[VECTOR_TRACE] Index repair complete. Repaired: {repair_result is not None}")
+        logger.info(f"[VECTOR_TRACE] Before: {before_stats}")
+        logger.info(f"[VECTOR_TRACE] After: {after_stats}")
         
-        return {
+        # Enhanced response with additional repair details
+        response = {
             "success": True,
-            "repaired": repaired,
+            "repaired": repair_result is not None and repair_result.get("success", False),
+            "improved": improved,
             "before_stats": before_stats,
             "after_stats": after_stats
         }
+        
+        # Add repair details if available
+        if isinstance(repair_result, dict):
+            response.update({
+                "reindexed_count": repair_result.get("reindexed_count", 0),
+                "repair_details": repair_result
+            })
+        
+        return response
     except Exception as e:
-        logger.error(f"Error repairing index: {str(e)}")
+        logger.error(f"[VECTOR_TRACE] Error repairing index: {str(e)}", exc_info=True)
         return {"success": False, "error": str(e)}
+
+@app.post("/repair_vector_index_drift", response_model=Dict[str, Any])
+async def repair_vector_index_drift():
+    """
+    Repair the vector index when drift is detected between FAISS and ID mappings.
+    
+    This endpoint implements the Phase 5.8 'Repair-Resilient Retrieval' feature by:
+    1. Detecting discrepancies between the FAISS index and ID mappings
+    2. Performing auto-repair operations to reconcile differences
+    3. Saving the repaired index to disk
+    
+    Returns:
+        Dict containing repair operation results:
+        - success: Whether the repair operation completed successfully
+        - is_consistent: Whether the index is now consistent after repairs
+        - drift_amount: Number of discrepancies detected prior to repair
+        - repair_stats: Detailed statistics about the repair operations performed
+        - error: Error message if the repair failed
+    """
+    try:
+        logger.info("Initiating vector index repair operation")
+        
+        # Use the new repair method we implemented
+        result = await app.state.memory_core.detect_and_repair_index_drift(auto_repair=True)
+        
+        # Log appropriate message based on result
+        if result.get("success", False):
+            logger.info("Vector index repair operation completed successfully")
+        else:
+            logger.warning(f"Vector index repair operation failed: {result.get('error', 'Unknown error')}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error during vector index repair: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+@app.get("/repair_vector_index_drift", response_model=Dict[str, Any])
+async def repair_vector_index_drift_get():
+    """
+    Repair the vector index when drift is detected between FAISS and ID mappings (GET endpoint).
+    
+    This endpoint implements the Phase 5.8 'Repair-Resilient Retrieval' feature by:
+    1. Detecting discrepancies between the FAISS index and ID mappings
+    2. Performing auto-repair operations to reconcile differences
+    3. Saving the repaired index to disk
+    
+    Returns:
+        Dict containing repair operation results:
+        - success: Whether the repair operation completed successfully
+        - is_consistent: Whether the index is now consistent after repairs
+        - drift_amount: Number of discrepancies detected prior to repair
+        - repair_stats: Detailed statistics about the repair operations performed
+        - error: Error message if the repair failed
+    """
+    try:
+        logger.info("Initiating vector index repair operation via GET endpoint")
+        
+        # Use the repair method we implemented
+        result = await app.state.memory_core.detect_and_repair_index_drift(auto_repair=True)
+        
+        # Log appropriate message based on result
+        if result.get("success", False):
+            logger.info("Vector index repair operation completed successfully")
+        else:
+            logger.warning(f"Vector index repair operation failed: {result.get('error', 'Unknown error')}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error during vector index repair: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+# --- Test Endpoints (Disabled by default) ---
+
+if TEST_ENDPOINTS_ENABLED:
+    class ConfigUpdateRequest(BaseModel):
+        key: str
+        value: Any
+
+    @app.post("/dev/set_config_value", include_in_schema=False) # Hide from public schema
+    async def set_config_value(request: ConfigUpdateRequest):
+        if not TEST_ENDPOINTS_ENABLED:
+            raise HTTPException(status_code=403, detail="Test endpoints not enabled")
+        try:
+            core = app.state.memory_core
+            original_value = core.config.get(request.key)
+            core.config[request.key] = request.value # Directly modify config
+            logger.info(f"[DEV_CONFIG] Set '{request.key}' from '{original_value}' to '{request.value}'")
+            # Re-log the merge threshold specifically if changed
+            if request.key == 'assembly_merge_threshold':
+                 logger.info(f"[DEV_CONFIG] Merge threshold updated to: {core.config.get('assembly_merge_threshold')}")
+            return {"success": True, "key": request.key, "new_value": request.value, "previous_value": original_value}
+        except Exception as e:
+            logger.error(f"Error in /dev/set_config_value: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
 
 # Run the server when the module is executed directly
 if __name__ == "__main__":

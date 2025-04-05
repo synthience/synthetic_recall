@@ -135,43 +135,119 @@ export interface Alert {
   action?: string;
 }
 
-// Phase 5.9 Explainability types
-export interface LineageEntry {
+// --- Phase 5.9 Explainability Interfaces ---
+
+export interface ExplainActivationData {
   assembly_id: string;
-  merged_from: string[];
-  timestamp: string;
-  depth?: number; // For UI rendering
+  memory_id?: string | null;
+  check_timestamp: string; // ISO string
+  trigger_context?: string | null;
+  assembly_state_before_check?: Record<string, any> | null;
+  calculated_similarity?: number | null;
+  activation_threshold?: number | null;
+  passed_threshold?: boolean | null;
+  notes?: string | null;
+}
+
+export interface ExplainActivationEmpty {
+  assembly_id: string;
+  memory_id?: string | null;
+  notes: string;
+}
+
+export interface ExplainActivationResponse {
+  success: boolean;
+  explanation: ExplainActivationData | ExplainActivationEmpty;
+  error?: string | null;
 }
 
 export interface ExplainMergeData {
   assembly_id: string;
   source_assembly_ids: string[];
   merge_timestamp: string;
-  similarity_threshold: number;
+  similarity_at_merge?: number | null;
+  merge_threshold?: number | null;
   cleanup_status: 'pending' | 'completed' | 'failed';
-  error?: string;
+  cleanup_timestamp?: string | null;
+  cleanup_error?: string | null;
+  notes?: string | null;
 }
 
-export interface ExplainActivationData {
-  memory_id: string;
+export interface ExplainMergeEmpty {
   assembly_id: string;
-  activation_query_or_context: string;
-  similarity_score: number;
-  activation_threshold: number;
-  activated: boolean;
-  notes?: string;
+  notes: string;
 }
 
-export interface MergeLogEntry {
-  event_type: 'merge' | 'cleanup_update';
+export interface ExplainMergeResponse {
+  success: boolean;
+  explanation: ExplainMergeData | ExplainMergeEmpty;
+  error?: string | null;
+}
+
+export interface LineageEntry {
+  assembly_id: string;
+  name?: string | null;
+  depth: number;
+  status?: string | null; // "origin", "merged", "cycle_detected", etc.
+  created_at?: string | null; // ISO string
+  memory_count?: number | null;
+  parent_ids?: string[]; // IDs of source assemblies this was merged from
+}
+
+export interface LineageResponse {
+  success: boolean;
+  target_assembly_id: string;
+  lineage: LineageEntry[];
+  max_depth_reached: boolean;
+  cycles_detected: boolean;
+  error?: string | null;
+}
+
+// --- Phase 5.9 Diagnostics Interfaces ---
+
+export interface ReconciledMergeLogEntry {
   merge_event_id: string;
-  timestamp: string;
-  source_assembly_ids?: string[];
-  status?: 'completed' | 'failed';
-  error?: string;
+  creation_timestamp: string; // ISO string
+  source_assembly_ids: string[];
+  target_assembly_id: string;
+  similarity_at_merge?: number | null;
+  merge_threshold?: number | null;
+  final_cleanup_status: string; // "pending", "completed", "failed"
+  cleanup_timestamp?: string | null; // ISO string
+  cleanup_error?: string | null;
 }
 
-export interface RuntimeConfig {
-  // This will vary based on which service config is being fetched
-  [key: string]: any;
+export interface MergeLogResponse {
+  success: boolean;
+  reconciled_log_entries: ReconciledMergeLogEntry[];
+  count: number;
+  query_limit: number;
+  error?: string | null;
+}
+
+export interface RuntimeConfigResponse {
+  success: boolean;
+  service: string;
+  config: Record<string, any>; // Sanitized config keys/values
+  retrieval_timestamp: string; // ISO string
+  error?: string | null;
+}
+
+export interface ActivationStats {
+  total_activations: number;
+  activations_by_assembly: Record<string, number>; // assembly_id -> count
+  last_updated: string; // ISO timestamp
+}
+
+export interface ServiceMetrics {
+  service_name: string;
+  vector_operations: {
+    avg_latency_ms: number;
+    operation_counts: Record<string, number>; // operation -> count
+  };
+  persistence_operations: {
+    avg_latency_ms: number;
+    operation_counts: Record<string, number>; // operation -> count
+  };
+  // Other metrics fields
 }

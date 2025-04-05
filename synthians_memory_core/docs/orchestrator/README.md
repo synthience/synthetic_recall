@@ -4,17 +4,64 @@ This directory contains documentation for the Context Cascade Engine (CCE) and i
 
 ## Contents
 
-* [Context Cascade Engine](./cce.md): **(Placeholder)** Overview of the `ContextCascadeEngine` class that implements the refactored cognitive flow.
-* [Titans Variants](./titans_variants.md): Documentation on the MAC, MAG, and MAL variants from the Titans paper and their implementation in the CCE.
-* [Attention Mechanisms](./attention.md): Details on how attention is calculated and applied in the different variant implementations.
-* [Sequence Context Management](./sequence_context.md): **(Placeholder)** Documentation on the `SequenceContextManager` that maintains history for attention operations.
-* [Performance-Aware Selection](./performance_aware_selection.md): Documentation on how the system dynamically selects variants based on Neural Memory performance metrics and trend analysis.
+* [Context Cascade Engine](./cce.md): Overview of the `ContextCascadeEngine`.
+* [Titans Variants](./titans_variants.md): Documentation on MAC, MAG, MAL variants.
+* [Attention Mechanisms](./attention.md): Details on attention calculations.
+* [Sequence Context Management](./sequence_context.md): Documentation on `SequenceContextManager`.
+* [Performance-Aware Selection](./performance_aware_selection.md): How variants are dynamically selected.
 
 ## Technical Details
 
-* **Variant Flow**: Different processing paths for MAC (post-retrieval attention), MAG (gated update), and MAL (value modification).
-* **TensorFlow Integration**: How lazy loading of TensorFlow avoids NumPy version conflicts.
-* **Surprise Feedback Loop**: How loss and gradient norm from Neural Memory are converted into QuickRecal score boosts in Memory Core.
-* **Performance Tracking**: How Neural Memory performance metrics (loss, gradient norm) are tracked and analyzed for trend detection.
-* **Dynamic Variant Selection**: How the `VariantSelector` uses performance metrics, trends, and other factors to select the optimal variant.
-* **History Management**: How the sequence context of embeddings, keys, values, and outputs is maintained and used for attention calculations.
+* **Variant Flow & Switching**: Processing paths and dynamic selection.
+* **TensorFlow Integration**: Lazy loading mechanism.
+* **Surprise Feedback Loop**: QuickRecal boost mechanism.
+* **Performance Tracking & LLM Guidance**: Integration details.
+* **History Management**: Context usage for attention.
+* **Phase 5.9 Interaction**: Provides enhanced metrics via `/metrics/recent_cce_responses` for dashboard consumption.
+
+## Phase 5.9 Enhancements
+
+The Context Cascade Engine has been enhanced in Phase 5.9 to provide more detailed metadata about its decision-making process:
+
+1. **Enhanced Metrics Response**: The `/metrics/recent_cce_responses` endpoint now includes detailed information about:
+   * Variant selection reasoning with trace information
+   * Performance metrics that influenced the decision
+   * LLM guidance details including confidence levels and adjustments
+   * Attention focus mechanisms used
+   
+2. **Configuration Exposure**: Runtime configuration can potentially be exposed via the Memory Core API proxy at `/config/runtime/cce`.
+
+3. **Dashboard Integration**: These enhancements support the visualization of CCE behavior in the upcoming Synthians Cognitive Dashboard.
+
+The enhanced metrics response structure now includes:
+
+```json
+{
+  "timestamp": "...",
+  "status": "completed",
+  "memory_id": "mem_abc",
+  "variant_output": { /* ... variant specific metrics ... */ },
+  "variant_selection": {
+    "selected": "MAG",
+    "reason": "Performance (High Surprise 0.65 -> MAG)",
+    "trace": ["Input metrics: ...", ...],
+    "perf_metrics_used": {"avg_loss": 0.65, ...}
+  },
+  "llm_advice_used": {
+    "raw_advice": { /* Optional raw */ },
+    "adjusted_advice": { /* Advice after confidence adjustment */ },
+    "confidence_level": 0.95,
+    "adjustment_reason": "High confidence...",
+    "boost_modifier_applied": 0.1,
+    "tags_added": ["quantum"],
+    "variant_hint_followed": true,
+    "attention_focus_used": "relevance"
+  },
+  "neural_memory_update": { /* ... loss, grad_norm ... */ },
+  "quickrecal_feedback": { /* ... boost applied ... */ }
+}
+```
+
+This enhanced data enables deeper understanding of why the CCE makes specific decisions, how LLM guidance influences processing, and what factors contribute to variant selection.
+
+Refer to the main [Architecture](../ARCHITECTURE.md) and [Component Guide](../COMPONENT_GUIDE.md) for system context.

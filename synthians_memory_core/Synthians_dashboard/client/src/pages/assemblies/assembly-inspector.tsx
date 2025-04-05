@@ -12,12 +12,14 @@ import { MergeExplanationView } from '@/components/dashboard/MergeExplanationVie
 import { ActivationExplanationView } from '@/components/dashboard/ActivationExplanationView';
 import { ArrowLeft, Calendar, Tag } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { LineageEntry, ExplainMergeData, ExplainActivationData } from '@shared/schema';
+import { useFeatures } from '@/contexts/FeaturesContext';
+import { ExplainMergeData, ExplainActivationData } from '@shared/schema';
 
 export default function AssemblyInspector() {
   const [, setLocation] = useLocation();
   const params = useParams<{ id: string }>();
   const assemblyId = params?.id;
+  const { explainabilityEnabled } = useFeatures();
   
   // Selected memory for activation explanation
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
@@ -156,17 +158,24 @@ export default function AssemblyInspector() {
           </CardContent>
         </Card>
         
+        {!explainabilityEnabled && (
+          <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 my-2">
+            <p className="font-medium">Explainability features are disabled</p>
+            <p className="text-sm">Some features like merge explanations and activation details are not available. Enable them by setting <code>ENABLE_EXPLAINABILITY=true</code> in the Memory Core configuration.</p>
+          </div>
+        )}
+        
         {/* Explainability tabs */}
         <Tabs defaultValue="lineage" className="w-full">
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="lineage">Lineage</TabsTrigger>
-            <TabsTrigger value="merge">Merge Explanation</TabsTrigger>
-            <TabsTrigger value="memories">Memories & Activation</TabsTrigger>
+            <TabsTrigger value="merge" disabled={!explainabilityEnabled}>Merge Explanation</TabsTrigger>
+            <TabsTrigger value="memories" disabled={!explainabilityEnabled}>Memories & Activation</TabsTrigger>
           </TabsList>
           
           <TabsContent value="lineage" className="pt-4">
             <LineageView 
-              lineage={lineageQuery.data as LineageEntry[] | undefined} 
+              lineage={lineageQuery.data?.lineage} 
               isLoading={lineageQuery.isLoading} 
               isError={lineageQuery.isError} 
               error={lineageQuery.error as Error}
@@ -178,7 +187,7 @@ export default function AssemblyInspector() {
               {!mergeExplanationQuery.data && !mergeExplanationQuery.isLoading && (
                 <div className="text-center p-6 bg-muted rounded-md">
                   <p className="mb-4">Merge explanation data hasn't been loaded yet.</p>
-                  <Button onClick={handleExplainMerge}>
+                  <Button onClick={handleExplainMerge} disabled={!explainabilityEnabled}>
                     Explain How This Assembly Was Formed
                   </Button>
                 </div>
@@ -186,7 +195,7 @@ export default function AssemblyInspector() {
               
               {(mergeExplanationQuery.data || mergeExplanationQuery.isLoading) && (
                 <MergeExplanationView 
-                  mergeData={mergeExplanationQuery.data as ExplainMergeData | undefined} 
+                  mergeData={mergeExplanationQuery.data?.explanation as ExplainMergeData | undefined} 
                   isLoading={mergeExplanationQuery.isLoading} 
                   isError={mergeExplanationQuery.isError} 
                   error={mergeExplanationQuery.error as Error}
@@ -200,49 +209,52 @@ export default function AssemblyInspector() {
               {/* Memory selection */}
               <Card>
                 <CardHeader>
-                  <CardTitle>Assembly Memories</CardTitle>
+                  <CardTitle>Memories in Assembly</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  {assembly.memory_ids && assembly.memory_ids.length > 0 ? (
-                    <div className="space-y-2 max-h-96 overflow-y-auto pr-2">
-                      {assembly.memory_ids.map((memoryId: string) => (
-                        <div 
-                          key={memoryId}
-                          className={`p-3 rounded-md cursor-pointer ${selectedMemoryId === memoryId ? 'bg-primary/10 border border-primary/20' : 'hover:bg-muted border border-transparent'}`}
-                          onClick={() => handleMemorySelect(memoryId)}
-                        >
-                          <p className="font-mono text-sm">{memoryId}</p>
-                        </div>
-                      ))}
+                  {assembly.memory_ids?.length === 0 ? (
+                    <div className="text-center p-4 text-muted-foreground">
+                      <p>No memories in this assembly.</p>
                     </div>
                   ) : (
-                    <div className="text-center p-4 text-muted-foreground italic">
-                      No memories in this assembly
+                    <div className="space-y-2 max-h-96 overflow-y-auto pr-2">
+                      {assembly.memory_ids?.map((memoryId: string) => (
+                        <div 
+                          key={memoryId}
+                          className={`p-3 border rounded-md cursor-pointer hover:bg-muted transition-colors ${selectedMemoryId === memoryId ? 'border-primary bg-primary/5' : ''}`}
+                          onClick={() => handleMemorySelect(memoryId)}
+                        >
+                          <p className="font-medium truncate">{memoryId}</p>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </CardContent>
               </Card>
               
               {/* Activation explanation */}
-              {selectedMemoryId ? (
-                <ActivationExplanationView 
-                  activationData={activationExplanationQuery.data as ExplainActivationData | undefined} 
-                  isLoading={activationExplanationQuery.isLoading} 
-                  isError={activationExplanationQuery.isError} 
-                  error={activationExplanationQuery.error as Error}
-                />
-              ) : (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Memory Activation Explanation</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-center p-6">
-                      <p className="text-muted-foreground">Select a memory to see activation details</p>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
+              <div>
+                {!selectedMemoryId ? (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Memory Activation Details</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-center p-4 text-muted-foreground">
+                        <p>Select a memory to see activation details.</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <ActivationExplanationView 
+                    activationData={activationExplanationQuery.data?.explanation as ExplainActivationData | undefined} 
+                    memoryId={selectedMemoryId}
+                    isLoading={activationExplanationQuery.isLoading} 
+                    isError={activationExplanationQuery.isError} 
+                    error={activationExplanationQuery.error as Error}
+                  />
+                )}
+              </div>
             </div>
           </TabsContent>
         </Tabs>

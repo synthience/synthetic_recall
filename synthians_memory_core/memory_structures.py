@@ -59,15 +59,23 @@ def _parse_datetime_helper(ts_data: Union[str, int, float, None],
 @dataclass
 class MemoryEntry:
     content: str
-    embedding: Optional[np.ndarray] = None
+    embedding: Optional[np.ndarray] = field(default=None)
     id: str = field(default_factory=lambda: f"mem_{uuid.uuid4().hex[:12]}")
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    quickrecal_score: float = 0.5
-    quickrecal_updated: Optional[datetime] = None
+    quickrecal_score: float = field(default=0.5)
+    quickrecal_updated: Optional[datetime] = field(default=None)
     metadata: Dict[str, Any] = field(default_factory=dict)
-    access_count: int = 0
+    access_count: int = field(default=0)
     last_access_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    hyperbolic_embedding: Optional[np.ndarray] = None
+    hyperbolic_embedding: Optional[np.ndarray] = field(default=None)
+
+    def __eq__(self, other):
+        if not isinstance(other, MemoryEntry):
+            return NotImplemented
+        return self.id == other.id
+
+    def __hash__(self):
+        return hash(self.id)
 
     def __post_init__(self):
         self.quickrecal_score = max(0.0, min(1.0, self.quickrecal_score))
@@ -198,7 +206,7 @@ class MemoryAssembly:
         self.last_activation = self.creation_time
 
         self.memory_manager = None
-        self.memories: Set[str] = set()
+        self.memories: Set[MemoryEntry] = set()
         self.composite_embedding: Optional[np.ndarray] = None
         self.hyperbolic_embedding: Optional[np.ndarray] = None
         self.emotion_profile: Dict[str, float] = {}
@@ -214,9 +222,9 @@ class MemoryAssembly:
         self.merged_from: List[str] = []  # Track assemblies that were merged into this one
 
     def add_memory(self, memory: MemoryEntry, validated_embedding: Optional[np.ndarray] = None) -> bool:
-        if memory.id in self.memories:
+        if memory.id in [mem.id for mem in self.memories]:
             return False
-        self.memories.add(memory.id)
+        self.memories.add(memory)
 
         if validated_embedding is not None:
             mem_emb = validated_embedding
@@ -248,10 +256,29 @@ class MemoryAssembly:
             else:
                 n = len(self.memories)
                 new_comp = ((n - 1) * current_comp + mem_emb) / float(n)
-                self.composite_embedding = self.geometry_manager._normalize(new_comp)
-
+                # Validate the new composite embedding
+                normalized_new_comp = self.geometry_manager._normalize(new_comp)
+                validated_composite = self.geometry_manager._validate_vector(
+                    normalized_new_comp, f"Final Composite Emb {self.assembly_id}"
+                )
+                if validated_composite is None:
+                    logger.error(f"Calculated composite embedding for assembly {self.assembly_id} is invalid after adding memory {memory.id}. Reverting.")
+                    # Revert the add_memory operation
+                    self.memories.discard(memory) # Revert adding memory if composite fails
+                    return False # Indicate failure
+                else:
+                    self.composite_embedding = validated_composite
+        
+        # Update hyperbolic embedding if using hyperbolic geometry
         if self.geometry_manager.config.get('geometry_type') == GeometryType.HYPERBOLIC:
-            self.hyperbolic_embedding = self.geometry_manager._to_hyperbolic(self.composite_embedding)
+            # Only update if composite embedding is valid
+            if self.composite_embedding is not None:
+                self.hyperbolic_embedding = self.geometry_manager._to_hyperbolic(self.composite_embedding)
+            else:
+                logger.warning(f"Cannot create hyperbolic embedding for assembly {self.assembly_id} - composite embedding is None")
+        
+        # Reset vector_index_updated_at to indicate the index needs updating
+        self.vector_index_updated_at = None
 
         mem_emotion = memory.metadata.get("emotional_context", {})
         if mem_emotion:
@@ -449,7 +476,7 @@ class MemoryAssembly:
             float: The boosted relevance score (clamped to 0-1)
         """
         # Only boost if memory is part of this assembly
-        if memory_id not in self.memories:
+        if memory_id not in [mem.id for mem in self.memories]:
             logger.debug(f"Memory {memory_id} not in assembly {self.assembly_id}, no boost applied")
             return base_score
             
@@ -535,7 +562,18 @@ class MemoryAssembly:
     def to_dict(self) -> Dict[str, Any]:
         try:
             keywords_list = sorted(list(self.keywords))
-            memories_list = sorted(list(self.memories))
+            # Correctly serialize memories by calling to_dict() on each MemoryEntry
+            memories_list_of_dicts = []
+            if self.memories:
+                memories_list_of_dicts = [mem.to_dict() for mem in self.memories if hasattr(mem, 'to_dict')]
+                # Sort by memory ID if available for consistent output
+                try:
+                    memories_list_of_dicts.sort(key=lambda x: x.get('id', ''))
+                except TypeError:
+                    # Fallback if sorting fails (e.g., mixed types unlikely here)
+                    logger.warning(f"Could not sort memories for assembly {self.assembly_id} during serialization")
+                    pass 
+                
             tags_list = sorted(list(self.tags))
             return {
                 # CRITICAL: add "id" so the JSON has both fields
@@ -544,7 +582,7 @@ class MemoryAssembly:
                 "name": self.name,
                 "description": self.description,
                 "keywords": keywords_list,
-                "memories": memories_list,
+                "memories": memories_list_of_dicts, # Use the list of dicts
                 "composite_embedding":
                     self.composite_embedding.tolist() if isinstance(self.composite_embedding, np.ndarray) else None,
                 "hyperbolic_embedding":
@@ -605,10 +643,37 @@ class MemoryAssembly:
         asm.access_count = data.get("access_count", 0)
         asm.activation_count = data.get("activation_count", 0)
         asm.last_activated = data.get("last_activated", 0.0)
-        asm.memories = set(data.get("memories", []))
+        
+        # Deserialize MemoryEntry objects from the list of dicts
+        memories_data = data.get("memories", [])
+        asm.memories = set()
+        if isinstance(memories_data, list):
+            for mem_dict in memories_data:
+                if isinstance(mem_dict, dict):
+                    try:
+                        # Assuming MemoryEntry has a from_dict classmethod
+                        mem_entry = MemoryEntry.from_dict(mem_dict)
+                        # CORRECTED: Add the MemoryEntry object itself, not just its ID
+                        asm.memories.add(mem_entry) 
+                        logger.debug(f"[MemoryAssembly.from_dict] Created and added MemoryEntry with ID: {mem_entry.id}")
+                    except Exception as e:
+                        mem_id_str = mem_dict.get('id', 'unknown')
+                        logger.error(
+                            f"MemoryAssembly.from_dict", 
+                            f"Error deserializing memory {mem_id_str} for assembly {assembly_id}: {str(e)}"
+                        )
+                else:
+                    logger.warning(
+                        f"MemoryAssembly.from_dict",
+                        f"Skipping non-dictionary item found in memories list for assembly {assembly_id}"
+                    )
+        else:
+             logger.warning(
+                 f"MemoryAssembly.from_dict", 
+                 f"'memories' field for assembly {assembly_id} is not a list, skipping memory loading. Type: {type(memories_data)}"
+              )
+
         asm.keywords = set(data.get("keywords", []))
-        asm.activation_level = data.get("activation_level", 0.0)
-        asm.activation_decay_rate = data.get("activation_decay_rate", 0.05)
 
         # Handle Phase 5.8 fields with graceful fallbacks for older schema versions
         asm.vector_index_updated_at = _parse_datetime_helper(data.get("vector_index_updated_at"), 

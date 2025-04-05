@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, QueryFunction } from '@tanstack/react-query';
 import { 
   ServiceStatus, 
   MemoryStats, 
@@ -8,125 +8,212 @@ import {
   CCEMetrics,
   Assembly,
   Alert,
-  CCEConfig
+  CCEConfig,
+  ExplainActivationResponse,
+  ExplainMergeResponse,
+  LineageResponse,
+  MergeLogResponse,
+  RuntimeConfigResponse
 } from '@shared/schema';
 
 const api = axios.create({
   baseURL: '/api'
 });
 
-// Services health checks
+const defaultQueryFn = async <TData>({ queryKey }: { queryKey: readonly unknown[] }): Promise<TData> => {
+  let url = '';
+  const params: Record<string, any> = {};
+  queryKey.forEach(part => {
+    if (typeof part === 'string') {
+      url += `/${part}`;
+    } else if (typeof part === 'object' && part !== null) {
+      Object.assign(params, part);
+    }
+  });
+  if (url.startsWith('/')) {
+    url = url.substring(1);
+  }
+  try {
+    const { data } = await api.get(url, { params });
+    return data as TData;
+  } catch (error: any) {
+    console.error(`API Query Error for ${url}:`, error.response?.data || error.message);
+    throw new Error(error.response?.data?.message || error.message || `Failed to fetch ${url}`);
+  }
+};
+
 export const useMemoryCoreHealth = () => {
-  return useQuery({
-    queryKey: ['/api/memory-core/health'],
-    refetchInterval: false, // Polling managed by the store
+  return useQuery<ServiceStatus>({
+    queryKey: ['memory-core', 'health'],
+    queryFn: () => defaultQueryFn<ServiceStatus>({ queryKey: ['memory-core', 'health'] }),
+    refetchInterval: false, 
     retry: 2
   });
 };
 
 export const useNeuralMemoryHealth = () => {
-  return useQuery({
-    queryKey: ['/api/neural-memory/health'],
+  return useQuery<ServiceStatus>({
+    queryKey: ['neural-memory', 'health'],
+    queryFn: () => defaultQueryFn<ServiceStatus>({ queryKey: ['neural-memory', 'health'] }),
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useCCEHealth = () => {
-  return useQuery({
-    queryKey: ['/api/cce/health'],
+  return useQuery<ServiceStatus>({
+    queryKey: ['cce', 'health'],
+    queryFn: () => defaultQueryFn<ServiceStatus>({ queryKey: ['cce', 'health'] }),
     refetchInterval: false,
     retry: 2
   });
 };
 
-// Memory Core data
 export const useMemoryCoreStats = () => {
-  return useQuery({
-    queryKey: ['/api/memory-core/stats'],
+  return useQuery<MemoryStats>({
+    queryKey: ['memory-core', 'stats'],
+    queryFn: () => defaultQueryFn<MemoryStats>({ queryKey: ['memory-core', 'stats'] }),
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useAssemblies = () => {
-  return useQuery({
-    queryKey: ['/api/memory-core/assemblies'],
+  return useQuery<{ assemblies: Assembly[] }>({
+    queryKey: ['memory-core', 'assemblies'],
+    queryFn: () => defaultQueryFn<{ assemblies: Assembly[] }>({ queryKey: ['memory-core', 'assemblies'] }),
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useAssembly = (id: string | null) => {
-  return useQuery({
-    queryKey: ['/api/memory-core/assemblies', id],
+  return useQuery<Assembly>({
+    queryKey: ['memory-core', 'assemblies', id],
+    queryFn: () => defaultQueryFn<Assembly>({ queryKey: ['memory-core', 'assemblies', id] }),
     enabled: !!id,
     refetchInterval: false,
     retry: 2
   });
 };
 
-// Neural Memory data
 export const useNeuralMemoryStatus = () => {
-  return useQuery({
-    queryKey: ['/api/neural-memory/status'],
+  return useQuery<NeuralMemoryStatus>({
+    queryKey: ['neural-memory', 'status'],
+    queryFn: () => defaultQueryFn<NeuralMemoryStatus>({ queryKey: ['neural-memory', 'status'] }),
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useNeuralMemoryDiagnostics = (window: string = '24h') => {
-  return useQuery({
-    queryKey: ['/api/neural-memory/diagnose_emoloop', window],
+  return useQuery<NeuralMemoryDiagnostics>({
+    queryKey: ['neural-memory', 'diagnose_emoloop', { window }],
+    queryFn: () => defaultQueryFn<NeuralMemoryDiagnostics>({ queryKey: ['neural-memory', 'diagnose_emoloop', { window }] }),
     refetchInterval: false,
     retry: 2
   });
 };
 
-// CCE data
 export const useCCEStatus = () => {
-  return useQuery({
-    queryKey: ['/api/cce/status'],
+  return useQuery<Record<string, any>>({
+    queryKey: ['cce', 'status'],
+    queryFn: () => defaultQueryFn<Record<string, any>>({ queryKey: ['cce', 'status'] }),
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useRecentCCEResponses = () => {
-  return useQuery({
-    queryKey: ['/api/cce/metrics/recent_cce_responses'],
+  return useQuery<CCEMetrics>({
+    queryKey: ['cce', 'metrics', 'recent_cce_responses'],
+    queryFn: () => defaultQueryFn<CCEMetrics>({ queryKey: ['cce', 'metrics', 'recent_cce_responses'] }),
     refetchInterval: false,
     retry: 2
   });
 };
 
-// Configuration data
 export const useNeuralMemoryConfig = () => {
-  return useQuery({
-    queryKey: ['/api/neural-memory/config'],
+  return useQuery<Record<string, any>>({
+    queryKey: ['neural-memory', 'config'],
+    queryFn: () => defaultQueryFn<Record<string, any>>({ queryKey: ['neural-memory', 'config'] }),
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useCCEConfig = () => {
-  return useQuery({
-    queryKey: ['/api/cce/config'],
+  return useQuery<CCEConfig>({
+    queryKey: ['cce', 'config'],
+    queryFn: () => defaultQueryFn<CCEConfig>({ queryKey: ['cce', 'config'] }),
     refetchInterval: false,
     retry: 2
   });
 };
 
-// Alerts
 export const useAlerts = () => {
-  return useQuery({
-    queryKey: ['/api/alerts'],
+  return useQuery<{success: boolean; data: Alert[]}>({
+    queryKey: ['alerts'],
+    queryFn: () => defaultQueryFn<{success: boolean; data: Alert[]}>({ queryKey: ['alerts'] }),
     refetchInterval: false,
     retry: 2
   });
 };
 
-// Admin actions
+export const useExplainActivation = (assemblyId: string | null, memoryId?: string | null) => {
+  const queryParams = memoryId ? { memory_id: memoryId } : {};
+  const queryKey = ['memory-core', 'assemblies', assemblyId, 'explain_activation', queryParams] as const;
+  return useQuery<ExplainActivationResponse>({
+    queryKey: queryKey,
+    queryFn: () => defaultQueryFn<ExplainActivationResponse>({ queryKey }),
+    enabled: false, 
+    retry: 1,
+    staleTime: Infinity,
+  });
+};
+
+export const useExplainMerge = (assemblyId: string | null) => {
+  const queryKey = ['memory-core', 'assemblies', assemblyId, 'explain_merge'] as const;
+  return useQuery<ExplainMergeResponse>({
+    queryKey: queryKey,
+    queryFn: () => defaultQueryFn<ExplainMergeResponse>({ queryKey }),
+    enabled: false, 
+    retry: 1,
+    staleTime: Infinity,
+  });
+};
+
+export const useAssemblyLineage = (assemblyId: string | null) => {
+  const queryKey = ['memory-core', 'assemblies', assemblyId, 'lineage'] as const;
+  return useQuery<LineageResponse>({
+    queryKey: queryKey,
+    queryFn: () => defaultQueryFn<LineageResponse>({ queryKey }),
+    enabled: !!assemblyId, 
+    retry: 1,
+    staleTime: 5 * 60 * 1000, 
+  });
+};
+
+export const useMergeLog = (limit: number = 50) => {
+  const queryKey = ['memory-core', 'diagnostics', 'merge_log', { limit }] as const;
+  return useQuery<MergeLogResponse>({
+    queryKey: queryKey,
+    queryFn: () => defaultQueryFn<MergeLogResponse>({ queryKey }),
+    refetchInterval: 30000, 
+    staleTime: 15000, 
+  });
+};
+
+export const useRuntimeConfig = (serviceName: string | null) => {
+  const queryKey = ['memory-core', 'config', 'runtime', serviceName] as const;
+  return useQuery<RuntimeConfigResponse>({
+    queryKey: queryKey,
+    queryFn: () => defaultQueryFn<RuntimeConfigResponse>({ queryKey }),
+    enabled: !!serviceName,
+    staleTime: 10 * 60 * 1000, 
+  });
+};
+
 export const verifyMemoryCoreIndex = async () => {
   return api.post('/memory-core/admin/verify_index');
 };
@@ -143,18 +230,19 @@ export const setCCEVariant = async (variant: string) => {
   return api.post('/cce/set_variant', { variant });
 };
 
-// Helper for manual refresh of all data
 export const refreshAllData = async (queryClient: any) => {
   await Promise.all([
-    queryClient.invalidateQueries({ queryKey: ['/api/memory-core/health'] }),
-    queryClient.invalidateQueries({ queryKey: ['/api/neural-memory/health'] }),
-    queryClient.invalidateQueries({ queryKey: ['/api/cce/health'] }),
-    queryClient.invalidateQueries({ queryKey: ['/api/memory-core/stats'] }),
-    queryClient.invalidateQueries({ queryKey: ['/api/memory-core/assemblies'] }),
-    queryClient.invalidateQueries({ queryKey: ['/api/neural-memory/status'] }),
-    queryClient.invalidateQueries({ queryKey: ['/api/neural-memory/diagnose_emoloop'] }),
-    queryClient.invalidateQueries({ queryKey: ['/api/cce/status'] }),
-    queryClient.invalidateQueries({ queryKey: ['/api/cce/metrics/recent_cce_responses'] }),
-    queryClient.invalidateQueries({ queryKey: ['/api/alerts'] })
+    queryClient.invalidateQueries({ queryKey: ['memory-core', 'health'] }),
+    queryClient.invalidateQueries({ queryKey: ['neural-memory', 'health'] }),
+    queryClient.invalidateQueries({ queryKey: ['cce', 'health'] }),
+    queryClient.invalidateQueries({ queryKey: ['memory-core', 'stats'] }),
+    queryClient.invalidateQueries({ queryKey: ['memory-core', 'assemblies'] }),
+    queryClient.invalidateQueries({ queryKey: ['neural-memory', 'status'] }),
+    queryClient.invalidateQueries({ queryKey: ['neural-memory', 'diagnose_emoloop'] }),
+    queryClient.invalidateQueries({ queryKey: ['cce', 'status'] }),
+    queryClient.invalidateQueries({ queryKey: ['cce', 'metrics', 'recent_cce_responses'] }),
+    queryClient.invalidateQueries({ queryKey: ['alerts'] }),
+    queryClient.invalidateQueries({ queryKey: ['memory-core', 'config', 'runtime'] }),
+    queryClient.invalidateQueries({ queryKey: ['memory-core', 'diagnostics', 'merge_log'] })
   ]);
 };

@@ -85,19 +85,27 @@ export function LineageView({ lineage, isLoading, isError, error }: LineageViewP
                     {entry.depth !== undefined && (
                       <Badge variant="outline" className="mr-2">Level {entry.depth}</Badge>
                     )}
-                    {entry.assembly_id}
+                    {entry.name ? `${entry.name} (${entry.assembly_id})` : entry.assembly_id}
                   </h4>
                   <p className="text-sm text-muted-foreground">
-                    Created: {formatTimeAgo(entry.timestamp)}
+                    Created: {entry.created_at ? formatTimeAgo(entry.created_at) : 'Unknown'}
                   </p>
+                  {entry.status && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Status: <Badge variant="outline">{entry.status}</Badge>
+                    </p>
+                  )}
                 </div>
+                {entry.memory_count !== undefined && entry.memory_count !== null && (
+                  <Badge variant="secondary">{entry.memory_count} memories</Badge>
+                )}
               </div>
               
-              {entry.merged_from.length > 0 && (
+              {entry.parent_ids && entry.parent_ids.length > 0 && (
                 <div className="mt-2">
                   <p className="text-xs text-muted-foreground mb-1">Merged from:</p>
                   <div className="flex flex-wrap gap-1">
-                    {entry.merged_from.map(sourceId => (
+                    {entry.parent_ids.map((sourceId: string) => (
                       <Badge key={sourceId} variant="secondary" className="text-xs">
                         {sourceId}
                       </Badge>

@@ -1,17 +1,55 @@
-# API Reference & Client Documentation
+# Synthians API Documentation
 
-This directory contains documentation for the HTTP API exposed by the Synthians Memory Core service and guidelines for using the Python client.
+This directory contains reference documentation for the HTTP APIs exposed by the Synthians Cognitive Architecture services (Memory Core, Neural Memory, CCE) and usage guides for the Python client libraries.
 
 ## Contents
 
-*   [API Reference](./API_REFERENCE.md): Comprehensive reference for all HTTP API endpoints exposed by the Synthians Memory Core (`http://localhost:5010`), including request/response models and parameters. Details cover memory processing, retrieval, embedding generation, QuickRecal scoring, emotion analysis, feedback mechanisms, and integration points for the Neural Memory / Orchestrator.
-*   [Client Usage](./client_usage.md): Guidelines and code examples for using the asynchronous Python client (`SynthiansClient`) to interact with the Memory Core API. Demonstrates basic operations, utility endpoints, advanced features like feedback and contradiction detection, and error handling best practices.
+*   [**API Reference**](./API_REFERENCE.md): Comprehensive reference for all HTTP API endpoints, including currently implemented endpoints and those planned for Phase 5.9 such as Memory Core (`/explain_*`, `/diagnostics/*`, `/config/*`), Neural Memory, and CCE (`/metrics/recent_cce_responses`). Details request/response models, parameters, and status codes.
+*   [**Client Usage Guide**](./client_usage.md): Guidelines and code examples for using the asynchronous Python clients (`SynthiansClient` for MC) to interact with the APIs. Includes examples for both current and planned endpoints.
 
-## Technical Details
+## Existing API Endpoints (Currently Implemented)
 
-*   **Framework:** The API is built using FastAPI.
-*   **Data Format:** Uses JSON for all request and response bodies. Pydantic models define the structure (see `synthians_memory_core/api/server.py`).
-*   **Error Handling:** Follows standard HTTP status codes. Errors often include a `"detail"` field (FastAPI default) or a structured response with `"success": false` and `"error": "message"`.
-*   **Asynchronous:** The server and client are designed for asynchronous operations using `asyncio`.
-*   **Authentication:** Currently, no specific authentication is implemented in the provided code. Access control would need to be added (e.g., API keys, JWT) for production environments.
-*   **Client:** The `SynthiansClient` library simplifies interaction by handling `aiohttp` requests, session management, and basic response parsing within an async context manager.
+*   **Memory Core**:
+    *   `GET /`: Root endpoint
+    *   `GET /health`: Check service health
+    *   `GET /stats`: Retrieve system statistics
+    *   `POST /process_memory`: Process and store a memory
+    *   `POST /retrieve_memories`: Retrieve memories by similarity
+    *   `POST /generate_embedding`: Generate embedding from text
+    *   `POST /calculate_quickrecal`: Calculate QuickRecal score
+    *   `POST /analyze_emotion`: Analyze emotions in text
+    *   `POST /provide_feedback`: Provide relevance feedback
+    *   `POST /detect_contradictions`: Detect contradictions
+    *   `POST /process_transcription`: Process transcription data
+    *   `GET /api/memories/{memory_id}`: Get memory by ID
+    *   `GET /assemblies`: List all assemblies
+    *   `GET /assemblies/{assembly_id}`: Get assembly details
+    *   `GET /check_index_integrity`: Check FAISS index integrity
+    *   `POST /repair_index`: Repair index issues
+    *   `GET/POST /repair_vector_index_drift`: Repair vector drift
+
+*   **Neural Memory**:
+    *   `POST /update_memory`: Update memory in Neural Memory
+    *   `POST /retrieve`: Retrieve similar embeddings
+    *   `GET /diagnose_emoloop`: Get diagnostic metrics
+
+*   **CCE**:
+    *   `POST /process_memory`: Process memory through cognitive cycle
+    *   `GET /metrics/recent_cce_responses`: Get recent CCE metrics
+
+## Planned API Additions (Phase 5.9)
+
+*   **Explainability** (Memory Core):
+    *   `GET /assemblies/{id}/explain_activation`
+    *   `GET /assemblies/{id}/explain_merge`
+    *   `GET /assemblies/{id}/lineage`
+    *   `GET /memories/{id}/explain_selection` (Optional/Basic)
+*   **Diagnostics** (Memory Core):
+    *   `GET /diagnostics/merge_log`
+    *   `GET /config/runtime/{service_name}`
+*   **Statistics**:
+    *   Enhancement to `/stats` endpoint with assembly activation and pending update counts.
+*   **CCE**:
+    *   Enhancement to `/metrics/recent_cce_responses` with additional details on variant selection and LLM usage.
+
+Refer to the detailed `API_REFERENCE.md` for full specifications of both existing and planned endpoints.

@@ -6,6 +6,7 @@ components for loading data, performing calculations, and formatting responses.
 
 import logging
 from datetime import datetime
+import pytz
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from synthians_memory_core.memory_persistence import MemoryPersistence
@@ -128,7 +129,7 @@ async def calculate_similarity(
 
 def get_timestamp_now() -> str:
     """Get current timestamp in ISO format."""
-    return datetime.utcnow().isoformat() + "Z"
+    return datetime.now(pytz.utc).isoformat() + "Z"
 
 def get_simplified_assembly_state(assembly: MemoryAssembly) -> Dict[str, Any]:
     """Get a simplified state representation of an assembly.

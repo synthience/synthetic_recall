@@ -1,186 +1,215 @@
 # Memory Persistence
 
-The `synthians_memory_core.memory_persistence.MemoryPersistence` class handles the saving and loading of memory structures (primarily `MemoryEntry` and `MemoryAssembly` objects) to and from the filesystem.
+This document describes the persistence layer for the Synthians Memory Core, which is responsible for saving and loading memory entries and assemblies.
 
-## Purpose
+## Overview
 
-Persistence ensures that the state of the memory core (memories, assemblies, metadata) survives restarts and shutdowns.
+The `MemoryPersistence` class handles the storage and retrieval of `MemoryEntry` and `MemoryAssembly` objects to and from disk. It uses a structured filesystem approach with asynchronous I/O operations for efficiency.
 
-## Key Component: `MemoryPersistence`
+## Storage Structure
 
-*   **Functionality:**
-    *   Provides asynchronous methods (`save_memory`, `load_memory`, `delete_memory`, `save_assembly`, `load_assembly`, etc.) to interact with the filesystem.
-    *   Typically saves individual `MemoryEntry` objects as separate JSON files within a structured directory (`storage_path/memories/`).
-    *   Saves `MemoryAssembly` objects similarly (`storage_path/assemblies/`).
-    *   Manages a central index file (`storage_path/memory_index.json`) which maps memory IDs to their file paths and potentially stores lightweight metadata for faster loading or indexing.
-    *   Uses `aiofiles` for non-blocking file I/O, crucial for an asynchronous system.
-*   **Integration:**
-    *   Used by `SynthiansMemoryCore` to save new/updated memories and assemblies.
-    *   Used during `SynthiansMemoryCore` initialization to load existing memories and assemblies from disk.
-    *   Coordinates with `MemoryVectorIndex` to ensure consistency between saved memories and their vector representations.
-
-## Storage Structure (Example)
+The persistence layer uses a structured directory layout:
 
 ```
 <storage_path>/
-├── memory_index.json        # Maps memory_id -> filepath, metadata
-├── memories/
-│   ├── <memory_uuid_1>.json # Complete MemoryEntry object
-│   ├── <memory_uuid_2>.json
+├── memory_index.json           # Index of all memories and assemblies
+├── memories/                   # Directory for memory entries
+│   ├── mem_<uuid_1>.json       # Individual memory entry files
+│   ├── mem_<uuid_2>.json
 │   └── ...
-├── assemblies/
-│   ├── <assembly_id_1>.json # Complete MemoryAssembly object
-│   ├── <assembly_id_2>.json
+├── assemblies/                 # Directory for memory assemblies
+│   ├── asm_<uuid_a>.json       # Individual assembly files
+│   ├── asm_<uuid_b>.json
 │   └── ...
-└── vector_index/           # Managed by MemoryVectorIndex
-    ├── memory_vectors.faiss # FAISS binary index file
-    └── mapping.json        # Backup of string_id -> faiss_id mapping
+├── vector_index/               # Directory for FAISS index files
+│   ├── faiss_index.bin         # Serialized FAISS index
+│   └── faiss_index.bin.mapping.json  # ID mapping information
+├── stats/                      # Directory for statistics (Phase 5.9)
+│   └── assembly_activation_stats.json # Planned for Phase 5.9
+└── logs/                       # Directory for persistent logs (Phase 5.9)
+    └── merge_log.jsonl         # Planned for Phase 5.9
 ```
 
-## Memory Index Structure
+This structure ensures that:
+1. Memory entries and assemblies are stored in separate directories for organization.
+2. Each object has its own file, minimizing contention during parallel operations.
+3. The index file provides a quick way to list all available items without scanning directories.
+4. The vector index is stored separately from the memory objects.
+5. Statistics and logs have dedicated locations.
 
-The `memory_index.json` file maintains a master record of all memories and their metadata:
+## Key Operations
 
-```json
-{
-  "memories": {
-    "550e8400-e29b-41d4-a716-446655440000": {
-      "filepath": "memories/550e8400-e29b-41d4-a716-446655440000.json",
-      "created_at": "2025-03-15T14:32:01.123456",
-      "updated_at": "2025-03-15T14:45:22.654321",
-      "quickrecal_score": 0.85,
-      "content_hash": "sha256:a1b2c3..."
-    },
-    "550e8400-e29b-41d4-a716-446655440001": {
-      "filepath": "memories/550e8400-e29b-41d4-a716-446655440001.json",
-      "created_at": "2025-03-16T08:12:35.789012",
-      "updated_at": "2025-03-16T08:12:35.789012",
-      "quickrecal_score": 0.72,
-      "content_hash": "sha256:d4e5f6..."
-    },
-    // Additional memories...
-  },
-  "assemblies": {
-    "assembly_001": {
-      "filepath": "assemblies/assembly_001.json",
-      "created_at": "2025-03-17T10:24:56.135790",
-      "updated_at": "2025-03-18T15:30:42.864209",
-      "member_count": 5
-    },
-    // Additional assemblies...
-  },
-  "metadata": {
-    "version": "2.3.0",
-    "last_updated": "2025-03-18T15:30:42.864209",
-    "memory_count": 237,
-    "assembly_count": 42
-  }
-}
+### Initialization
+
+```python
+async def initialize(self) -> None:
+    """Initialize the persistence layer."""
+    # Create necessary directories
+    os.makedirs(os.path.join(self.storage_path, "memories"), exist_ok=True)
+    os.makedirs(os.path.join(self.storage_path, "assemblies"), exist_ok=True)
+    os.makedirs(os.path.join(self.storage_path, "vector_index"), exist_ok=True)
+    
+    # Load memory index if it exists
+    try:
+        await self._load_memory_index()
+    except FileNotFoundError:
+        self.memory_index = {"memories": {}, "assemblies": {}}
 ```
 
-## Implementation Details
-
-### 1. Asynchronous Operations
-
-All file operations are implemented asynchronously using `aiofiles` to prevent blocking the main API service:
+### Saving Memory Entries
 
 ```python
 async def save_memory(self, memory: MemoryEntry) -> None:
-    """Save a memory to the filesystem asynchronously."""
-    file_path = os.path.join(self.memories_path, f"{memory.memory_id}.json")
-    memory_dict = memory.dict()
+    """Save a memory entry to disk."""
+    # Add to index
+    self.memory_index["memories"][memory.id] = {
+        "id": memory.id,
+        "timestamp": memory.timestamp,
+        "file_path": f"memories/mem_{memory.id}.json"
+    }
     
-    # Ensure directory exists
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    # Save memory to file
+    memory_path = os.path.join(self.storage_path, "memories", f"mem_{memory.id}.json")
+    async with aiofiles.open(memory_path, "w") as f:
+        await f.write(json.dumps(memory.__dict__, cls=NumpyEncoder))
     
-    # Asynchronously write the memory to a file
-    async with aiofiles.open(file_path, mode='w') as f:
-        await f.write(json.dumps(memory_dict, indent=2))
-    
-    # Update the memory index
-    await self._update_memory_index(memory)
+    # Save updated index
+    await self._save_memory_index()
 ```
 
-### 2. Batch Operations
+### Saving Assemblies
 
-The persistence layer supports batch operations for improved performance:
+```python
+async def save_assembly(self, assembly: MemoryAssembly) -> None:
+    """Save a memory assembly to disk."""
+    # Add to index
+    self.memory_index["assemblies"][assembly.id] = {
+        "id": assembly.id,
+        "updated_at": assembly.updated_at,
+        "file_path": f"assemblies/asm_{assembly.id}.json"
+    }
+    
+    # Save assembly to file
+    assembly_path = os.path.join(self.storage_path, "assemblies", f"asm_{assembly.id}.json")
+    async with aiofiles.open(assembly_path, "w") as f:
+        await f.write(json.dumps(assembly.__dict__, cls=NumpyEncoder))
+    
+    # Save updated index
+    await self._save_memory_index()
+```
+
+### Loading Memory Entries
+
+```python
+async def load_memory(self, memory_id: str) -> Optional[MemoryEntry]:
+    """Load a memory entry from disk."""
+    if memory_id not in self.memory_index["memories"]:
+        return None
+    
+    memory_path = os.path.join(self.storage_path, "memories", f"mem_{memory_id}.json")
+    try:
+        async with aiofiles.open(memory_path, "r") as f:
+            content = await f.read()
+            memory_dict = json.loads(content)
+            memory = MemoryEntry(**memory_dict)
+            return memory
+    except FileNotFoundError:
+        # Remove from index if file not found
+        del self.memory_index["memories"][memory_id]
+        await self._save_memory_index()
+        return None
+```
+
+### Loading Assemblies
+
+```python
+async def load_assembly(self, assembly_id: str) -> Optional[MemoryAssembly]:
+    """Load a memory assembly from disk."""
+    if assembly_id not in self.memory_index["assemblies"]:
+        return None
+    
+    assembly_path = os.path.join(self.storage_path, "assemblies", f"asm_{assembly_id}.json")
+    try:
+        async with aiofiles.open(assembly_path, "r") as f:
+            content = await f.read()
+            assembly_dict = json.loads(content)
+            assembly = MemoryAssembly(**assembly_dict)
+            return assembly
+    except FileNotFoundError:
+        # Remove from index if file not found
+        del self.memory_index["assemblies"][assembly_id]
+        await self._save_memory_index()
+        return None
+```
+
+## Robust Index Saving
+
+Phase 5.8 introduced improvements to ensure atomic index saves:
+
+```python
+async def _save_memory_index(self) -> None:
+    """Save the memory index to disk with atomic guarantees."""
+    index_path = os.path.join(self.storage_path, "memory_index.json")
+    temp_path = f"{index_path}.tmp"
+    
+    # First write to temporary file
+    async with aiofiles.open(temp_path, "w") as f:
+        await f.write(json.dumps(self.memory_index))
+        await f.flush()
+        os.fsync(f.fileno())  # Ensure data is written to disk
+    
+    # Then atomically move to final location
+    shutil.move(temp_path, index_path)
+```
+
+This approach ensures that the index file is never in a partially written state, which could happen if the system crashes during a write operation.
+
+## Batch Operations
+
+For efficiency, the persistence layer supports batch operations:
 
 ```python
 async def save_memories_batch(self, memories: List[MemoryEntry]) -> None:
-    """Save multiple memories efficiently."""
-    # Group operations to reduce disk I/O
-    tasks = [self._save_memory_file(memory) for memory in memories]
-    await asyncio.gather(*tasks)
+    """Save multiple memory entries in a batch."""
+    for memory in memories:
+        self.memory_index["memories"][memory.id] = {
+            "id": memory.id,
+            "timestamp": memory.timestamp,
+            "file_path": f"memories/mem_{memory.id}.json"
+        }
+        
+        memory_path = os.path.join(self.storage_path, "memories", f"mem_{memory.id}.json")
+        async with aiofiles.open(memory_path, "w") as f:
+            await f.write(json.dumps(memory.__dict__, cls=NumpyEncoder))
     
-    # Update the index in one operation
-    await self._update_memory_index_batch(memories)
+    # Save updated index once for all memories
+    await self._save_memory_index()
 ```
 
-### 3. Error Handling and Recovery
+## Planned Phase 5.9 Enhancements
 
-The system implements robust error handling to prevent data loss:
+In Phase 5.9, the persistence layer will be enhanced to support:
 
-* **Transaction-like Approach**: For critical operations, files are first written to temporary locations, then atomically moved to their final destinations
-* **Backup Creation**: Periodic backups of the memory index are maintained
-* **Consistency Checks**: When loading memories, the system verifies consistency between the memory index and actual files
-* **Auto-Recovery**: Can rebuild the memory index from individual memory files if the index becomes corrupted
+1. **Merge Logs**: A new file `logs/merge_log.jsonl` will store merge events in JSON Lines format.
+2. **Activation Statistics**: A new file `stats/assembly_activation_stats.json` will store assembly activation statistics.
+3. **Enhanced Error Handling**: Improved recovery from corrupted files.
 
 ```python
-async def verify_and_repair_consistency(self) -> Dict[str, Any]:
-    """Verify consistency between memory index and files, repairing if needed."""
-    # Implementation scans files, verifies against index, and repairs inconsistencies
-    found_files = await self._scan_memory_files()
-    index_entries = await self._load_memory_index()
+# Example of planned merge log persistence
+async def log_merge_event(self, merge_event: Dict[str, Any]) -> None:
+    """Log a merge event to the merge log file."""
+    log_dir = os.path.join(self.storage_path, "logs")
+    os.makedirs(log_dir, exist_ok=True)
     
-    missing_from_index = [f for f in found_files if f not in index_entries]
-    missing_files = [e for e in index_entries if e not in found_files]
-    
-    # Repair actions
-    repair_results = await self._repair_inconsistencies(missing_from_index, missing_files)
-    
-    return repair_results
+    log_path = os.path.join(log_dir, "merge_log.jsonl")
+    async with aiofiles.open(log_path, "a") as f:
+        await f.write(json.dumps(merge_event) + "\n")
 ```
 
-## Integration with Vector Index
+## Best Practices
 
-The persistence layer works in coordination with the `MemoryVectorIndex` to ensure consistency:
-
-1. **Memory Creation Flow**:
-   * Memory is saved to filesystem via `save_memory`
-   * Memory embedding is added to vector index via `add_vector`
-   * Memory index is updated with metadata
-
-2. **Memory Deletion Flow**:
-   * Memory is marked for deletion in the index
-   * Memory is removed from vector index via `remove_vector`
-   * Memory file is deleted from filesystem
-
-3. **Startup Consistency**:
-   * During initialization, the system verifies that memories in the filesystem have corresponding vectors in the FAISS index
-   * Mismatches are resolved either by rebuilding missing vector entries or removing orphaned vectors
-
-## Configuration
-
-*   `storage_path`: The root directory for all persistent memory data (default: `./storage`)
-*   `index_backup_count`: Number of backup copies to maintain for the memory index (default: `3`)
-*   `auto_repair`: Whether to automatically repair inconsistencies during startup (default: `True`)
-*   `backup_interval`: Interval in seconds between automatic backups (default: `3600` - 1 hour)
-*   `flush_threshold`: Number of memory changes before forcing a flush to disk (default: `20`)
-
-## Performance Considerations
-
-* **Lazy Loading**: By default, the system loads only the memory index at startup, with individual memories loaded on-demand
-* **LRU Cache**: Frequently accessed memories are cached in memory for faster access
-* **Chunked Processing**: For large memory stores, batch operations are chunked to manage memory usage
-* **Optimistic Locking**: Minimal file locking to maximize concurrency, with conflicts resolved through update timestamps
-
-## Failure Handling
-
-* **Disk Full**: If the disk is full, the system attempts to complete critical operations and logs severe warnings
-* **Corrupted Files**: JSON parsing errors are handled gracefully, with attempts to recover partial data
-* **Permission Issues**: Clear error messages indicate permission problems with helpful resolution steps
-* **Storage Migration**: Built-in utilities for safely migrating memory storage to a new location
-
-## Importance
-
-Reliable persistence is fundamental. Without it, the memory core would be volatile, losing all information upon restart. The asynchronous nature ensures that saving/loading operations don't block the main application thread, while the robust error handling and recovery mechanisms protect against data loss.
+1. **Atomicity**: Use the temporary file + move approach for important files.
+2. **Error Handling**: Always handle file I/O exceptions and have recovery strategies.
+3. **Batch Operations**: Use batch operations for bulk saves/loads.
+4. **Directory Structure**: Maintain the established directory structure for compatibility.
+5. **Backups**: Regularly back up the entire storage directory.
