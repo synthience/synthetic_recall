@@ -1,196 +1,230 @@
-# Synthians Cognitive Architecture: Configuration Guide
+# Synthians Cognitive Architecture Configuration Guide
 
-**Version:** 1.2
-**Date:** March 30, 2025
+This document provides a comprehensive guide to configuring the Synthians Cognitive Architecture, including the new Phase 5.9 configuration options.
 
-## 1. Overview
+## Overview
 
-This guide details the configuration parameters for the Synthians Cognitive Architecture, focusing primarily on the Memory Core service which is the central component of the system.
+The Synthians Cognitive Architecture uses a combination of environment variables and configuration files to control its behavior. These settings are managed by each component's configuration manager and can be modified to tune the system's performance.
 
-**Core Services:**
+## Memory Core Configuration
 
-1.  **Synthians Memory Core:** Manages persistent memory, retrieval, and scoring.
-2.  **Neural Memory Server:** Handles adaptive associative memory and test-time learning. *(Documentation for this service is provided separately)*
-3.  **Context Cascade Engine (CCE):** Orchestrates the flow between the Memory Core and Neural Memory. *(Documentation for this service is provided separately)*
+### Core Settings
 
-## 3. Synthians Memory Core Configuration (`synthians_memory_core`)
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `EMBEDDING_DIM` | int | 768 | Dimension of embeddings |
+| `GEOMETRY` | str | "hyperbolic" | Geometry for similarity calculation ("euclidean", "hyperbolic") |
+| `ENABLE_EMBEDDING_VALIDATION` | bool | true | Whether to validate embedding dimensions |
+| `LOG_LEVEL` | str | "INFO" | Logging level ("DEBUG", "INFO", "WARNING", "ERROR") |
+| `STORAGE_PATH` | str | "memory_storage" | Path for memory storage |
+| `ASSEMBLY_STORAGE_PATH` | str | "assembly_storage" | Path for assembly storage |
+| `INDEX_PATH` | str | "memory_index.json" | Path for memory index |
+| `VECTOR_INDEX_PATH` | str | "vector_indices" | Path for vector indices |
 
-These parameters configure the main memory storage and retrieval service, typically controlled via the `config` dictionary passed to the `SynthiansMemoryCore` class constructor and environment variables for the API server.
+### Assembly Settings
 
-### 3.1. Core Parameters (`SynthiansMemoryCore` config dict)
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `ASSEMBLY_ACTIVATION_THRESHOLD` | float | 0.75 | Threshold for assembly activation |
+| `ASSEMBLY_BOOST_FACTOR` | float | 1.5 | Boost factor for activated assemblies |
+| `ASSEMBLY_BOOST_MODE` | str | "linear" | Boost calculation mode ("linear", "sigmoid") |
+| `ENABLE_ASSEMBLY_PRUNING` | bool | true | Whether to prune stale assemblies |
+| `ENABLE_ASSEMBLY_MERGING` | bool | true | Whether to merge similar assemblies |
+| `ASSEMBLY_MERGE_THRESHOLD` | float | 0.85 | Threshold for assembly merging |
+| `MAX_ASSEMBLY_SIZE` | int | 100 | Maximum number of memories in an assembly |
 
-| Parameter                       | Type              | Default                               | Description                                                                                                  | Passed To               |
-| :------------------------------ | :---------------- | :------------------------------------ | :----------------------------------------------------------------------------------------------------------- | :---------------------- |
-| `embedding_dim`                 | int               | 768                                   | **CRITICAL:** Dimension of embeddings used throughout the system. Must match embedding model output.         | All Components          |
-| `geometry`                      | str               | "hyperbolic"                          | Geometric space for embedding operations: "euclidean", "hyperbolic", "spherical", or "mixed"               | `GeometryManager`       |
-| `hyperbolic_curvature`          | float             | -1.0                                  | Curvature parameter for hyperbolic geometry (`< 0`). Lower magnitude = more curved.                         | `GeometryManager`       |
-| `storage_path`                  | str               | "/app/memory/stored/synthians"        | Base path for persistent storage of memories, indices, and assemblies.                                     | `MemoryPersistence`     |
-| `vector_index_type`             | str               | "Cosine"                              | Vector similarity metric: "L2" (Euclidean), "IP" (Inner Product), or "Cosine" (normalized inner product).   | `MemoryVectorIndex`     |
-| `max_memory_entries`            | int               | 50000                                 | Maximum allowed memory entries before pruning is triggered.                                                | Core                    |
-| `prune_threshold_percent`       | float             | 0.9                                   | Percentage of `max_memory_entries` at which pruning is triggered (0.0-1.0).                               | Core                    |
-| `min_quickrecal_for_ltm`        | float             | 0.2                                   | Minimum QuickRecal score required to retain a memory after decay (0.0-1.0).                                | Core                    |
-| `assembly_threshold`            | float             | 0.75                                  | Minimum similarity threshold for memories to form an assembly (0.0-1.0).                                   | Core                    |
-| `max_assemblies_per_memory`     | int               | 3                                     | Maximum number of assemblies a single memory can belong to.                                                | Core                    |
-| `enable_assembly_pruning`       | bool              | True                                  | Whether to automatically prune assemblies based on configured criteria.                                    | Core                    |
-| `assembly_prune_min_memories`   | int               | 2                                     | Minimum number of memories an assembly must contain to avoid pruning.                                      | Core                    |
-| `assembly_prune_max_idle_days`  | float             | 30.0                                  | Maximum days an assembly can remain without activation before pruning.                                     | Core                    |
-| `assembly_prune_max_age_days`   | float             | 90.0                                  | Maximum age in days before an assembly is eligible for pruning.                                           | Core                    |
-| `assembly_prune_min_activation_level` | float        | 5                                     | Minimum number of activations required for an assembly to avoid age-based pruning.                        | Core                    |
-| `enable_assembly_merging`       | bool              | True                                  | Whether to automatically merge similar assemblies.                                                        | Core                    |
-| `assembly_merge_threshold`      | float             | 0.85                                  | Similarity threshold for merging two assemblies (0.0-1.0).                                               | Core                    |
-| `assembly_max_merges_per_run`   | int               | 10                                    | Maximum number of assembly merges to perform in a single maintenance cycle.                              | Core                    |
-| `adaptive_threshold_enabled`    | bool              | True                                  | Enable adaptive similarity threshold for retrieval based on feedback.                                       | `ThresholdCalibrator`   |
-| `initial_retrieval_threshold`   | float             | 0.75                                  | Initial similarity threshold for memory retrieval (0.0-1.0).                                               | `ThresholdCalibrator`   |
-| `persistence_interval`          | float             | 60.0                                  | Seconds between automated persistence operations.                                                          | Core                    |
-| `decay_interval`                | float             | 3600.0                                | Seconds between automated QuickRecal decay checks.                                                         | Core                    |
-| `prune_check_interval`          | float             | 600.0                                 | Seconds between automated memory pruning checks.                                                           | Core                    |
-| `persistence_batch_size`        | int               | 100                                   | Number of memories to persist in a single batch.                                                           | Core                    |
-| `check_index_on_retrieval`      | bool              | False                                 | Whether to check vector index integrity during retrieval operations.                                        | Core                    |
-| `index_check_interval`          | float             | 3600                                  | Seconds between automated vector index verification checks.                                                | Core                    |
-| `migrate_to_idmap`              | bool              | True                                  | Whether to migrate older FAISS indices to IndexIDMap format.                                                | `MemoryVectorIndex`     |
+### Vector Index Settings
 
-### 3.2. Component-Specific Parameters (Passed to Subcomponents)
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `VECTOR_INDEX_TYPE` | str | "flat" | FAISS index type ("flat", "ivf", "hnsw") |
+| `FAISS_NPROBE` | int | 5 | FAISS nprobe parameter for IVF indices |
+| `MAX_ALLOWED_DRIFT_SECONDS` | int | 3600 | Maximum allowed time drift for assembly synchronization |
+| `AUTO_REPAIR_ON_INIT` | bool | true | Whether to repair the index on initialization |
+| `FAIL_ON_INIT_DRIFT` | bool | false | Whether to fail initialization on drift detection |
 
-#### 3.2.1 GeometryManager Parameters
+### Explainability & Diagnostics Settings (Phase 5.9)
 
-The following parameters are extracted from the main config and passed to the `GeometryManager` constructor:
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `ENABLE_EXPLAINABILITY` | bool | false | Master switch for explainability and diagnostics features |
+| `MERGE_LOG_MAX_ENTRIES` | int | 1000 | Maximum number of entries to retain in the merge log |
+| `ASSEMBLY_METRICS_PERSIST_INTERVAL` | float | 600.0 | Seconds between persisting assembly activation stats |
+| `MAX_LINEAGE_DEPTH` | int | 10 | Maximum depth to trace when retrieving assembly lineage |
 
-```python
-self.geometry_manager = GeometryManager({
-    'embedding_dim': self.config['embedding_dim'],
-    'geometry_type': self.config['geometry'],
-    'curvature': self.config['hyperbolic_curvature']
-})
+### QuickRecal Settings
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `RECENCY_WEIGHT` | float | 0.3 | Weight of recency in QuickRecal calculation |
+| `SURPRISE_WEIGHT` | float | 0.2 | Weight of surprise in QuickRecal calculation |
+| `EMOTION_WEIGHT` | float | 0.3 | Weight of emotion in QuickRecal calculation |
+| `CONTEXT_WEIGHT` | float | 0.2 | Weight of context in QuickRecal calculation |
+| `QUICKRECAL_DECAY_RATE` | float | 0.01 | Rate of QuickRecal score decay |
+| `DEFAULT_QUICKRECAL` | float | 0.5 | Default QuickRecal score for new memories |
+
+### Emotional Intelligence Settings
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `EMOTION_MODEL_PATH` | str | "models/emotion" | Path to emotion model |
+| `EMOTION_THRESHOLD` | float | 0.5 | Threshold for emotion gating |
+| `EMOTION_BOOST_FACTOR` | float | 1.2 | Boost factor for emotional memories |
+
+### Phase 5.9 Explainability Settings (New)
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `ENABLE_EXPLAINABILITY` | bool | true | Whether to enable explainability features |
+| `MERGE_LOG_PATH` | str | "data/merge_log.jsonl" | Path for merge event logs |
+| `MAX_TRACKED_ACTIVATIONS` | int | 1000 | Maximum number of activation events to track |
+| `MAX_LINEAGE_DEPTH` | int | 10 | Maximum depth for lineage tracing |
+| `EXPLAINABILITY_LOG_LEVEL` | str | "INFO" | Logging level for explainability module |
+
+## Neural Memory Configuration
+
+### Core Settings
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `EMBEDDING_DIM` | int | 768 | Dimension of embeddings |
+| `SEQUENCE_LENGTH` | int | 5 | Length of embedding sequence |
+| `MODEL_TYPE` | str | "transformer" | Type of neural model |
+| `LEARNING_RATE` | float | 0.001 | Learning rate for test-time learning |
+| `BATCH_SIZE` | int | 32 | Batch size for training |
+| `HIDDEN_DIM` | int | 512 | Hidden dimension for neural model |
+| `USE_GPU` | bool | false | Whether to use GPU acceleration |
+
+### Surprise Detection Settings
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `SURPRISE_THRESHOLD` | float | 0.5 | Threshold for surprise detection |
+| `GRAD_NORM_FACTOR` | float | 0.5 | Weight of gradient norm in surprise calculation |
+| `LOSS_FACTOR` | float | 0.5 | Weight of loss in surprise calculation |
+| `SMOOTHING_FACTOR` | float | 0.1 | Smoothing factor for surprise metrics |
+
+### Metrics Store Settings
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `METRICS_WINDOW` | str | "24h" | Time window for metrics collection |
+| `METRICS_CAPACITY` | int | 1000 | Maximum number of metrics to store |
+| `METRICS_LOG_INTERVAL` | int | 100 | Interval for metrics logging |
+
+## Context Cascade Engine Configuration
+
+### Core Settings
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `DEFAULT_VARIANT` | str | "auto" | Default Titans variant ("auto", "mac", "mag", "mal") |
+| `VARIANT_SELECTION_MODE` | str | "performance" | Mode for variant selection ("performance", "fixed", "random") |
+| `ENABLE_LLM_GUIDANCE` | bool | true | Whether to enable LLM guidance |
+| `LLM_GUIDANCE_URL` | str | "http://localhost:8080" | URL for LLM guidance service |
+| `LLM_CONFIDENCE_THRESHOLD` | float | 0.7 | Threshold for LLM confidence |
+
+### Variant Selection Settings
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `SURPRISE_THRESHOLD_MAG` | float | 0.6 | Surprise threshold for selecting MAG variant |
+| `COMPLEXITY_THRESHOLD_MAL` | float | 0.8 | Complexity threshold for selecting MAL variant |
+| `DEFAULT_ATTENTION_FOCUS` | str | "recency" | Default attention focus ("recency", "relevance", "emotion") |
+| `CONTEXT_WINDOW` | int | 10 | Size of context window for history |
+
+### Phase 5.9 Metrics Settings (New)
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `METRICS_DETAIL_LEVEL` | str | "full" | Detail level for metrics ("basic", "full") |
+| `METRICS_RESPONSE_LIMIT` | int | 100 | Maximum number of recent response metrics to store |
+| `INCLUDE_TRACE_INFO` | bool | true | Whether to include trace info in metrics |
+| `INCLUDE_LLM_ADVICE_RAW` | bool | false | Whether to include raw LLM advice in metrics |
+
+## Configuring the System
+
+### Environment Variables
+
+Configuration values can be set using environment variables, which take precedence over default values. For example:
+
+```bash
+export EMBEDDING_DIM=512
+export ASSEMBLY_ACTIVATION_THRESHOLD=0.8
+export ENABLE_EXPLAINABILITY=true
 ```
 
-Additional `GeometryManager` parameters (with their own defaults if not specified):
+### Docker Environment Variables
 
-| Parameter               | Type   | Default      | Description                                                               |
-| :---------------------- | :----- | :----------- | :------------------------------------------------------------------------ |
-| `alignment_strategy`    | str    | "truncate"   | Strategy for aligning embedding dimensions: "truncate", "pad", or "project" |
-| `normalization_enabled` | bool   | True         | Whether to normalize vectors during operations                            |
+When running with Docker, environment variables can be set in the docker-compose.yml file:
 
-#### 3.2.2 UnifiedQuickRecallCalculator Parameters
-
-The following parameters are extracted from the main config and passed to the `UnifiedQuickRecallCalculator` constructor:
-
-```python
-self.quick_recal = UnifiedQuickRecallCalculator({
-    'embedding_dim': self.config['embedding_dim'],
-    'mode': QuickRecallMode.HPC_QR,  # Default to HPC-QR mode
-    'geometry_type': self.config['geometry'],
-    'curvature': self.config['hyperbolic_curvature']
-}, geometry_manager=self.geometry_manager)
+```yaml
+services:
+  memory-core:
+    environment:
+      - EMBEDDING_DIM=512
+      - ASSEMBLY_ACTIVATION_THRESHOLD=0.8
+      - ENABLE_EXPLAINABILITY=true
 ```
 
-#### 3.2.3 MemoryVectorIndex Parameters
+### Configuration Files
 
-The following parameters are extracted from the main config and passed to the `MemoryVectorIndex` constructor:
+Some components also support loading configuration from files. For example:
 
-```python
-self.vector_index = MemoryVectorIndex({
-    'embedding_dim': self.config['embedding_dim'],
-    'storage_path': os.path.join(self.config['storage_path'], 'index'),
-    'index_type': self.config['vector_index_type'],
-    'use_gpu': self.config.get('use_gpu_for_index', False)
-})
-```
-
-### 3.3. Memory Assembly Lifecycle Management
-
-The Memory Assembly system introduced in Phase 5.8 includes automatic lifecycle management features that can be configured to maintain assembly quality and prevent unbounded growth. These features include pruning of inactive or low-quality assemblies and merging of highly similar assemblies.
-
-#### 3.3.1 Assembly Pruning
-
-Assembly pruning automatically removes assemblies that meet certain criteria during background maintenance cycles. Pruning can be configured with the following parameters:
-
-```python
-# Enable or disable automatic assembly pruning
-enable_assembly_pruning = True
-
-# Minimum number of memories required to keep an assembly
-assembly_prune_min_memories = 2
-
-# Maximum days an assembly can exist without being activated
-assembly_prune_max_idle_days = 30.0
-
-# Maximum age in days for an assembly to be automatically pruned
-assembly_prune_max_age_days = 90.0
-
-# Minimum activation count required to prevent age-based pruning
-assembly_prune_min_activation_level = 5
-```
-
-Pruning operations target the following types of assemblies:
-
-1. **Empty Assemblies**: Assemblies with no memory members
-2. **Old Idle Assemblies**: Assemblies not activated for longer than `assembly_prune_max_idle_days`
-3. **Low-Activity Old Assemblies**: Assemblies older than `assembly_prune_max_age_days` with fewer than `assembly_prune_min_activation_level` activations
-
-#### 3.3.2 Assembly Merging
-
-Assembly merging combines assemblies with highly similar composite embeddings, reducing redundancy and improving retrieval consistency. Merging can be configured with the following parameters:
-
-```python
-# Enable or disable automatic assembly merging
-enable_assembly_merging = True
-
-# Similarity threshold for merging two assemblies (0.0-1.0)
-assembly_merge_threshold = 0.85
-
-# Maximum number of merges to perform in a single maintenance cycle
-assembly_max_merges_per_run = 10
-```
-
-When assemblies are merged:
-
-1. A new assembly is created containing all memory members from both source assemblies
-2. The composite embedding is recalculated based on the combined memory set
-3. All memory-to-assembly references are updated atomically
-4. Original assemblies are removed from all storage locations
-
-#### 3.3.3 Lifecycle Management Integration
-
-Lifecycle management runs automatically as part of the `_decay_and_pruning_loop` background task, following the same interval as the memory pruning process (`prune_check_interval`). This ensures regular maintenance of the assembly store without requiring additional background threads.
-
-## 5. Recommended Configurations
-
-### 5.1. Memory Core Production Configuration
-
-```python
-memory_core_config = {
-    'embedding_dim': 768,
-    'geometry': 'hyperbolic',  # Using hyperbolic geometry for better representation
-    'storage_path': '/persistent/data/memory_storage',
-    'vector_index_type': 'Cosine',  # Cosine similarity (normalized inner product)
-    'max_memory_entries': 100000,  # Larger memory capacity
-    'prune_threshold_percent': 0.95,  # Trigger pruning at 95% capacity
-    'min_quickrecal_for_ltm': 0.25,  # Higher bar for long-term retention
-    'persistence_interval': 30.0,  # More frequent saves
-    'adaptive_threshold_enabled': True,
-    'initial_retrieval_threshold': 0.72,  # Slightly more permissive initial threshold
-    'use_gpu_for_index': True,  # Use GPU acceleration if available
-    
-    # Assembly lifecycle management
-    'enable_assembly_pruning': True,
-    'assembly_prune_min_memories': 3,  # Higher minimum for production
-    'assembly_prune_max_idle_days': 45.0,  # More generous idle window
-    'assembly_prune_max_age_days': 120.0,  # Longer retention
-    'assembly_prune_min_activation_level': 10,  # Higher activation threshold
-    'enable_assembly_merging': True,
-    'assembly_merge_threshold': 0.88,  # More conservative merging
-    'assembly_max_merges_per_run': 5  # More conservative merging pace
+```json
+{
+  "embedding_dim": 512,
+  "assembly_activation_threshold": 0.8,
+  "enable_explainability": true
 }
 ```
 
-## Important Notes on Parameter Inheritance
+## Phase 5.9 Configuration Changes
 
-1. **Embedding Dimension:** The `embedding_dim` parameter is particularly critical as it's passed to multiple components and must match the output dimension of your embedding model. If you're using a pre-trained model like `all-MiniLM-L6-v2` (384D) or `all-mpnet-base-v2` (768D), ensure this parameter matches exactly.
+Phase 5.9 introduces several new configuration options focused on explainability and diagnostics:
 
-2. **Geometry Settings:** The `geometry` and `hyperbolic_curvature` parameters are passed to both the `GeometryManager` and `UnifiedQuickRecallCalculator`. If you want to override geometry settings for only one component, you'll need to initialize that component directly rather than relying on the SynthiansMemoryCore to do it for you.
+1. **Memory Core**:
+   - `ENABLE_EXPLAINABILITY`: Controls whether explainability features are enabled
+   - `MERGE_LOG_PATH`: Path for storing merge event logs
+   - `MAX_TRACKED_ACTIVATIONS`: Maximum number of activation events to track
+   - `MAX_LINEAGE_DEPTH`: Maximum depth for lineage tracing
+   - `EXPLAINABILITY_LOG_LEVEL`: Logging level for explainability module
 
-3. **Storage Paths:** The base `storage_path` is used to derive component-specific paths:
-   - Vector index: `{storage_path}/index/`
-   - Memory files: `{storage_path}/memories/`
-   - Memory index: `{storage_path}/memory_index.json`
-   - Assemblies: `{storage_path}/assemblies/`
+2. **Context Cascade Engine**:
+   - `METRICS_DETAIL_LEVEL`: Detail level for metrics responses
+   - `METRICS_RESPONSE_LIMIT`: Maximum number of recent response metrics to store
+   - `INCLUDE_TRACE_INFO`: Whether to include trace information in metrics
+   - `INCLUDE_LLM_ADVICE_RAW`: Whether to include raw LLM advice in metrics
+
+## Runtime Configuration Access
+
+Phase 5.9 introduces a way to access sanitized runtime configuration through the Memory Core API:
+
+```
+GET /config/runtime/{service_name}
+```
+
+Where `service_name` can be:
+- `memory-core`
+- `neural-memory`
+- `cce`
+
+This endpoint requires `ENABLE_EXPLAINABILITY=true` and only returns a curated list of safe configuration values.
+
+## Best Practices
+
+1. **Testing**: Test configuration changes in a non-production environment first
+2. **Monitoring**: Monitor system behavior after configuration changes
+3. **Documentation**: Document any non-default configuration values
+4. **Consistency**: Keep configuration consistent across related settings
+5. **Security**: Treat configuration with sensitive values (e.g., API keys) as sensitive data
+
+## Troubleshooting
+
+If the system behaves unexpectedly after configuration changes:
+
+1. Verify that environment variables are set correctly
+2. Check logs for configuration-related warnings or errors
+3. Verify that configuration files are valid JSON
+4. Try resetting to default values to see if the issue persists
+5. Consult the API to examine runtime configuration values

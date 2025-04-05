@@ -1,95 +1,116 @@
-# Changelog
+# Synthians Cognitive Architecture Changelog
 
-All notable changes to the Synthians Cognitive Architecture will be documented in this file.
+This document tracks significant changes to the Synthians Cognitive Architecture.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
+## [Released] - Phase 5.9 - Explainability & Diagnostics (2025-04-05)
 
 ### Added
-- Enhanced LLM Guidance System (Phase 5.7.2) with history-aware decision making
-- Blended history summarization using embedding norms and pattern detection
-- New `meta_reasoning` field in LLM responses for improved transparency
-- Explicit instructions for LLM to interpret performance metrics and history patterns
-- Performance confidence assessment based on sample size and consistency
-- Performance-Aware Variant Selection (Phase 5.5) enabling dynamic adaptation based on Neural Memory metrics
-- Trend analysis for Neural Memory performance metrics to proactively select optimal variants
-- Integration tests for Performance-Aware selection to verify functionality
-- Comprehensive documentation for the Performance-Aware selection system
-- Comprehensive documentation structure in the `docs/` directory
-- Placeholders for component deep dives to be filled in future updates
-- Phase 5.8.4 (Bridged Merge Validation): Improved assembly merging test reliability without configuration changes
+- **Explainability Module (`explainability/`)**:
+    - `generate_activation_explanation`: Core logic to explain assembly activation based on similarity vs. threshold.
+    - `generate_merge_explanation`: Core logic to explain assembly merges by combining assembly data (`merged_from`) and reconciled merge log events. Requires `GeometryManager` for loading.
+    - `trace_lineage`: Core logic to trace assembly ancestry via `merged_from` links, including cycle detection and max depth handling. Requires `GeometryManager` for loading.
+    - `_explain_helpers.py`: Utility functions for safe data loading and calculations.
+- **Diagnostics Module (`metrics/`)**:
+    - `MergeTracker`: Manages an **append-only** log (`merge_log.jsonl`) of merge creation and cleanup status events for robustness and history. Implements reconciliation logic. Includes configurable log rotation (size/entry count).
+    - Activation Statistics: Basic in-memory tracking (`_assembly_activation_counts`) with periodic persistence (`stats/assembly_activation_stats.json`).
+- **API Endpoints (`api/`)**:
+    - `GET /assemblies/{id}/explain_activation`: Exposes activation explanation logic.
+    - `GET /assemblies/{id}/explain_merge`: Exposes merge explanation logic.
+    - `GET /assemblies/{id}/lineage`: Exposes lineage tracing logic (with caching).
+    - `GET /diagnostics/merge_log`: Exposes reconciled merge log entries.
+    - `GET /config/runtime/{service_name}`: Exposes sanitized (allow-listed) runtime configuration.
+- **Configuration**:
+    - `ENABLE_EXPLAINABILITY`: Master flag to enable/disable all new features (default: `False`).
+    - `MERGE_LOG_PATH`, `MERGE_LOG_MAX_ENTRIES`, `MERGE_LOG_ROTATION_SIZE_MB`: For `MergeTracker`.
+    - `ASSEMBLY_METRICS_PERSIST_INTERVAL`: For activation stats persistence.
+    - `MAX_LINEAGE_DEPTH`: For lineage tracing.
+- **Testing (`tests/test_phase_5_9_explainability.py`)**:
+    - Comprehensive unit, integration, and API tests for all new features.
+    - Tests cover core logic, API endpoints, feature flag behavior, edge cases (cycles, depth limits, nonexistent items), and error handling.
+    - Improved test fixture setup and teardown reliability (async cleanup, retry mechanisms, robust directory removal).
 
 ### Changed
-- Updated LLM prompt template to version 5.7.2 with improved guidance context
-- Refined performance metric reporting with detailed trend description
-- Modified CCE to retrieve and pass history context to LLM guidance
-- Enhanced `VariantSelector` to consider performance metrics in addition to content and metadata
-- Reorganized documentation into logical sections (core, api, orchestrator, trainer, guides, testing)
-- Updated API_REFERENCE.md to include metadata_filter parameter for memory retrieval
-- Phase 5.8.4: Enhanced assembly merging tests with "bridge memory pattern" for reliable test execution
+- **`SynthiansMemoryCore`**: Integrated calls to `MergeTracker` during assembly merge operations (`_execute_merge`, `cleanup_and_index_after_merge`). Integrated activation tracking (`_track_assembly_activation`).
+- **`MemoryPersistence`**: Added helper (`safe_write_json`) for atomic writes used by metrics/stats persistence. `load_assembly` now requires `GeometryManager`.
+- **API Server (`api/server.py`)**: Conditionally mounts new routers based on `ENABLE_EXPLAINABILITY`. Passes necessary dependencies (core, persistence, geometry_manager) to route handlers.
+- **API Client (`api/client/client.py`)**: Added methods to interact with new explainability/diagnostics endpoints.
+- **Documentation**: Updated architecture, component guides, API references, configuration guide, etc.
 
 ### Fixed
-- Significantly enhanced error handling in the LLM guidance system:
-  - Implemented comprehensive exception handling hierarchy for different error types
-  - Added proper retry logic with exponential backoff for transient failures
-  - Improved error reporting with detailed error messages for better debugging
-  - Fixed JSON schema validation to ensure proper response structure
-  - Enhanced test coverage for various error scenarios including malformed responses
-  - Fixed edge cases in async response handling for both text and JSON formats
-- Improved error handling in history summarization and LLM guidance
-- Robust retry logic for LLM API calls with proper schema validation
-- Documentation now accurately reflects the latest codebase state
-- Links and references updated to match the new structure
-- Phase 5.8.4: Fixed intermittent assembly merging test failures by redesigning test data generation strategy
+- Addressed various bugs identified during testing: `AttributeError` (dict vs object), `TypeError` (mocking), `KeyError` (API schema), `ValueError` (test setup), persistence loading issues, lineage chain persistence in tests, teardown `PermissionError` mitigation.
+- Corrected argument passing (e.g., `geometry_manager`) between API routes and core logic functions.
+- Ensured Pydantic models (`docs/api/phase_5_9_models.md`) accurately reflect API request/response structures.
+- Replaced deprecated `datetime.utcnow()` calls.
 
-## [1.0.0] - 2025-03-30
+## Upcoming: Phase 5.9 (Planned)
 
-### Added
-- Functional surprise feedback loop from Neural Memory to Memory Core's QuickRecal score
-- Comprehensive configuration via environment variables and config dictionaries
-- Robust handling of embedding dimension mismatches (384D vs 768D)
-- Enhanced emotional gating for memory retrieval
+- **Explainability Layer:**
+  - New backend module for explaining system decisions
+  - Tracking and logging of assembly merges
+  - Assembly lineage tracing via `merged_from` field
+  - API endpoints for accessing explanations
+- **New API Endpoints (Planned):**
+  - `GET /assemblies/{id}/explain_activation` - Explains assembly activation decisions
+  - `GET /assemblies/{id}/explain_merge` - Provides merge event details 
+  - `GET /assemblies/{id}/lineage` - Traces assembly ancestry
+  - `GET /config/runtime/{service_name}` - Shows sanitized runtime configuration
+  - `GET /diagnostics/merge_log` - Shows merge event history
+- **Memory Assembly Enhancements:**
+  - Full utilization of `merged_from` field for ancestry tracking
+  - Persistent merge event logging
+- **Enhanced Metrics:**
+  - Improved CCE response metrics with detailed variant selection info
+  - Assembly activation statistics
 
-### Changed
-- Refactored Vector Index to use FAISS IndexIDMap for more robust ID handling
-- Improved retrieval pipeline with lower pre-filter threshold (0.3) for better recall sensitivity
-- Centralized embedding geometry operations in GeometryManager
+## Phase 5.8 (Current)
 
-### Fixed
-- Embedding validation to check for NaN/Inf values
-- Metadata enrichment in process_new_memory workflow
-- Redundant emotion analysis by respecting API-passed emotion data
+- **Memory Assembly Enhancements:**
+  - Added **timestamp-based vector index drift detection**
+  - Only synchronized assemblies contribute to boosting
+  - Added `vector_index_updated_at` field to track synchronization status
+  - Added pending update queue for failed vector index operations
+- **Vector Index Reliability:**
+  - Implemented assembly sync status tracking
+  - Added `check_index_integrity` and `repair_index` endpoints
+  - Added retry logic for failed vector operations
+- **Configuration:**
+  - Added `ASSEMBLY_MAX_DRIFT_SECONDS` to control sync freshness requirements
+  - Added `ASSEMBLY_SYNC_CHECK_INTERVAL` for performance optimization
+- **API Enhancements:**
+  - Enhanced `/stats` endpoint with vector index and assembly sync details
+  - Added `/assemblies` and `/assemblies/{id}` endpoints
+  - Added detailed vector index diagnostics
+- **Stability:**
+  - Improved error handling for vector operations
+  - Implemented safe FAISS index saves
+  - Added backup JSON mapping for index recovery
 
-## [0.9.0] - 2025-03-15
+## Phase 5.7
 
-### Added
-- Initial implementation of the Context Cascade Engine for orchestrating the cognitive cycle
-- Implementation of the three Titans variants (MAC, MAG, MAL)
-- Initial API for Neural Memory Server
-- Test-time learning capability for Neural Memory Module
+- **Integration Points:**
+  - Enhanced CCE metrics endpoints
+  - Improved Neural Memory diagnostics
+- **Performance:**
+  - Optimized FAISS usage
+  - Reduced memory footprint
 
-### Changed
-- Enhanced FAISS integration with GPU support
-- Improved Memory Core persistence mechanism
+## Phase 5.5 - 5.6
 
-### Fixed
-- TensorFlow and NumPy compatibility issues via lazy loading
-- Background task cancellation during application shutdown
+- **Variant Selection:**
+  - Adaptive variant switching based on performance
+  - LLM advice integration for variant hints
+- **Attention Mechanisms:**
+  - Focus shift based on performance metrics
+  - Weighted memory relevance by attention type
 
-## [0.8.0] - 2025-02-28
+## Phase 5.0 - 5.4
 
-### Added
-- UnifiedQuickRecallCalculator with HPC-QR factors
-- Emotional analysis and gating service
-- MetadataSynthesizer for enriching memory entries
-- Basic API server and client
-
-### Changed
-- Improved memory persistence with async operations
-- Enhanced embedding generation with model configuration
-
-### Fixed
-- Memory retrieval performance issues
-- Vector index persistence reliability
+- **Initial Titans Integration:**
+  - MAC variant (Memory-Attention-Compression)
+  - MAG variant (Memory-Attention-Gates)
+  - MAL variant (Memory-Attention-Learning)
+- **Core Architecture:**
+  - Design and implementation of the Bi-Hemispheric model
+  - Memory Core persistence layer
+  - Neural Memory surprise detection
+  - Context Cascade Engine cognitive flow

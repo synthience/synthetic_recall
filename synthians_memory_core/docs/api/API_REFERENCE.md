@@ -1,30 +1,32 @@
 # Synthians Cognitive Architecture: API Reference
 
-This document provides a reference for the APIs exposed by the Synthians Memory Core service.
+**Version:** 1.2.0 (Implemented as of Phase 5.9)  
+**Date:** April 2025
 
-**Date:** 2025-03-30
-**Version:** 1.0.0
+This reference documents all HTTP API endpoints exposed by the Synthians Cognitive Architecture services, including Memory Core, Neural Memory Server, and Context Cascade Engine.
 
 ## Table of Contents
 
-1.  [Synthians Memory Core API](#synthians-memory-core-api)
-2.  [Common Error Handling](#common-error-handling)
+1. [Synthians Memory Core API](#1-synthians-memory-core-api-httplocalhost5010)
+   - [Core Endpoints](#core-endpoints)
+   - [Explainability Endpoints](#explainability-endpoints)
+   - [Diagnostics Endpoints](#diagnostics-endpoints)
+2. [Neural Memory Server API](#2-neural-memory-server-api-httplocalhost8001)
+3. [Context Cascade Engine API](#3-context-cascade-engine-api-httplocalhost8002)
+4. [Common Error Responses](#4-common-error-responses)
 
 ---
 
-## 1. Synthians Memory Core API
+## 1. Synthians Memory Core API (`http://localhost:5010`)
 
-**Base URL:** `http://localhost:5010` (Default)
+The Memory Core API provides endpoints for memory storage, retrieval, embedding generation, and assembly management. It also includes endpoints for explainability and diagnostics (implemented in Phase 5.9).
 
-This service manages persistent memory storage, retrieval, scoring, embedding generation, emotion analysis, and related functionalities for the Synthians system.
+### Core Endpoints
 
----
-
-### Root
+#### Root (`/`)
 
 *   **Method:** `GET`
-*   **Path:** `/`
-*   **Description:** Basic endpoint indicating the API is running.
+*   **Description:** Returns a simple message confirming the API is running.
 *   **Response (Success):**
     ```json
     {
@@ -32,20 +34,17 @@ This service manages persistent memory storage, retrieval, scoring, embedding ge
     }
     ```
 
----
-
-### Health Check
+#### Health Check (`/health`)
 
 *   **Method:** `GET`
-*   **Path:** `/health`
-*   **Description:** Checks the health status of the Memory Core service, including uptime and basic counts.
+*   **Description:** Provides basic health information about the service.
 *   **Response (Success):**
     ```json
     {
       "status": "healthy",
-      "uptime_seconds": 1234.56,         // Example value
-      "memory_count": 500,              // Example value
-      "assembly_count": 50,             // Example value
+      "uptime_seconds": 3600.5,
+      "memory_count": 1024,
+      "assembly_count": 42,
       "version": "1.0.0"
     }
     ```
@@ -53,38 +52,48 @@ This service manages persistent memory storage, retrieval, scoring, embedding ge
     ```json
     {
       "status": "unhealthy",
-      "error": "Description of the error"
+      "error": "Error message here"
     }
     ```
 
----
-
-### Get Statistics
+#### Get Statistics (`/stats`)
 
 *   **Method:** `GET`
-*   **Path:** `/stats`
-*   **Description:** Retrieves detailed statistics about the Memory Core system, including memory counts, vector index status, geometry configuration, and API server details.
+*   **Description:** Retrieves detailed statistics about the Memory Core system, including memory/assembly counts and vector index status.
 *   **Response (Success):**
     ```json
     {
       "success": true,
       "api_server": {
-        "uptime_seconds": 1234.56,        // Example value
-        "memory_count": 500,             // Example value - In-memory cache count
+        "uptime_seconds": 1850.7,
+        "memory_count": 512,
         "embedding_dim": 768,
-        "geometry": "hyperbolic",        // Current geometry setting
-        "model": "all-mpnet-base-v2"      // Configured embedding model
+        "geometry": "hyperbolic",
+        "model": "sentence-transformers/all-mpnet-base-v2"
       },
       "memory": {
-        "total_memories": 500,           // Example value - Total indexed memories
-        "total_assemblies": 50,          // Example value
+        "total_memories": 512,
+        "total_assemblies": 48,
         "storage_path": "/app/memory/stored/synthians",
-        "threshold": 0.75                // Configured default threshold (may differ from active retrieval thresholds which can be adaptive or request-specific)
+        "threshold": 0.75
+      },
+      "assemblies": {
+        "total_count": 48,
+        "indexed_count": 45,
+        "average_size": 10.7,
+        "max_size": 24,
+        "min_size": 3,
+        "activated_count": 12,
+        "active_ratio": 0.25
       },
       "vector_index": {
-        "count": 500,                    // Example value
-        "id_mappings": 500,              // Example value
-        "index_type": "Cosine"           // e.g., L2, IP, Cosine
+        "count": 560,
+        "id_mappings": 560,
+        "index_type": "IndexIDMap"
+      },
+      "assembly_sync": {
+        "pending_updates_count": 3,
+        "retry_queue_size": 3
       }
     }
     ```
@@ -92,422 +101,298 @@ This service manages persistent memory storage, retrieval, scoring, embedding ge
     ```json
     {
       "success": false,
-      "error": "Description of the error retrieving stats"
+      "error": "Error retrieving stats"
     }
     ```
 
----
+*(Remaining core endpoints like process_memory, retrieve_memories, etc. - descriptions remain unchanged as they're already implemented)*
 
-### Process Memory
+### Explainability Endpoints
 
-*   **Method:** `POST`
-*   **Path:** `/process_memory`
-*   **Description:** Processes and stores a new memory entry. Generates embedding if not provided, calculates QuickRecal score, performs emotion analysis (optional), synthesizes metadata, and saves the memory. Handles potential embedding dimension mismatches.
-*   **Request Model:** (`ProcessMemoryRequest`)
-    ```json
-    {
-      "content": "string", // The text content of the memory
-      "embedding": "Optional[List[float]]", // Optional pre-computed embedding
-      "metadata": "Optional[Dict[str, Any]]", // Optional base metadata
-      "analyze_emotion": "Optional[bool]" // Default: true. Set to false to skip emotion analysis.
-    }
-    ```
-*   **Response Model:** (`ProcessMemoryResponse`)
-    ```json
-    {
-      "success": true,
-      "memory_id": "string", // Unique ID assigned to the memory
-      "quickrecal_score": "float", // Calculated relevance score
-      "embedding": "List[float]", // The embedding used/generated (potentially aligned)
-      "metadata": "Dict[str, Any]", // Enriched metadata after synthesis
-      "error": null // Or error string on failure
-    }
-    ```
+*These endpoints require setting the `ENABLE_EXPLAINABILITY` configuration flag to `true`.*
 
----
-
-### Retrieve Memories
-
-*   **Method:** `POST`
-*   **Path:** `/retrieve_memories`
-*   **Description:** Retrieves relevant memories based on a query string. Generates query embedding, performs vector search, applies emotional gating, and uses adaptive thresholding (if enabled).
-*   **Request Model:** (`RetrieveMemoriesRequest`)
-    ```json
-    {
-      "query": "string", // The search query text
-      "query_embedding": "Optional[List[float]]", // Pre-computed embedding vector; rarely needed as the system will automatically generate an embedding from the query text
-      "top_k": "int", // Default: 5. Max number of results to return.
-      "user_emotion": "Optional[Union[Dict[str, Any], str]]", // e.g., {"dominant_emotion": "joy"} or "joy". Used for emotional gating.
-      "cognitive_load": "float", // Default: 0.5. Influences emotional gating strictness.
-      "threshold": "Optional[float]", // Explicit similarity threshold override (0.0-1.0). If None, uses adaptive threshold.
-      "metadata_filter": "Optional[Dict[str, Any]]", // Filter memories by metadata fields (e.g., {"source": "user", "day_of_week": "monday"}). Supports nested keys with dots (e.g., "details.project").
-      "search_strategy": "Optional[str]" // Determines the retrieval approach (e.g., "vector", "hybrid", "metadata"). If not specified, uses the system default.
-    }
-    ```
-*   **Response Model:** (`RetrieveMemoriesResponse`)
-    ```json
-    {
-      "success": true,
-      "memories": [
-        {
-          "id": "string",
-          "content": "string",
-          "embedding": "List[float]",
-          "timestamp": "float", // Unix timestamp
-          "quickrecal_score": "float",
-          "metadata": "Dict[str, Any]", // Includes synthesized metadata
-          "similarity": "float", // Similarity score to the query
-          "emotional_resonance": "Optional[float]", // Score from emotional gating (if applied)
-          "final_score": "Optional[float]" // Combined score after gating (if applied)
-          // ... other MemoryEntry fields serialized by to_dict()
-        }
-        // ... more memories up to top_k
-      ],
-      "error": null // Or error string on failure
-    }
-    ```
-
----
-
-### Generate Embedding
-
-*   **Method:** `POST`
-*   **Path:** `/generate_embedding`
-*   **Description:** Generates an embedding vector for the given text using the server's configured Sentence Transformer model.
-*   **Request Model:** (`GenerateEmbeddingRequest`)
-    ```json
-    {
-      "text": "string" // The text to embed
-    }
-    ```
-*   **Response Model:** (`GenerateEmbeddingResponse`)
-    ```json
-    {
-      "success": true,
-      "embedding": "List[float]", // The generated embedding vector
-      "dimension": "int", // The dimension of the embedding
-      "error": null
-    }
-    ```
-
----
-
-### Calculate QuickRecal Score
-
-*   **Method:** `POST`
-*   **Path:** `/calculate_quickrecal`
-*   **Description:** Calculates the QuickRecal score for a given text or embedding, considering context factors. Generates embedding if only text is provided.
-*   **Request Model:** (`QuickRecalRequest`)
-    ```json
-    {
-      "embedding": "Optional[List[float]]", // Pre-computed embedding
-      "text": "Optional[string]", // Text to generate embedding from if embedding not provided
-      "context": "Optional[Dict[str, Any]]" // Context factors (e.g., timestamp, relevance, importance, metadata)
-    }
-    ```
-*   **Response Model:** (`QuickRecalResponse`)
-    ```json
-    {
-      "success": true,
-      "quickrecal_score": "float", // The calculated score (0.0-1.0)
-      "factors": "Optional[Dict[str, float]]", // Scores of individual contributing factors (e.g., recency, emotion)
-      "error": null
-    }
-    ```
-
----
-
-### Analyze Emotion
-
-*   **Method:** `POST`
-*   **Path:** `/analyze_emotion`
-*   **Description:** Analyzes the emotional content of the given text using the server's `EmotionAnalyzer` (transformer model or keyword fallback).
-*   **Request Model:** (`EmotionRequest`)
-    ```json
-    {
-      "text": "string" // The text to analyze
-    }
-    ```
-*   **Response Model:** (`EmotionResponse`)
-    ```json
-    {
-      "success": true,
-      "emotions": "Dict[str, float]", // Scores for different emotions (e.g., {"joy": 0.8, "sadness": 0.1})
-      "dominant_emotion": "string", // The emotion with the highest score
-      "error": null
-    }
-    ```
-
----
-
-### Provide Feedback
-
-*   **Method:** `POST`
-*   **Path:** `/provide_feedback`
-*   **Description:** Provides feedback on the relevance of a retrieved memory, used by the `ThresholdCalibrator` to adjust the adaptive similarity threshold.
-*   **Request Model:** (`FeedbackRequest`)
-    ```json
-    {
-      "memory_id": "string", // ID of the memory the feedback is about
-      "similarity_score": "float", // The similarity score assigned during retrieval
-      "was_relevant": "bool" // True if the user found it relevant, False otherwise
-    }
-    ```
-*   **Response Model:** (`FeedbackResponse`)
-    ```json
-    {
-      "success": true,
-      "new_threshold": "Optional[float]", // The current adaptive threshold after adjustment
-      "error": null
-    }
-    ```
-
----
-
-### Detect Contradictions
-
-*   **Method:** `POST`
-*   **Path:** `/detect_contradictions`
-*   **Description:** Attempts to detect potential contradictions among stored memories based on semantic similarity and content analysis (currently basic keyword checks for opposition).
-*   **Query Parameter:** `threshold` (float, default: 0.75) - Similarity threshold for considering memories potentially contradictory.
-*   **Response (Success):**
-    ```json
-    {
-      "success": true,
-      "contradictions": [
-        {
-           "memory_a_id": "string",
-           "memory_a_content": "string",
-           "memory_b_id": "string",
-           "memory_b_content": "string",
-           "similarity": "float",
-           "overlap_ratio": "float" // Ratio of common words
-        }
-        // ... more potential contradictions
-      ],
-      "count": "int" // Number of contradiction pairs found
-    }
-    ```
-*   **Response (Error):**
-    ```json
-    {
-      "success": false,
-      "error": "Description of the error"
-    }
-    ```
-
----
-
-### Process Transcription
-
-*   **Method:** `POST`
-*   **Path:** `/process_transcription`
-*   **Description:** Processes transcribed text, enriches it with features extracted from audio metadata (e.g., pauses, speaking rate, interruption info), performs emotion analysis, and stores it as a memory.
-*   **Request Model:** (`TranscriptionRequest`)
-    ```json
-    {
-      "text": "string", // The transcribed text
-      "audio_metadata": "Optional[Dict[str, Any]]", // e.g., {"duration_sec": 5.2, "was_interrupted": true}
-      "embedding": "Optional[List[float]]", // Optional pre-computed embedding
-      "memory_id": "Optional[string]", // For updating an existing memory
-      "importance": "Optional[float]", // Optional importance score (0-1)
-      "force_update": "bool" // Default: false. Force update if memory_id exists.
-    }
-    ```
-*   **Response Model:** (`TranscriptionResponse`)
-    ```json
-    {
-      "success": true,
-      "memory_id": "string", // ID of the created/updated memory
-      "metadata": "Dict[str, Any]", // Enriched metadata including extracted audio features
-      "embedding": "List[float]", // The embedding used/generated
-      "error": null
-    }
-    ```
-
----
-
-### Get Memory by ID
+#### Explain Activation
 
 *   **Method:** `GET`
-*   **Path:** `/api/memories/{memory_id}`
-*   **Description:** Retrieves a specific memory entry by its unique identifier. Returns the complete memory object including content, embedding, and all metadata.
-*   **Path Parameter:** `memory_id` (string) - The unique ID of the memory.
-*   **Response Model:** (`GetMemoryResponse`)
+*   **Path:** `/assemblies/{assembly_id}/explain_activation`
+*   **Description:** Explains why a specific memory was or wasn't considered part of an assembly during activation.
+*   **Path Parameter:** `assembly_id` (string).
+*   **Query Parameter:** `memory_id` (string, *required*).
+*   **Response Model:**
     ```json
     {
       "success": true,
-      "memory": { // Full MemoryEntry dictionary representation
-        "id": "string",
-        "content": "string",
-        "embedding": "List[float]",
-        "timestamp": "string", // ISO format UTC
-        "quickrecal_score": "float",
-        "quickrecal_updated": "Optional[string]", // ISO format UTC
-        "metadata": "Dict[str, Any]",
-        "access_count": "int",
-        "last_access_time": "string", // ISO format UTC
-        "hyperbolic_embedding": "Optional[List[float]]"
+      "explanation": {
+        "assembly_id": "asm_abc123",
+        "memory_id": "mem_xyz789",
+        "check_timestamp": "2025-04-15T10:23:45.123Z",
+        "trigger_context": "Activation check during retrieval for query 'example query'",
+        "calculated_similarity": 0.875,
+        "activation_threshold": 0.75,
+        "passed_threshold": true,
+        "assembly_state_before_check": {
+          "memory_count": 5,
+          "last_activation_time": "2025-04-15T10:22:30.000Z"
+        }
+      }, 
+      "error": null
+    }
+    ```
+*   **Error Responses:** 404 (Assembly or Memory not found), 400 (Bad request), 500 (Server error), 403 (Forbidden if flag disabled).
+
+#### Explain Assembly Merge
+
+*   **Method:** `GET`
+*   **Path:** `/assemblies/{assembly_id}/explain_merge`
+*   **Description:** Provides details about the merge event that resulted in this assembly.
+*   **Path Parameter:** `assembly_id` (string).
+*   **Response Model:**
+    ```json
+    {
+      "success": true,
+      "explanation": {
+        "assembly_id": "asm_merged123",
+        "is_merged": true,
+        "source_assemblies": [
+          {"id": "asm_source_A", "name": "Source Assembly A"},
+          {"id": "asm_source_B", "name": "Source Assembly B"}
+        ],
+        "similarity_at_merge": 0.882,
+        "merge_threshold": 0.85,
+        "merge_timestamp": "2025-04-14T18:32:15.678Z",
+        "cleanup_status": "completed",
+        "cleanup_timestamp": "2025-04-14T18:32:16.789Z"
+      }, 
+      "error": null
+    }
+    // Or if not merged: 
+    {
+      "success": true,
+      "explanation": {
+        "assembly_id": "asm_original456",
+        "is_merged": false
       },
       "error": null
     }
     ```
-*   **Response (Not Found):**
-    ```json
-    {
-      "success": false,
-      "memory": null,
-      "error": "Memory with ID '{memory_id}' not found"
-    }
-    ```
+*   **Error Responses:** 404 (Assembly not found), 500 (Server error), 403 (Forbidden if flag disabled).
 
----
-
-### List Assemblies
+#### Get Assembly Lineage
 
 *   **Method:** `GET`
-*   **Path:** `/assemblies`
-*   **Description:** Lists basic information about all known memory assemblies.
-*   **Response (Success):**
+*   **Path:** `/assemblies/{assembly_id}/lineage`
+*   **Description:** Traces the merge history (ancestry) of an assembly through its parent assemblies.
+*   **Path Parameter:** `assembly_id` (string).
+*   **Query Parameter:** `max_depth` (integer, *optional*, default: 10) - Maximum depth to trace lineage.
+*   **Response Model:**
     ```json
     {
       "success": true,
-      "assemblies": [
+      "lineage": [
         {
-          "assembly_id": "string",
-          "name": "string",
-          "memory_count": "int", // Number of memories in the assembly
-          "last_activation": "string" // ISO format UTC timestamp
+          "assembly_id": "asm_merged123", 
+          "name": "Merged Assembly 123", 
+          "depth": 0,
+          "status": "normal",
+          "created_at": "2025-04-14T18:32:15.678Z",
+          "memory_count": 15
+        },
+        {
+          "assembly_id": "asm_source_A", 
+          "name": "Source Assembly A", 
+          "depth": 1,
+          "status": "normal",
+          "created_at": "2025-04-14T15:20:10.456Z",
+          "memory_count": 8
+        },
+        {
+          "assembly_id": "asm_source_B", 
+          "name": "Source Assembly B", 
+          "depth": 1,
+          "status": "normal",
+          "created_at": "2025-04-14T16:12:45.789Z",
+          "memory_count": 7
+        },
+        {
+          "assembly_id": "asm_grand_B1", 
+          "name": "Grandparent Assembly B1", 
+          "depth": 2,
+          "status": "cycle_detected", // Special status showing cycle detection
+          "created_at": "2025-04-13T11:05:22.345Z",
+          "memory_count": 5
         }
-        // ... more assemblies
       ],
-      "count": "int" // Total number of assemblies
+      "error": null
     }
     ```
+*   **Status Values:** `normal` (standard entry), `cycle_detected` (lineage forms a cycle), `depth_limit_reached` (max depth reached).
+*   **Error Responses:** 404 (Assembly not found), 500 (Server error), 403 (Forbidden if flag disabled).
 
----
+### Diagnostics Endpoints
 
-### Get Assembly Details
+*These endpoints require setting the `ENABLE_EXPLAINABILITY` configuration flag to `true`.*
+
+#### Get Merge Log
 
 *   **Method:** `GET`
-*   **Path:** `/assemblies/{assembly_id}`
-*   **Description:** Retrieves detailed information about a specific memory assembly, including a sample of its member memories.
-*   **Path Parameter:** `assembly_id` (string) - The unique ID of the assembly.
-*   **Response (Success):**
+*   **Path:** `/diagnostics/merge_log`
+*   **Description:** Returns a reconciled view of recent merge operations and their cleanup status.
+*   **Query Parameter:** `limit` (integer, *optional*, default: 50) - Maximum number of entries to return.
+*   **Response Model:**
     ```json
     {
       "success": true,
-      "assembly_id": "string",
-      "name": "string",
-      "memory_count": "int",
-      "last_activation": "string", // ISO format UTC
-      "sample_memories": [ // Limited sample (e.g., first 10) for brevity
+      "entries": [
         {
-          "id": "string",
-          "content": "string",
-          "quickrecal_score": "float"
+          "merge_event_id": "merge_uuid_123",
+          "timestamp": "2025-04-15T09:45:12.345Z",
+          "source_assembly_ids": ["asm_abc", "asm_def"],
+          "target_assembly_id": "asm_merged_123",
+          "similarity_at_merge": 0.92,
+          "merge_threshold": 0.85,
+          "cleanup_status": "completed",
+          "cleanup_timestamp": "2025-04-15T09:45:13.456Z"
+        },
+        {
+          "merge_event_id": "merge_uuid_124",
+          "timestamp": "2025-04-15T09:50:22.678Z",
+          "source_assembly_ids": ["asm_ghi", "asm_jkl"],
+          "target_assembly_id": "asm_merged_124",
+          "similarity_at_merge": 0.88,
+          "merge_threshold": 0.85,
+          "cleanup_status": "failed",
+          "cleanup_timestamp": "2025-04-15T09:50:24.789Z",
+          "error": "Failed to update vector index: dimension mismatch"
         }
-        // ... up to 10 sample memories
       ],
-      "total_memories": "int" // Total number of memories in the assembly
+      "error": null
     }
     ```
-*   **Response (Not Found):**
+*   **Error Responses:** 500 (Server error), 403 (Forbidden if flag disabled).
+
+#### Get Runtime Configuration
+
+*   **Method:** `GET`
+*   **Path:** `/config/runtime/{service_name}`
+*   **Description:** Returns a sanitized view of the current runtime configuration for the specified service.
+*   **Path Parameter:** `service_name` (string) - Name of the service to get configuration for (e.g., "memory_core", "geometry", "api").
+*   **Response Model:**
     ```json
     {
-      "success": false,
-      "error": "Assembly not found"
+      "success": true,
+      "config": {
+        "assembly_activation_threshold": 0.82,
+        "default_assembly_size": 10,
+        "merge_log_max_entries": 1000,
+        "assembly_metrics_persist_interval": 600.0,
+        "enable_explainability": true
+        // Only non-sensitive configuration values are returned
+      },
+      "error": null
     }
     ```
+*   **Error Responses:** 404 (Service not found), 500 (Server error), 403 (Forbidden if flag disabled).
 
----
+#### Get Statistics
 
-### Get Sequence Embeddings (Trainer Integration)
-
-*   **Method:** `POST`
-*   **Path:** `/api/memories/get_sequence_embeddings`
-*   **Description:** Retrieves a sequence of memory embeddings, ordered and filtered, suitable for feeding into a sequence trainer (e.g., Neural Memory Server).
-*   **Request Model:** (Implicit, uses query parameters)
-    *   **Query Parameters:** `topic`, `user`, `emotion`, `min_importance`, `limit`, `min_quickrecal_score`, `start_timestamp`, `end_timestamp`, `sort_by` (timestamp or quickrecal_score)
-*   **Response Model:** (`SequenceEmbeddingsResponse`)
+*   **Method:** `GET`
+*   **Path:** `/stats`
+*   **Description:** Returns enhanced system statistics including assembly activation counts.
+*   **Response Model:**
     ```json
     {
-      "embeddings": [
-        {
-          "id": "string",
-          "embedding": "List[float]",
-          "timestamp": "string", // ISO format UTC
-          "quickrecal_score": "Optional[float]",
-          "emotion": "Optional[Dict[str, float]]",
-          "dominant_emotion": "Optional[string]",
-          "importance": "Optional[float]",
-          "topic": "Optional[string]",
-          "user": "Optional[string]"
+      "success": true,
+      "stats": {
+        "memory_stats": {
+          "total_count": 1245,
+          "indexed_count": 1245,
+          "by_corpus": {
+            "corpus_A": 780,
+            "corpus_B": 465
+          }
+        },
+        "assembly_stats": {
+          "count": 42,
+          "activation_counts": {
+            "assembly_123": 156,
+            "assembly_456": 89,
+            // Additional assembly IDs and their activation counts
+          },
+          "top_activated": [
+            {"id": "assembly_123", "count": 156},
+            {"id": "assembly_456", "count": 89},
+            {"id": "assembly_789", "count": 67}
+          ]
+        },
+        "system_stats": {
+          "uptime_seconds": 86400.5,
+          "version": "1.2.0"
         }
-        // ... more embeddings up to limit
-      ]
+      },
+      "error": null
     }
     ```
+*   **Error Responses:** 500 (Server error).
+
+{{ ... }}
 
 ---
 
-### Update QuickRecal Score (Trainer Integration)
-
-*   **Method:** `POST`
-*   **Path:** `/api/memories/update_quickrecal_score`
-*   **Description:** Allows an external system (like the Trainer or Orchestrator) to update a memory's QuickRecal score based on feedback, such as prediction surprise. Records the reason and context in the memory's metadata.
-*   **Request Model:** (`UpdateQuickRecalScoreRequest`)
-    ```json
-    {
-      "memory_id": "string", // ID of the memory to update
-      "delta": "float", // Amount to change score by (+ve or -ve)
-      "predicted_embedding": "Optional[List[float]]", // Embedding predicted by the trainer
-      "reason": "Optional[string]", // e.g., "NM Surprise Loss: 0.65"
-      "embedding_delta": "Optional[List[float]]" // Pre-calculated delta between actual and predicted
-    }
-    ```
-*   **Response (Success):**
-    ```json
-    {
-      "status": "success",
-      "memory_id": "string",
-      "previous_score": "float",
-      "new_score": "float", // Score after applying delta (clamped 0-1)
-      "delta": "float"
-    }
-    ```
-*   **Response (Error):**
-    ```json
-    {
-      "status": "error",
-      "message": "Description of failure (e.g., memory not found, update failed)"
-    }
-    ```
+## 2. Neural Memory Server API (`http://localhost:8001`)
+*(Existing Endpoints - Descriptions generally unchanged. Add `/config/runtime/neural-memory` as a planned feature if implemented)*
 
 ---
 
-## 2. Common Error Handling
+## 3. Context Cascade Engine API (`http://localhost:8002`)
+*(Existing Endpoints - Descriptions generally unchanged. Update `/metrics/recent_cce_responses` example as a planned enhancement.)*
+*(Add `/config/runtime/cce` as a planned feature if implemented)*
 
-API endpoints generally return errors using the standard FastAPI `HTTPException` mechanism, resulting in JSON responses like:
+### Get Recent CCE Metrics (`/metrics/recent_cce_responses`) - Planned Enhancement
 
+*   **Method:** `GET`
+*   **Description:** Retrieves recent CCE processing response objects. Planned enhancement will include detailed variant selection and LLM guidance info.
+*   **Query Parameter:** `limit` (int, optional, default: 10).
+*   **Response Model (Example Entry - Planned for Phase 5.9):**
+    ```json
+     {
+        "timestamp": "...",
+        "status": "completed",
+        "memory_id": "mem_abc",
+        "variant_output": { /* ... variant specific metrics ... */ },
+        "variant_selection": { // Detailed selection info
+            "selected": "MAG",
+            "reason": "Performance (High Surprise 0.65 -> MAG)",
+            "trace": ["Input metrics: ...", ...],
+            "perf_metrics_used": {"avg_loss": 0.65, ...}
+        },
+        "llm_advice_used": { // Detailed LLM usage info
+            "raw_advice": { /* Optional raw */ },
+            "adjusted_advice": { /* Advice after confidence adjustment */ },
+            "confidence_level": 0.95,
+            "adjustment_reason": "High confidence...",
+            "boost_modifier_applied": 0.1,
+            "tags_added": ["quantum"],
+            "variant_hint_followed": true,
+            "attention_focus_used": "relevance"
+        },
+        "neural_memory_update": { /* ... loss, grad_norm ... */ },
+        "quickrecal_feedback": { /* ... boost applied ... */ }
+        // ... other fields ...
+     }
+    ```
+
+## 4. Common Error Responses
+
+All API endpoints follow a consistent error response format:
+
+*   **400 Bad Request:** Invalid input parameters.
+*   **404 Not Found:** Requested resource not found.
+*   **500 Internal Server Error:** Server-side error.
+*   **403 Forbidden:** Access denied (e.g., when trying to access planned explainability endpoints once implemented but with `ENABLE_EXPLAINABILITY=false`).
+
+Error responses include:
 ```json
 {
-  "detail": "Description of the error"
-}
-
-Specific endpoints might return structured error responses with a "success": false field and an "error" field:
-
-json
-CopyInsert
-{
   "success": false,
-  "error": "Detailed error message",
-  "status_code": 400 // Optional HTTP status code
+  "error": "Detailed error message"
 }
-Common HTTP Status Codes:
-
-200 OK: Request successful.
-400 Bad Request: Invalid input parameters or payload format (e.g., malformed JSON, missing required fields).
-404 Not Found: Requested resource (e.g., memory_id, assembly_id) not found.
-500 Internal Server Error: An unexpected error occurred during processing on the server (e.g., embedding generation failure, persistence error).
-503 Service Unavailable: A required internal component (e.g., vector index, emotion model) failed to initialize or is unavailable.

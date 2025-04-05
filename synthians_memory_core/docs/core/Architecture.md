@@ -27,6 +27,10 @@ Synthians Memory Core is designed as a modular system with several specialized c
 │  │   Manager   │  │    Layer    │  │ Components  │  │   Features  │    │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘    │
 │                                                                         │
+│  ┌────────────────────────────────────────────────────────────────┐    │
+│  │                Explainability & Diagnostics Layer              │    │
+│  └────────────────────────────────────────────────────────────────┘    │
+│                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -147,6 +151,27 @@ The Transcription Features components extract features from transcribed speech.
 - Enrich transcription memories
 - Handle processing interruptions
 
+#### 9. Explainability & Diagnostics Layer
+
+The Explainability & Diagnostics Layer provides introspection capabilities for understanding system decisions and behavior, implemented in Phase 5.9.
+
+**Key Components:**
+- **Explainability Module**: Generates explanations for system decisions
+  - **Activation Explainer**: Explains why memories are activated in assemblies
+  - **Merge Explainer**: Explains how assemblies were formed by merges
+  - **Lineage Tracer**: Traces the ancestry of merged assemblies
+- **Metrics Module**: Tracks and exposes system metrics
+  - **MergeTracker**: Logs merge operations in an append-only format
+  - **Assembly Activation Tracking**: Tracks assembly activation patterns
+- **Diagnostics API Routes**: Expose diagnostic data via secure endpoints
+
+**Responsibilities:**
+- Provide transparency into system decisions
+- Track and log critical operations (merges, activations)
+- Expose sanitized runtime configuration
+- Support debugging and system understanding
+- Facilitate dashboard integration for visual monitoring
+
 ## Data Flow
 
 ### Memory Processing Flow
@@ -218,6 +243,30 @@ The Transcription Features components extract features from transcribed speech.
 4. **Feedback Analysis**: Feedback is analyzed for patterns
 5. **Threshold Calibration**: Similarity thresholds are adjusted
 6. **System Adjustment**: System parameters are optimized
+
+### Explainability & Diagnostics Flow
+
+```
+┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+│ System   │────▶│ Event    │────▶│ Storage  │────▶│ Analysis │
+│ Operation │     │ Logging  │     │ & Tracking│    │ & Explain│
+└──────────┘     └──────────┘     └──────────┘     └──────────┘
+                                                        │
+┌──────────┐     ┌──────────┐     ┌──────────┐         ▼
+│ Dashboard │◀───│ API      │◀───│ Response │◀───┌──────────┐
+│ Display   │    │ Endpoint │     │ Formatting│    │ Security │
+└──────────┘     └──────────┘     └──────────┘     │ Filtering│
+                                                    └──────────┘
+```
+
+1. **System Operation**: Core operation occurs (e.g., assembly merge, memory activation)
+2. **Event Logging**: Event details are logged to persistent storage (e.g., merge_log.jsonl)
+3. **Storage & Tracking**: Data is stored in structured format with proper metadata
+4. **Analysis & Explanation**: Raw data is processed to generate human-understandable explanations
+5. **Security Filtering**: Sensitive information is filtered out through allow-listing
+6. **Response Formatting**: Data is formatted according to API models
+7. **API Endpoint**: Data is exposed through well-defined API endpoints
+8. **Dashboard Display**: Data is visualized in the diagnostic dashboard
 
 ## Implementation Details
 
