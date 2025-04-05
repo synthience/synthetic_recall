@@ -2,6 +2,29 @@
 
 This document tracks significant changes to the Synthians Cognitive Architecture.
 
+## [Released] - Phase 5.9.1 - Backend API Stability (2025-04-06)
+
+### Fixed
+- **Memory Core Service**:
+    - Fixed 500 error in `/stats` endpoint by implementing robust fallbacks for vector index integrity checks
+    - Added missing `/config/runtime/{service_name}` endpoint for dashboard configuration access
+    - Resolved TypeError in `detect_and_repair_index_drift` by removing incorrect `await` call
+- **Neural Memory Service**:
+    - Fixed UnboundLocalError in `/diagnose_emoloop` endpoint by properly initializing emotion entropy variable
+- **Context Cascade Engine**:
+    - Implemented missing `/status` endpoint with CCEStatusPayload model
+    - Fixed AttributeError in `/health` endpoint by using safer attribute checks
+    - Corrected TypeError in `/metrics/recent_cce_responses` by properly awaiting the coroutine
+- **Dashboard Integration**:
+    - Aligned proxy route configuration with implemented backend endpoints
+    - Added CCEStatusData and CCEStatusResponse interfaces to shared schema
+    - Updated API client hooks to use correct interface types
+
+### Added
+- Comprehensive error logging and handling across all endpoints
+- Safe attribute access with sensible defaults for configuration endpoints
+- Additional TypeScript interfaces for proper type checking
+
 ## [Released] - Phase 5.9 - Explainability & Diagnostics (2025-04-05)
 
 ### Added

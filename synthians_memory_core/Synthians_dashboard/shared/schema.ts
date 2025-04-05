@@ -18,6 +18,24 @@ export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
 // Define types needed for dashboard
+
+// ServiceStatus interfaces for health endpoints
+export interface ServiceStatusData {
+  status: string; // 'ok' or 'error'
+  uptime?: string;
+  version?: string;
+  memory_count?: number;
+  assembly_count?: number;
+  error?: string | null;
+}
+
+export interface ServiceStatusResponse {
+  success: boolean;
+  data?: ServiceStatusData;
+  error?: string | null;
+}
+
+// UI representation (used in components)
 export interface ServiceStatus {
   name: string;
   status: 'Healthy' | 'Unhealthy' | 'Checking...' | 'Error';
@@ -27,34 +45,59 @@ export interface ServiceStatus {
   version?: string;
 }
 
-export interface MemoryStats {
+// Memory Stats interfaces for stats endpoints
+export interface MemoryVectorIndexStats {
+  count: number;
+  mapping_count: number;
+  drift_count: number;
+  index_type: string;
+  is_gpu: boolean;
+  is_id_map: boolean;
+  drift_warning?: boolean;
+  drift_critical?: boolean;
+}
+
+export interface MemoryAssemblyStats {
+  total_count: number;
+  indexed_count: number;
+  vector_indexed_count: number;
+  average_size: number;
+  pruning_enabled: boolean;
+  merging_enabled: boolean;
+  activation_threshold?: number;
+  total_activations?: number;
+  avg_activation_level?: number;
+}
+
+export interface MemoryCoreStatsData {
   total_memories: number;
   total_assemblies: number;
-  dirty_items: number;
+  dirty_memories: number;
   pending_vector_updates: number;
-  vector_index: {
-    count: number;
-    mapping_count: number;
-    drift_count: number;
-    index_type: string;
-    gpu_enabled: boolean;
+  initialized: boolean;
+  uptime_seconds?: number;
+}
+
+export interface MemoryStatsData {
+  core_stats: MemoryCoreStatsData;
+  persistence_stats?: {
+    last_update?: string;
+    last_backup?: string;
   };
-  assembly_stats: {
-    total_count: number;
-    indexed_count: number;
-    vector_indexed_count: number;
-    average_size: number;
-    pruning_enabled: boolean;
-    merging_enabled: boolean;
+  quick_recal_stats?: {
+    recall_rate?: number;
   };
-  persistence: {
-    last_update: string;
-    last_backup: string;
+  threshold_stats?: {
+    recall_rate?: number;
   };
-  performance: {
-    quick_recall_rate: number;
-    threshold_recall_rate: number;
-  };
+  vector_index_stats: MemoryVectorIndexStats;
+  assemblies: MemoryAssemblyStats;
+}
+
+export interface MemoryStatsResponse {
+  success: boolean;
+  data?: MemoryStatsData;
+  error?: string | null;
 }
 
 export interface NeuralMemoryStatus {
@@ -76,12 +119,19 @@ export interface NeuralMemoryDiagnostics {
     bias_index: number;
     match_rate: number;
   };
+  history?: Array<{
+    timestamp: string;
+    loss: number;
+    grad_norm: number;
+  }>;
   alerts: string[];
   recommendations: string[];
 }
 
-export interface CCEMetrics {
-  recent_responses: CCEResponse[];
+export interface NeuralMemoryDiagnosticsResponse {
+  success: boolean;
+  data?: NeuralMemoryDiagnostics;
+  error?: string | null;
 }
 
 export interface CCEResponse {
@@ -104,6 +154,29 @@ export interface CCEResponse {
   error_details?: string;
 }
 
+export interface CCEConfig {
+  active_variant: string;
+  variant_confidence_threshold: number;
+  llm_guidance_enabled: boolean;
+  retry_attempts: number;
+}
+
+export interface CCEConfigResponse {
+  success: boolean;
+  data?: CCEConfig;
+  error?: string | null;
+}
+
+export interface CCEMetricsData {
+  recent_responses: CCEResponse[];
+}
+
+export interface CCEMetricsResponse {
+  success: boolean;
+  data?: CCEMetricsData;
+  error?: string | null;
+}
+
 export interface Assembly {
   id: string;
   name: string;
@@ -118,11 +191,10 @@ export interface Assembly {
   memory_ids: string[];
 }
 
-export interface CCEConfig {
-  active_variant: string;
-  variant_confidence_threshold: number;
-  llm_guidance_enabled: boolean;
-  retry_attempts: number;
+export interface AssembliesResponse {
+  success: boolean;
+  data?: Assembly[];
+  error?: string | null;
 }
 
 export interface Alert {
@@ -133,6 +205,27 @@ export interface Alert {
   timestamp: string;
   source: 'MemoryCore' | 'NeuralMemory' | 'CCE';
   action?: string;
+}
+
+export interface AlertsResponse {
+  success: boolean;
+  data?: Alert[];
+  error?: string | null;
+}
+
+// CCE Status interfaces for status endpoints
+export interface CCEStatusData {
+  status: string; // 'OK' or 'INITIALIZING', etc.
+  uptime: string;
+  is_processing: boolean;
+  current_variant: string;
+  dev_mode: boolean;
+}
+
+export interface CCEStatusResponse {
+  success: boolean;
+  data?: CCEStatusData;
+  error?: string | null;
 }
 
 // --- Phase 5.9 Explainability Interfaces ---

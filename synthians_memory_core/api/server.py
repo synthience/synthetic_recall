@@ -357,23 +357,112 @@ async def get_stats():
     """
     try:
         memory_core = app.state.memory_core
+        if not memory_core:
+            raise HTTPException(status_code=503, detail="Memory Core not available")
         
-        # Basic memory statistics
-        memory_count = await memory_core.get_memory_count()
-        assembly_count = await memory_core.get_assembly_count()
-        
+        # Try to use memory_core.get_stats() if it exists
+        try:
+            # Check if memory_core has a get_stats method
+            if hasattr(memory_core, 'get_stats'):
+                # If get_stats is async, await it; if not, call it directly
+                if asyncio.iscoroutinefunction(memory_core.get_stats):
+                    core_stats_dict = await memory_core.get_stats()
+                else:
+                    core_stats_dict = memory_core.get_stats()
+                    
+                # If get_stats returns a complete stats object, return it directly
+                if isinstance(core_stats_dict, dict) and all(k in core_stats_dict for k in ['memories', 'assemblies', 'vector_index']):
+                    # Add timestamp and success flag if not present
+                    if 'timestamp' not in core_stats_dict:
+                        core_stats_dict['timestamp'] = datetime.utcnow().isoformat() + "Z"
+                    if 'success' not in core_stats_dict:
+                        core_stats_dict['success'] = True
+                    return core_stats_dict
+            
+            # If we got here, either get_stats doesn't exist or it doesn't return a complete stats object
+            # Fall back to manual stats collection
+            
+            # Get memory and assembly counts - try different approaches
+            memory_count = 0
+            assembly_count = 0
+            
+            # Try memory_count/assembly_count attributes first
+            if hasattr(memory_core, 'memory_count'):
+                memory_count = memory_core.memory_count
+            elif hasattr(memory_core.persistence, 'memory_count'):
+                memory_count = memory_core.persistence.memory_count
+                
+            if hasattr(memory_core, 'assembly_count'):
+                assembly_count = memory_core.assembly_count
+            elif hasattr(memory_core.persistence, 'assembly_count'):
+                assembly_count = memory_core.persistence.assembly_count
+                
+            # Try alternative method names if attributes don't exist
+            if memory_count == 0 and hasattr(memory_core, 'get_memory_count'):
+                if asyncio.iscoroutinefunction(memory_core.get_memory_count):
+                    memory_count = await memory_core.get_memory_count()
+                else:
+                    memory_count = memory_core.get_memory_count()
+                    
+            if assembly_count == 0 and hasattr(memory_core, 'get_assembly_count'):
+                if asyncio.iscoroutinefunction(memory_core.get_assembly_count):
+                    assembly_count = await memory_core.get_assembly_count()
+                else:
+                    assembly_count = memory_core.get_assembly_count()
+        except AttributeError as ae:
+            logger.warning(f"Fallback to basic stats due to attribute error: {str(ae)}")
+            # Initialize with defaults in case of error
+            memory_count = 0
+            assembly_count = 0
+            
+            # Last resort: try to count from persistence storage if available
+            if hasattr(memory_core, 'persistence'):
+                try:
+                    # Check if we can count memories via persistence
+                    if hasattr(memory_core.persistence, 'list_memories'):
+                        memories = await memory_core.persistence.list_memories() if asyncio.iscoroutinefunction(memory_core.persistence.list_memories) else memory_core.persistence.list_memories()
+                        memory_count = len(memories) if memories else 0
+                        
+                    if hasattr(memory_core.persistence, 'list_assemblies'):
+                        assemblies = await memory_core.persistence.list_assemblies() if asyncio.iscoroutinefunction(memory_core.persistence.list_assemblies) else memory_core.persistence.list_assemblies()
+                        assembly_count = len(assemblies) if assemblies else 0
+                except Exception as e:
+                    logger.error(f"Error accessing persistence for counts: {str(e)}")
+            
         # Get vector index status
-        index_status = await memory_core.check_index_health()
+        try:
+            # Try using check_index_integrity instead of check_index_health
+            if hasattr(memory_core, 'check_index_integrity'):
+                index_status = await memory_core.check_index_integrity() if asyncio.iscoroutinefunction(memory_core.check_index_integrity) else memory_core.check_index_integrity()
+            elif hasattr(memory_core, 'verify_index_integrity'):
+                # Some implementations might have renamed this method
+                index_status = await memory_core.verify_index_integrity() if asyncio.iscoroutinefunction(memory_core.verify_index_integrity) else memory_core.verify_index_integrity()
+            elif hasattr(memory_core, 'vector_index') and hasattr(memory_core.vector_index, 'verify_index_integrity'):
+                # Or it might be on the vector_index object
+                index_status = await memory_core.vector_index.verify_index_integrity() if asyncio.iscoroutinefunction(memory_core.vector_index.verify_index_integrity) else memory_core.vector_index.verify_index_integrity()
+            else:
+                # Fallback to a basic status if no method is available
+                index_status = {"status": "unknown", "details": "No index health check method available"}
+        except Exception as e:
+            logger.error(f"Error checking index health: {str(e)}")
+            index_status = {"status": "error", "details": str(e)}
         
         # Get information about activations (Phase 5.9)
         activation_stats = {}
+        import aiofiles
         try:
             # Load activation stats from the persisted file if it exists
-            stats_path = os.path.join(memory_core.data_dir, "stats", "assembly_activation_stats.json")
+            data_dir = getattr(memory_core, 'data_dir', os.path.join(os.getcwd(), 'data'))
+            stats_path = os.path.join(data_dir, "stats", "assembly_activation_stats.json")
             if os.path.exists(stats_path):
-                async with aiofiles.open(stats_path, "r") as f:
-                    content = await f.read()
-                    activation_stats = json.loads(content)
+                if 'aiofiles' in sys.modules:
+                    async with aiofiles.open(stats_path, "r") as f:
+                        content = await f.read()
+                        activation_stats = json.loads(content)
+                else:
+                    with open(stats_path, "r") as f:
+                        content = f.read()
+                        activation_stats = json.loads(content)
             
             # Calculate total activations and top activated assemblies
             total_activations = sum(activation_stats.values())
@@ -382,17 +471,18 @@ async def get_stats():
             top_activated = []
             for asm_id, count in sorted(activation_stats.items(), key=lambda x: x[1], reverse=True)[:10]:
                 try:
-                    assembly = await memory_core.persistence.load_assembly(asm_id)
-                    name = assembly.name if assembly else "Unknown"
-                    top_activated.append({
-                        "assembly_id": asm_id,
-                        "name": name,
-                        "activation_count": count
-                    })
+                    if hasattr(memory_core.persistence, 'load_assembly'):
+                        assembly = await memory_core.persistence.load_assembly(asm_id) if asyncio.iscoroutinefunction(memory_core.persistence.load_assembly) else memory_core.persistence.load_assembly(asm_id)
+                        name = assembly.name if assembly and hasattr(assembly, 'name') else "Unknown"
+                        top_activated.append({
+                            "assembly_id": asm_id,
+                            "name": name,
+                            "activation_count": count
+                        })
                 except Exception as e:
-                    logger.warning("API", f"Error loading assembly for stats: {asm_id}", {"error": str(e)})
+                    logger.warning(f"Error loading assembly for stats: {asm_id} - {str(e)}")
         except Exception as e:
-            logger.warning("API", "Error loading activation stats", {"error": str(e)})
+            logger.warning(f"Error loading activation stats: {str(e)}")
             total_activations = 0
             top_activated = []
         
@@ -400,26 +490,32 @@ async def get_stats():
         response = {
             "success": True,
             "timestamp": datetime.utcnow().isoformat() + "Z",
-            "memories": {
-                "total_count": memory_count,
-                "indexed_count": index_status.get("indexed_memory_count", 0),
-                "embedding_dimension": memory_core.config.get("embedding_dim", 0)
+            "core_stats": {
+                "total_memories": memory_count,
+                "total_assemblies": assembly_count,
+                "dirty_memories": index_status.get("dirty_memory_count", 0),
+                "pending_vector_updates": index_status.get("pending_updates", 0),
+                "initialized": True,
+                "uptime_seconds": index_status.get("uptime_seconds", 0)
             },
-            "assemblies": {
-                "total_count": assembly_count,
-                "indexed_count": index_status.get("indexed_assembly_count", 0),
-                "last_merge_timestamp": index_status.get("last_merge_timestamp"),
-                "sync_status": index_status.get("sync_status", {}),
-                "total_activations_tracked": total_activations,
-                "top_activated": top_activated
-            },
-            "vector_index": {
+            "vector_index_stats": {
+                "memory_count": index_status.get("indexed_memory_count", 0),
+                "assembly_count": index_status.get("indexed_assembly_count", 0),
+                "embedding_dimension": memory_core.config.get("embedding_dim", 0),
                 "is_healthy": index_status.get("is_healthy", False),
                 "drift_count": index_status.get("drift_count", 0),
                 "drift_percentage": index_status.get("drift_percentage", 0),
                 "last_check_timestamp": index_status.get("last_check_timestamp")
             },
-            "performance": {
+            "assembly_stats": {
+                "total_count": assembly_count,
+                "indexed_count": index_status.get("indexed_assembly_count", 0),
+                "last_merge_timestamp": index_status.get("last_merge_timestamp"),
+                "sync_status": index_status.get("sync_status", {}),
+                "total_activations": total_activations,
+                "top_activated": top_activated
+            },
+            "performance_stats": {
                 "avg_store_latency_ms": index_status.get("avg_store_latency_ms", 0),
                 "avg_retrieve_latency_ms": index_status.get("avg_retrieve_latency_ms", 0),
                 "avg_merge_latency_ms": index_status.get("avg_merge_latency_ms", 0)
@@ -432,7 +528,7 @@ async def get_stats():
         
         return response
     except Exception as e:
-        logger.error("API", "Error retrieving system stats", {"error": str(e)}, exc_info=True)
+        logger.error(f"Error retrieving system stats: {str(e)}", exc_info=True)
         return {
             "success": False,
             "error": f"Failed to retrieve system statistics: {str(e)}"
@@ -1347,6 +1443,50 @@ async def repair_vector_index_drift_get():
     except Exception as e:
         logger.error(f"Error during vector index repair: {str(e)}")
         return {"success": False, "error": str(e)}
+
+# --- Configuration Endpoints ---
+
+@app.get("/config/runtime/{service_name}")
+async def get_runtime_config(service_name: str):
+    """Get runtime configuration for services.
+    
+    Returns a sanitized subset of configuration for the specified service:
+    - memory-core: Memory Core configuration
+    - neural-memory: Neural Memory configuration  
+    - cce: Context Cascade Engine configuration
+    
+    This endpoint is used by the diagnostic dashboard to display configuration information.
+    """
+    logger.info(f"Retrieving runtime configuration for service: {service_name}")
+    
+    # Basic validation
+    valid_services = ["memory-core", "neural-memory", "cce"]
+    if service_name not in valid_services:
+        raise HTTPException(status_code=404, detail=f"Invalid service: {service_name}. Must be one of {valid_services}")
+    
+    # Only return Memory Core config directly from this service
+    if service_name == "memory-core":
+        # Return a sanitized subset of Memory Core configuration
+        config = {
+            "ENABLE_ASSEMBLIES": getattr(app.state.memory_core, "enable_assemblies", True),
+            "ENABLE_ASSEMBLY_PRUNING": getattr(app.state.memory_core, "enable_assembly_pruning", True),
+            "ENABLE_ASSEMBLY_MERGING": getattr(app.state.memory_core, "enable_assembly_merging", True),
+            "ENABLE_EXPLAINABILITY": getattr(app.state.memory_core, "enable_explainability", True),
+            "VECTOR_INDEX_TYPE": getattr(app.state.memory_core, "vector_index_type", "faiss"),
+            "ASSEMBLY_MERGE_THRESHOLD": getattr(app.state.memory_core, "assembly_merge_threshold", 0.8),
+            "VECTOR_DIM": getattr(app.state.memory_core, "vector_dim", 384),
+            "MAX_ASSEMBLY_SIZE": getattr(app.state.memory_core, "max_assembly_size", 50),
+            "DATA_DIR": getattr(app.state.memory_core, "data_dir", "./data"),
+            "VERSION": getattr(app.state.memory_core, "version", "5.9.1")
+        }
+        return config
+    else:
+        # For other services, we'd need to proxy the request
+        # This would typically be handled by the dashboard proxy
+        raise HTTPException(
+            status_code=501, 
+            detail=f"Configuration for {service_name} not available from this endpoint. Use the dashboard proxy instead."
+        )
 
 # --- Test Endpoints (Disabled by default) ---
 

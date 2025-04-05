@@ -490,12 +490,11 @@ class MetricsStore:
             # Calculate emotion entropy (diversity measure)
             emotion_counts = {k: v for k, v in self._emotion_counts.items() if v > 0}
             total_emotions = sum(emotion_counts.values())
+            emotion_entropy = 0.0
             if total_emotions > 0:
                 probs = [count / total_emotions for count in emotion_counts.values()]
                 entropy = -sum(p * math.log(p) for p in probs if p > 0)
                 emotion_entropy = float(entropy)
-            else:
-                emotion_entropy = 0.0
             
             # Calculate user emotion match rate
             match_rate = self._user_emotion_matches[0] / self._user_emotion_matches[1] \
@@ -517,27 +516,27 @@ class MetricsStore:
             recommendations = []
             
             # Alerts
-            if entropy < 2.0 and total_emotions > 10:
-                alerts.append("⚠️ Low emotional diversity detected (entropy < 2.0)")
+            if emotion_entropy < 2.0 and total_emotions > 10:
+                alerts.append(" Low emotional diversity detected (entropy < 2.0)")
                 recommendations.append("Introduce more varied emotional inputs")
             else:
-                alerts.append("✓ Emotional diversity stable.")
+                alerts.append(" Emotional diversity stable.")
                 
             if avg_loss > 0.2:
-                alerts.append("⚠️ High average loss detected (> 0.2)")
+                alerts.append(" High average loss detected (> 0.2)")
                 recommendations.append("Check for instability in memory patterns")
             else:
-                alerts.append("✓ Surprise signals healthy.")
+                alerts.append(" Surprise signals healthy.")
                 
             if avg_grad_norm > 1.0:
-                alerts.append("⚠️ High average gradient norm (> 1.0)")
+                alerts.append(" High average gradient norm (> 1.0)")
                 recommendations.append("Consider reducing learning rate or checking for oscillations")
             elif avg_grad_norm > 0.5:
-                alerts.append("ℹ️ Grad norm average slightly elevated.")
+                alerts.append(" Grad norm average slightly elevated.")
                 recommendations.append("Monitor grad norm trend.")
             
             if match_rate < 0.5 and self._user_emotion_matches[1] > 10:
-                alerts.append("⚠️ Low user emotion match rate (< 50%)")
+                alerts.append(" Low user emotion match rate (< 50%)")
                 recommendations.append("Review emotional alignment in retrieval process")
             
             # Add generic recommendation if list is empty

@@ -1,0 +1,23 @@
+# Exclude memory data files
+*.memory.json
+memory/**/*.memory.json
+memory/**/*.json
+memory/memories/
+memory/stored/synthians/memories/
+memory/stored/synthians/assemblies/
+
+# Exclude index files
+*.bin
+*.bin.mapping.json
+
+# Exclude repair logs
+repair_log_*.json
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs
+*.log
+logs/
