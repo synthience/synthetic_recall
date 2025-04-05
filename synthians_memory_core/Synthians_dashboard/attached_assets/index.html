@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ShadowWatch - Dark Web Intelligence</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
+        body {
+            font-family: 'JetBrains Mono', monospace;
+            background-color: #0a0a0a;
+        }
+        .signal-strength {
+            height: 20px;
+            width: 100px;
+            position: relative;
+        }
+        .signal-bar {
+            position: absolute;
+            bottom: 0;
+            width: 15px;
+            background-color: #00ff00;
+            opacity: 0.3;
+        }
+        .signal-bar.filled {
+            opacity: 1;
+        }
+        .blink {
+            animation: blink-animation 1.5s steps(2, start) infinite;
+        }
+        @keyframes blink-animation {
+            to {
+                visibility: hidden;
+            }
+        }
+        .pulsing-border {
+            animation: pulse-border 2s infinite;
+        }
+        @keyframes pulse-border {
+            0% {
+                box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.7);
+            }
+            70% {
+                box-shadow: 0 0 0 10px rgba(0, 255, 0, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(0, 255, 0, 0);
+            }
+        }
+        .terminal-scroll {
+            scrollbar-width: thin;
+            scrollbar-color: #00ff00 #111111;
+        }
+        .terminal-scroll::-webkit-scrollbar {
+            width: 8px;
+        }
+        .terminal-scroll::-webkit-scrollbar-track {
+            background: #111111;
+        }
+        .terminal-scroll::-webkit-scrollbar-thumb {
+            background-color: #00ff00;
+            border-radius: 6px;
+            border: 1px solid #00ff00;
+        }
+        .code-input {
+            caret-color: #00ff00;
+        }
+        .gradient-text {
+            background: linear-gradient(90deg, #00ff00, #00aa00);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        .scan-animation {
+            animation: scan 2s linear infinite;
+        }
+        @keyframes scan {
+            0% {
+                background-position: 0 0;
+            }
+            100% {
+                background-position: 0 30px;
+            }
+        }
+    </style>
+</head>
+<body class="text-gray-200">
+    <div class="container mx-auto px-4 py-6">
+        <!-- Header -->
+        <header class="flex justify-between items-center border-b border-green-600 pb-4 mb-8">
+            <div class="flex items-center">
+                <div class="w-4 h-12 bg-green-500 mr-3"></div>
+                <div>
+                    <h1 class="text-2xl font-bold gradient-text">SHADOWWATCH</h1>
+                    <p class="text-xs text-gray-500">DARK WEB INTELLIGENCE PLATFORM</p>
+                </div>
+            </div>
+            <div class="flex items-center space-x-4">
+                <div class="flex items-center">
+                    <div class="signal-strength mr-2">
+                        <div class="signal-bar" style="left: 0; height: 5px;"></div>
+                        <div class="signal-bar" style="left: 20px; height: 10px;"></div>
+                        <div class="signal-bar filled" style="left: 40px; height: 15px;"></div>
+                        <div class="signal-bar filled" style="left: 60px; height: 20px;"></div>
+                        <div class="signal-bar filled" style="left: 80px; height: 20px;"></div>
+                    </div>
+                    <span class="text-green-500 text-xs">TOR RELAY: ACTIVE</span>
+                </div>
+                <span class="text-gray-500">|</span>
+                <div class="text-xs">
+                    <span class="text-yellow-400">ENCRYPTION: </span>
+                    <span class="text-green-400">AES-256</span>
+                </div>
+                <span class="text-gray-500">|</span>
+                <div class="text-xs">
+                    <span class="text-yellow-400">SESSION: </span>
+                    <span class="text-green-400">SECURE</span>
+                </div>
+                <button class="bg-red-900 hover:bg-red-800 text-xs px-3 py-1 rounded-md" id="killswitch">
+                    <i class="fas fa-power-off mr-1"></i> KILLSWITCH
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Dashboard -->
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            <!-- Left sidebar -->
+            <div class="lg:col-span-1 space-y-6">
+                <!-- User Profile -->
+                <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+                    <div class="flex items-center mb-4">
+                        <div class="w-12 h-12 rounded-full bg-gray-800 flex items-center justify-center border border-green-500">
+                            <i class="fas fa-user-secret text-green-500"></i>
+                        </div>
+                        <div class="ml-3">
+                            <h3 class="font-bold text-green-400">AGENT-74X</h3>
+                            <p class="text-xs text-gray-500">SENIOR INTELLIGENCE ANALYST</p>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 text-xs">
+                        <div class="bg-gray-800 rounded p-2">
+                            <div class="text-gray-500">CLEARANCE</div>
+                            <div class="text-green-400">LEVEL 5</div>
+                        </div>
+                        <div class="bg-gray-800 rounded p-2">
+                            <div class="text-gray-500">STATUS</div>
+                            <div class="text-green-400">ACTIVE</div>
+                        </div>
+                        <div class="bg-gray-800 rounded p-2">
+                            <div class="text-gray-500">TEAM</div>
+                            <div class="text-green-400">PHANTOM</div>
+                        </div>
+                        <div class="bg-gray-800 rounded p-2">
+                            <div class="text-gray-500">SINCE</div>
+                            <div class="text-green-400">2018</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Quick Actions -->
+                <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+                    <h3 class="font-bold text-green-500 mb-3 flex items-center">
+                        <i class="fas fa-bolt mr-2"></i> QUICK ACTIONS
+                    </h3>
+                    <div class="space-y-2">
+                        <button id="deep-scan" class="w-full bg-gray-800 hover:bg-green-900 text-green-400 text-left text-sm py-2 px-3 rounded flex items-center">
+                            <i class="fas fa-search mr-2"></i> DEEP SCAN
+                        </button>
+                        <button id="credential-trace" class="w-full bg-gray-800 hover:bg-green-900 text-green-400 text-left text-sm py-2 px-3 rounded flex items-center">
+                            <i class="fas fa-fingerprint mr-2"></i> CREDENTIAL TRACE
+                        </button>
+                        <button id="chatter-analysis" class="w-full bg-gray-800 hover:bg-green-900 text-green-400 text-left text-sm py-2 px-3 rounded flex items-center">
+                            <i class="fas fa-comment-dots mr-2"></i> CHATTER ANALYSIS
+                        </button>
+                        <button id="identity-alert" class="w-full bg-gray-800 hover:bg-green-900 text-green-400 text-left text-sm py-2 px-3 rounded flex items-center">
+                            <i class="fas fa-mask mr-2"></i> IDENTITY ALERT
+                        </button>
+                    </div>
+                    <div id="scan-progress" class="mt-3 hidden">
+                        <div class="flex justify-between text-xs text-gray-400 mb-1">
+                            <span>SCAN PROGRESS</span>
+                            <span id="progress-percent">0%</span>
+                        </div>
+                        <div class="w-full bg-gray-800 rounded-full h-1.5">
+                            <div id="progress-bar" class="bg-green-500 h-1.5 rounded-full" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div id="scan-result" class="mt-3 hidden">
+                        <div class="text-xs p-2 rounded border border-green-900 bg-gray-800 text-green-400">
+                            <i class="fas fa-check-circle mr-1"></i>
+                            <span>Scan completed successfully</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Threat Level -->
+                <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="font-bold text-green-500 flex items-center">
+                            <i class="fas fa-shield-alt mr-2"></i> THREAT LEVEL
+                        </h3>
+                        <span class="text-xs bg-red-900 text-red-300 px-2 py-1 rounded-full">ELEVATED</span>
+                    </div>
+                    <div class="h-2 w-full bg-gray-800 rounded-full mb-2">
+                        <div class="h-2 bg-gradient-to-r from-green-500 to-yellow-500 rounded-full" style="width: 70%"></div>
+                    </div>
+                    <div class="flex justify-between text-xs text-gray-500">
+                        <span>LOW</span>
+                        <span>MODERATE</span>
+                        <span>HIGH</span>
+                        <span>CRITICAL</span>
+                    </div>
+                    <div class="mt-4 text-xs text-gray-400">
+                        <div class="flex items-center mb-2">
+                            <div class="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
+                            <span>+12% DARKNET ACTIVITY</span>
+                        </div>
+                        <div class="flex items-center">
+                            <div class="w-2 h-2 bg-red-500 rounded-full mr-2"></div>
+                            <span>3 NEW DATA BREACHES</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Content -->
+            <div class="lg:col-span-3 space-y-6">
+                <!-- Active Threats -->
+                <div class="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
+                    <div class="border-b border-gray-800 p-4 bg-gray-950 flex justify-between items-center">
+                        <h2 class="font-bold text-green-400 flex items-center">
+                            <i class="fas fa-radiation mr-2"></i> ACTIVE THREATS
+                        </h2>
+                        <div class="text-xs flex items-center">
+                            <div class="w-2 h-2 rounded-full bg-green-500 mr-1 pulsing-border"></div>
+                            <span class="text-green-400">REALTIME MONITORING</span>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-3">
+                        <div class="border-b md:border-b-0 md:border-r border-gray-800 p-4 hover:bg-gray-950 cursor-pointer transition">
+                            <div class="flex items-center mb-2">
+                                <div class="w-9 h-9 bg-red-900 rounded-full flex items-center justify-center mr-3">
+                                    <i class="fas fa-key text-red-400"></i>
+                                </div>
+                                <div>
+                                    <h3 class="font-bold">CREDENTIAL LEAK</h3>
+                                    <p class="text-xs text-gray-500">12 MINUTES AGO</p>
+                                </div>
+                            </div>
+                            <p class="text-xs text-gray-400 mb-1">FINANCIAL INSTITUTION DATABASE</p>
+                            <div class="flex justify-between text-xs mb-2">
+                                <span class="text-red-400">26,752 RECORDS</span>
+                                <span class="text-yellow-400">REDACTED HOST</span>
+                            </div>
+                            <div class="w-full bg-gray-800 rounded-full h-1.5">
+                                <div class="bg-red-500 h-1.5 rounded-full" style="width: 85%"></div>
+                            </div>
+                        </div>
+                        <div class="border-b md:border-b-0 md:border-r border-gray-800 p-4 hover:bg-gray-950 cursor-pointer transition">
+                            <div class="flex items-center mb-2">
+                                <div class="w-9 h-9 bg-yellow-900 rounded-full flex items-center justify-center mr-3">
+                                    <i class="fas fa-comments text-yellow-400"></i>
+                                </div>
+                                <div>
+                                    <h3 class="font-bold">CHATTER SPIKE</h3>
+                                    <p class="text-xs text-gray-500">34 MINUTES AGO</p>
+                                </div>
+                            </div>
+                            <p class="text-xs text-gray-400 mb-1">MENTION OF MAJOR RETAILER</p>
+                            <div class="flex justify-between text-xs mb-2">
+                                <span class="text-yellow-400">358 MENTIONS</span>
+                                <span class="text-blue-400">72% INCREASE</span>
+                            </div>
+                            <div class="w-full bg-gray-800 rounded-full h-1.5">
+                                <div class="bg-yellow-500 h-1.5 rounded-full" style="width: 65%"></div>
+                            </div>
+                        </div>
+                        <div class="p-4 hover:bg-gray-950 cursor-pointer transition">
+                            <div class="flex items-center mb-2">
+                                <div class="w-9 h-9 bg-purple-900 rounded-full flex items-center justify-center mr-3">
+                                    <i class="fas fa-server text-purple-400"></i>
+                                </div>
+                                <div>
+                                    <h3 class="font-bold">SERVER BREACH</h3>
+                                    <p class="text-xs text-gray-500">1 HOUR AGO</p>
+                                </div>
+                            </div>
+                            <p class="text-xs text-gray-400 mb-1">GOVERNMENT CONTRACTOR</p>
+                            <div class="flex justify-between text-xs mb-2">
+                                <span class="text-purple-400">SENSITIVE DATA</span>
+                                <span class="text-red-400">CONFIRMED</span>
+                            </div>
+                            <div class="w-full bg-gray-800 rounded-full h-1.5">
+                                <div class="bg-purple-500 h-1.5 rounded-full" style="width: 45%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Terminal & Alerts -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div class="lg:col-span-2">
+                        <div class="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden h-full">
+                            <div class="border-b border-gray-800 p-3 bg-gray-950 flex justify-between items-center">
+                                <h2 class="font-bold text-green-400 flex items-center">
+                                    <i class="fas fa-terminal mr-2"></i> MONITOR TERMINAL
+                                </h2>
+                                <div class="flex space-x-2">
+                                    <button class="text-xs bg-gray-800 hover:bg-green-900 text-green-400 px-2 py-1 rounded" id="clear-terminal">
+                                        <i class="fas fa-trash mr-1"></i> CLEAR
+                                    </button>
+                                    <button class="text-xs bg-gray-800 hover:bg-green-900 text-green-400 px-2 py-1 rounded" id="refresh-terminal">
+                                        <i class="fas fa-redo mr-1"></i> REFRESH
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="terminal-content" class="h-64 p-3 overflow-y-auto terminal-scroll bg-black text-green-400 text-xs font-mono">
+                                <div class="mb-1"><span class="text-yellow-400">root@shadowwatch:~#</span> ./scan --deep --crawl -t credential_leak</div>
+                                <div class="mb-1">[+] Initiating deep scan protocol...</div>
+                                <div class="mb-1">[+] Connecting to TOR network... <span class="text-green-400">SUCCESS</span></div>
+                                <div class="mb-1">[+] Establishing secure channels... <span class="text-green-400">SUCCESS</span></div>
+                                <div class="mb-1">[+] Crawling 12 marketplaces, 8 forums, 15 channels</div>
+                                <div class="mb-1">[!] Potential leak detected: financial_institution_db.tar.gz</div>
+                                <div class="mb-1">[!] Analyzing contents... 
+                                    <span class="inline-block loader animate-spin h-3 w-3 border-2 border-green-500 border-t-transparent rounded-full"></span>
+                                </div>
+                                <div class="mb-1">[!] CREDENTIAL ALERT: 26,752 records confirmed valid</div>
+                                <div class="mb-1">[+] Initiating analysis of chatter patterns...</div>
+                                <div class="mb-1">[!] Increased mentions of "major_retailer" detected (+72%)</div>
+                                <div class="mb-1">[+] Scanning pastebin clones for matches...</div>
+                                <div class="mb-1">[!] MATCH: server_dump.txt contains 438 credentials</div>
+                                <div class="mb-1">root@shadowwatch:~#<span class="code-input"> _</span></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden h-full">
+                            <div class="border-b border-gray-800 p-3 bg-gray-950 flex justify-between items-center">
+                                <h2 class="font-bold text-green-400 flex items-center">
+                                    <i class="fas fa-bell mr-2"></i> ALERT FEED
+                                </h2>
+                                <span id="alert-count" class="text-xs bg-red-900 text-red-300 px-2 py-1 rounded-full">3 NEW</span>
+                            </div>
+                            <div id="alert-feed" class="h-64 overflow-y-auto terminal-scroll">
+                                <div class="p-3 border-b border-gray-800 hover:bg-gray-950 cursor-pointer transition">
+                                    <div class="flex justify-between items-start mb-1">
+                                        <span class="text-xs bg-red-900 text-red-300 px-2 py-0.5 rounded-full">CRITICAL</span>
+                                        <span class="text-xs text-gray-500">12:23:45</span>
+                                    </div>
+                                    <p class="text-sm">Large credential dump detected on DarkNet market</p>
+                                    <p class="text-xs text-gray-400 mt-1 flex items-center">
+                                        <i class="fas fa-database mr-1"></i> Financial records (26K+) potentially compromised
+                                    </p>
+                                </div>
+                                <div class="p-3 border-b border-gray-800 hover:bg-gray-950 cursor-pointer transition">
+                                    <div class="flex justify-between items-start mb-1">
+                                        <span class="text-xs bg-yellow-900 text-yellow-300 px-2 py-0.5 rounded-full">WARNING</span>
+                                        <span class="text-xs text-gray-500">11:58:12</span>
+                                    </div>
+                                    <p class="text-sm">Chatter spike detected mentioning major retailer</p>
+                                    <p class="text-xs text-gray-400 mt-1 flex items-center">
+                                        <i class="fas fa-comment-alt mr-1"></i> 358 mentions in last 2 hours (+72%)
+                                    </p>
+                                </div>
+                                <div class="p-3 border-b border-gray-800 hover:bg-gray-950 cursor-pointer transition">
+                                    <div class="flex justify-between items-start mb-1">
+                                        <span class="text-xs bg-purple-900 text-purple-300 px-2 py-0.5 rounded-full">SUSPICIOUS</span>
+                                        <span class="text-xs text-gray-500">10:35:27</span>
+                                    </div>
+                                    <p class="text-sm">Server breach reported on underground forum</p>
+                                    <p class="text-xs text-gray-400 mt-1 flex items-center">
+                                        <i class="fas fa-shield-alt mr-1"></i> Government contractor data potentially exposed
+                                    </p>
+                                </div>
+                                <div class="p-3 border-b border-gray-800 hover:bg-gray-950 cursor-pointer transition">
+                                    <div class="flex justify-between items-start mb-1">
+                                        <span class="text-xs bg-blue-900 text-blue-300 px-2 py-0.5 rounded-full">INFO</span>
+                                        <span class="text-xs text-gray-500">09:42:18</span>
+                                    </div>
+                                    <p class="text-sm">New ransomware variant detected in wild</p>
+                                    <p class="text-xs text-gray-400 mt-1 flex items-center">
+                                        <i class="fas fa-bug mr-1"></i> Targeting healthcare sector, requires patch KB5021234
+                                    </p>
+                                </div>
+                                <div class="p-3 hover:bg-gray-950 cursor-pointer transition">
+                                    <div class="flex justify-between items-start mb-1">
+                                        <span class="text-xs bg-yellow-900 text-yellow-300 px-2 py-0.5 rounded-full">WARNING</span>
+                                        <span class="text-xs text-gray-500">08:15:03</span>
+                                    </div>
+                                    <p class="text-sm">Unusual login attempts from ASN 14061</p>
+                                    <p class="text-xs text-gray-400 mt-1 flex items-center">
+                                        <i class="fas fa-globe mr-1"></i> 147 attempts from new IP blocks
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Data Analysis -->
+                <div class="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
+                    <div class="border-b border-gray-800 p-4 bg-gray-950 flex justify-between items-center">
+                        <h2 class="font-bold text-green-400 flex items-center">
+                            <i class="fas fa-chart-line mr-2"></i> DARK WEB ACTIVITY ANALYSIS
+                        </h2>
+                        <div class="flex space-x-3">
+                            <div class="text-xs">
+                                <span class="text-yellow-400">LAST 24H: </span>
+                                <span id="alert-count-main" class="text-green-400">1,247 ALERTS</span>
+                            </div>
+                            <div class="text-xs">
+                                <span class="text-yellow-400">TOP THREAT: </span>
+                                <span class="text-red-400">CREDENTIAL LEAKS</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 p-4">
+                        <div class="bg-gray-950 p-3 rounded border border-gray-800">
+                            <div class="flex justify-between items-center mb-2">
+                                <h3 class="text-sm font-bold text-green-400">CREDENTIAL EXPOSURE</h3>
+                                <span class="text-xs bg-red-900 text-red-300 px-2 py-0.5 rounded-full">+24%</span>
+                            </div>
+                            <div class="h-40">
+                                <canvas id="credentialChart"></canvas>
+                            </div>
+                            <div class="text-xs text-gray-400 mt-2 flex justify-between">
+                                <span>12H AGO</span>
+                                <span>6H AGO</span>
+                                <span>CURRENT</span>
+                            </div>
+                        </div>
+                        <div class="bg-gray-950 p-3 rounded border border-gray-800">
+                            <div class="flex justify-between items-center mb-2">
+                                <h3 class="text-sm font-bold text-green-400">FORUM ACTIVITY</h3>
+                                <span class="text-xs bg-yellow-900 text-yellow-300 px-2 py-0.5 rounded-full">+18%</span>
+                            </div>
+                            <div class="h-40">
+                                <canvas id="forumChart"></canvas>
+                            </div>
+                            <div class="text-xs text-gray-400 mt-2 flex justify-between">
+                                <span>12H AGO</span>
+                                <span>6H AGO</span>
+                                <span>CURRENT</span>
+                            </div>
+                        </div>
+                        <div class="bg-gray-950 p-3 rounded border border-gray-800">
+                            <div class="flex justify-between items-center mb-2">
+                                <h3 class="text-sm font-bold text-green-400">THREAT TYPES</h3>
+                                <div class="text-xs bg-gray-800 text-gray-300 px-2 py-0.5 rounded-full">ANALYSIS</div>
+                            </div>
+                            <div class="h-40">
+                                <canvas id="threatChart"></canvas>
+                            </div>
+                            <div class="text-xs text-gray-400 mt-2 flex justify-center space-x-4">
+                                <span><span class="inline-block w-2 h-2 bg-red-500 rounded-full mr-1"></span>LEAKS</span>
+                                <span><span class="inline-block w-2 h-2 bg-yellow-500 rounded-full mr-1"></span>CHATTER</span>
+                                <span><span class="inline-block w-2 h-2 bg-purple-500 rounded-full mr-1"></span>BREACHES</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="mt-8 border-t border-gray-800 pt-4 text-xs text-gray-600 flex justify-between items-center">
+            <div>
+                <span>SHADOWWATCH v3.7.4</span>
+                <span class="mx-2">|</span>
+                <span>SECURE SIGNAL: ENCRYPTED</span>
+                <span class="mx-2">|</span>
+                <span>LAST SYNCHRONIZATION: <span class="text-green-400">2m 34s ago</span></span>
+            </div>
+            <div class="flex items-center">
+                <div class="w-2 h-2 rounded-full bg-green-500 mr-2"></div>
+                <span>OPERATIONAL</span>
+                <span class="mx-2">|</span>
+                <span id="status-message" class="blink text-yellow-400">AWAITING COMMANDS</span>
+            </div>
+        </footer>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // Initialize charts
+        document.addEventListener('DOMContentLoaded', function() {
+            // Credential Exposure Chart
+            const ctx1 = document.getElementById('credentialChart').getContext('2d');
+            new Chart(ctx1, {
+                type: 'line',
+                data: {
+                    labels: ['00:00', '04:00', '08:00', '12:00', '16:00', '20:00', 'Now'],
+                    datasets: [{
+                        label: 'Credentials',
+                        data: [65, 59, 80, 81, 92, 105, 132],
+                        borderColor: '#ff5555',
+                        backgroundColor: 'rgba(255, 85, 85, 0.1)',
+                        tension: 0.4,
+                        fill: true,
+                        borderWidth: 2,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: false,
+                            grid: {
+                                display: false
+                            }
+                        },
+                        y: {
+                            display: false,
+                            grid: {
+                                display: false
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Forum Activity Chart
+            const ctx2 = document.getElementById('forumChart').getContext('2d');
+            new Chart(ctx2, {
+                type: 'bar',
+                data: {
+                    labels: ['00:00', '04:00', '08:00', '12:00', '16:00', '20:00', 'Now'],
+                    datasets: [{
+                        label: 'Posts',
+                        data: [30, 42, 55, 72, 63, 88, 102],
+                        backgroundColor: 'rgba(255, 255, 85, 0.7)',
+                        borderColor: 'rgba(255, 255, 85, 1)',
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: false,
+                            grid: {
+                                display: false
+                            }
+                        },
+                        y: {
+                            display: false,
+                            grid: {
+                                display: false
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Threat Types Chart
+            const ctx3 = document.getElementById('threatChart').getContext('2d');
+            new Chart(ctx3, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Credential Leaks', 'Chatter Spikes', 'Server Breaches'],
+                    datasets: [{
+                        data: [45, 35, 20],
+                        backgroundColor: [
+                            'rgba(255, 85, 85, 0.7)',
+                            'rgba(255, 255, 85, 0.7)',
+                            'rgba(170, 85, 255, 0.7)'
+                        ],
+                        borderColor: [
+                            'rgba(255, 85, 85, 1)',
+                            'rgba(255, 255, 85, 1)',
+                            'rgba(170, 85, 255, 1)'
+                        ],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    cutout: '65%'
+                }
+            });
+
+            // Simulate terminal updates
+            const terminal = document.getElementById('terminal-content');
+            let count = 0;
+            setInterval(() => {
+                if (count < 3) {
+                    const newEntry = document.createElement('div');
+                    newEntry.className = 'mb-1 text-gray-500';
+                    newEntry.textContent = `[${new Date().toLocaleTimeString()}] Background scan: ${Math.floor(Math.random() * 100)} new items found`;
+                    terminal.appendChild(newEntry);
+                    terminal.scrollTop = terminal.scrollHeight;
+                    count++;
+                }
+            }, 10000);
+
+            // Blinking cursor effect
+            setInterval(() => {
+                const cursor = document.querySelector('.code-input');
+                cursor.classList.toggle('opacity-0');
+            }, 500);
+
+            // Quick action functionality
+            const quickActions = {
+                currentScan: null,
+                alertCount: 3,
+                
+                addAlert: function(type, message, details) {
+                    const alertFeed = document.getElementById('alert-feed');
+                    const alertCount = document.getElementById('alert-count');
+                    const alertCountMain = document.getElementById('alert-count-main');
+                    
+                    const timestamp = new Date().toLocaleTimeString();
+                    
+                    const alertTypes = {
+                        'CRITICAL': 'bg-red-900 text-red-300',
+                        'WARNING': 'bg-yellow-900 text-yellow-300',
+                        'SUSPICIOUS': 'bg-purple-900 text-purple-300',
+                        'INFO': 'bg-blue-900 text-blue-300'
+                    };
+                    
+                    const icons = {
+                        'CRITICAL': 'fa-exclamation-triangle',
+                        'WARNING': 'fa-exclamation-circle',
+                        'SUSPICIOUS': 'fa-user-secret',
+                        'INFO': 'fa-info-circle'
+                    };
+                    
+                    const alertDiv = document.createElement('div');
+                    alertDiv.className = 'p-3 border-b border-gray-800 hover:bg-gray-950 cursor-pointer transition';
+                    alertDiv.innerHTML = `
+                        <div class="flex justify-between items-start mb-1">
+                            <span class="text-xs ${alertTypes[type]} px-2 py-0.5 rounded-full">${type}</span>
+                            <span class="text-xs text-gray-500">${timestamp}</span>
+                        </div>
+                        <p class="text-sm">${message}</p>
+                        <p class="text-xs text-gray-400 mt-1 flex items-center">
+                            <i class="fas ${icons[type]} mr-1"></i> ${details}
+                        </p>
+                    `;
+                    
+                    alertFeed.insertBefore(alertDiv, alertFeed.firstChild);
+                    this.alertCount++;
+                    alertCount.textContent = `${this.alertCount} NEW`;
+                    
+                    // Update the main alert counter in analysis section
+                    const currentCount = parseInt(alertCountMain.textContent.replace(/,/g, ''));
+                    alertCountMain.textContent = (currentCount + 1).toLocaleString() + ' ALERTS';
+                },
+                
+                terminalMessage: function(message) {
+                    const terminal = document.getElementById('terminal-content');
+                    const cursor = document.querySelector('.code-input');
+                    cursor.remove();
+                    
+                    const newLine = document.createElement('div');
+                    newLine.className = 'mb-1';
+                    newLine.textContent = message;
+                    terminal.appendChild(newLine);
+                    
+                    // Add back the cursor
+                    const prompt = document.createElement('div');
+                    prompt.className = 'mb-1';
+                    prompt.innerHTML = '<span class="text-yellow-400">root@shadowwatch:~#</span><span class="code-input"> _</span>';
+                    terminal.appendChild(prompt);
+                    
+                    terminal.scrollTop = terminal.scrollHeight;
+                },
+                
+                runDeepScan: function() {
+                    if (this.currentScan) return;
+                    
+                    this.currentScan = 'deep-scan';
+                    document.getElementById('scan-progress').classList.remove('hidden');
+                    document.getElementById('scan-result').classList.add('hidden');
+                    
+                    const statusMessage = document.getElementById('status-message');
+                    statusMessage.classList.remove('text-yellow-400', 'blink');
+                    statusMessage.classList.add('text-green-400');
+                    statusMessage.textContent = 'RUNNING DEEP SCAN';
+                    
+                    this.terminalMessage('[+] Initiating deep scan protocol across darknet surfaces...');
+                    
+                    let progress = 0;
+                    const scanInterval = setInterval(() => {
+                        progress += Math.floor(Math.random() * 5) + 1;
+                        if (progress >= 100) {
+                            progress = 100;
+                            clearInterval(scanInterval);
+                            this.scanComplete();
+                            this.terminalMessage('[+] Deep scan completed. Analyzing results...');
+                            
+                            // Add some findings
+                            setTimeout(() => {
+                                this.terminalMessage('[!] Detected 3 new data dumps on underground marketplaces');
+                                this.terminalMessage('[!] Found credentials matching 14 corporate email domains');
+                            }, 1500);
+                            
+                            // Add alert
+                            setTimeout(() => {
+                                this.addAlert('WARNING', 'Multiple credential dumps detected', '14 corporate domains affected, 3 marketplaces');
+                            }, 3000);
+                        }
+                        
+                        document.getElementById('progress-bar').style.width = `${progress}%`;
+                        document.getElementById('progress-percent').textContent = `${progress}%`;
+                    }, 150);
+                },
+                
+                runCredentialTrace: function() {
+                    if (this.currentScan) return;
+                    
+                    this.currentScan = 'credential-trace';
+                    document.getElementById('scan-progress').classList.remove('hidden');
+                    document.getElementById('scan-result').classList.add('hidden');
+                    
+                    const statusMessage = document.getElementById('status-message');
+                    statusMessage.classList.remove('text-yellow-400', 'blink');
+                    statusMessage.classList.add('text-green-400');
+                    statusMessage.textContent = 'TRACING CREDENTIALS';
+                    
+                    this.terminalMessage('[+] Initializing credential tracing module...');
+                    this.terminalMessage('[+] Checking known breaches and paste sites...');
+                    
+                    let progress = 0;
+                    const scanInterval = setInterval(() => {
+                        progress += Math.floor(Math.random() * 10) + 5;
+                        if (progress >= 100) {
+                            progress = 100;
+                            clearInterval(scanInterval);
+                            this.scanComplete();
+                            this.terminalMessage('[+] Credential trace completed. Results available.');
+                            
+                            // Add some findings
+                            setTimeout(() => {
+                                this.terminalMessage('[!] Matched 143 credentials against corporate watchlist');
+                                this.terminalMessage('[!] 12 CEO/C-level credentials found in recent dumps');
+                            }, 1500);
+                            
+                            // Add alert
+                            setTimeout(() => {
+                                this.addAlert('CRITICAL', 'Executive credentials exposed', '12 C-level credentials found in recent breaches');
+                            }, 3000);
+                        }
+                        
+                        document.getElementById('progress-bar').style.width = `${progress}%`;
+                        document.getElementById('progress-percent').textContent = `${progress}%`;
+                    }, 100);
+                },
+                
+                runChatterAnalysis: function() {
+                    if (this.currentScan) return;
+                    
+                    this.currentScan = 'chatter-analysis';
+                    document.getElementById('scan-progress').classList.remove('hidden');
+                    document.getElementById('scan-result').classList.add('hidden');
+                    
+                    const statusMessage = document.getElementById('status-message');
+                    statusMessage.classList.remove('text-yellow-400', 'blink');
+                    statusMessage.classList.add('text-green-400');
+                    statusMessage.textContent = 'ANALYZING CHATTER';
+                    
+                    this.terminalMessage('[+] Connecting to darknet chat channels...');
+                    this.terminalMessage('[+] Initializing natural language processing...');
+                    
+                    let progress = 0;
+                    const scanInterval = setInterval(() => {
+                        progress += Math.floor(Math.random() * 15) + 5;
+                        if (progress >= 100) {
+                            progress = 100;
+                            clearInterval(scanInterval);
+                            this.scanComplete();
+                            this.terminalMessage('[+] Chatter analysis completed. Trends identified.');
+                            
+                            // Add some findings
+                            setTimeout(() => {
+                                this.terminalMessage('[!] 72% increase in mentions of "supply chain attack"');
+                                this.terminalMessage('[!] New ransomware variant "ShadowKill" discussed in 3 forums');
+                            }, 1500);
+                            
+                            // Add alert
+                            setTimeout(() => {
+                                this.addAlert('SUSPICIOUS', 'Emerging ransomware variant detected', 'New "ShadowKill" ransomware discussed across 3 forums');
+                            }, 3000);
+                        }
+                        
+                        document.getElementById('progress-bar').style.width = `${progress}%`;
+                        document.getElementById('progress-percent').textContent = `${progress}%`;
+                    }, 80);
+                },
+                
+                runIdentityAlert: function() {
+                    if (this.currentScan) return;
+                    
+                    this.currentScan = 'identity-alert';
+                    document.getElementById('scan-progress').classList.remove('hidden');
+                    document.getElementById('scan-result').classList.add('hidden');
+                    
+                    const statusMessage = document.getElementById('status-message');
+                    statusMessage.classList.remove('text-yellow-400', 'blink');
+                    statusMessage.classList.add('text-green-400');
+                    statusMessage.textContent = 'MONITORING IDENTITIES';
+                    
+                    this.terminalMessage('[+] Scanning for mentions of protected identities...');
+                    this.terminalMessage('[+] Checking deep/dark web archives...');
+                    
+                    let progress = 0;
+                    const scanInterval = setInterval(() => {
+                        progress += Math.floor(Math.random() * 20) + 10;
+                        if (progress >= 100) {
+                            progress = 100;
+                            clearInterval(scanInterval);
+                            this.scanComplete();
+                            this.terminalMessage('[+] Identity monitoring sweep completed.');
+                            
+                            // Add some findings
+                            setTimeout(() => {
+                                this.terminalMessage('[!] 3 protected identities mentioned in hacker forums');
+                                this.terminalMessage('[!] 1 identity potentially compromised - immediate action advised');
+                            }, 1500);
+                            
+                            // Add alert
+                            setTimeout(() => {
+                                this.addAlert('CRITICAL', 'Protected identity potentially exposed', 'High-profile identity compromise detected');
+                            }, 3000);
+                        }
+                        
+                        document.getElementById('progress-bar').style.width = `${progress}%`;
+                        document.getElementById('progress-percent').textContent = `${progress}%`;
+                    }, 50);
+                },
+                
+                scanComplete: function() {
+                    document.getElementById('progress-bar').style.width = '100%';
+                    document.getElementById('progress-percent').textContent = '100%';
+                    
+                    setTimeout(() => {
+                        document.getElementById('scan-result').classList.remove('hidden');
+                        this.currentScan = null;
+                        
+                        const statusMessage = document.getElementById('status-message');
+                        statusMessage.classList.remove('text-green-400');
+                        statusMessage.classList.add('text-yellow-400', 'blink');
+                        statusMessage.textContent = 'AWAITING COMMANDS';
+                    }, 1000);
+                },
+                
+                killswitch: function() {
+                    const terminal = document.getElementById('terminal-content');
+                    this.terminalMessage('[!] ACTIVATING EMERGENCY KILLSWITCH PROTOCOL...');
+                    this.terminalMessage('[+] Disconnecting from TOR network...');
+                    this.terminalMessage('[+] Wiping session data...');
+                    this.terminalMessage('[+] Terminating all connections...');
+                    this.terminalMessage('[!] SYSTEM SHUTDOWN INITIATED.');
+                    
+                    document.querySelectorAll('button').forEach(btn => {
+                        btn.disabled = true;
+                    });
+                    
+                    document.body.style.backgroundColor = '#000';
+                    
+                    setTimeout(() => {
+                        document.body.innerHTML = `
+                        <div class="h-screen w-full bg-black flex items-center justify-center">
+                            <div class="text-center">
+                                <h1 class="text-red-500 text-4xl mb-4">SYSTEM TERMINATED</h1>
+                                <p class="text-gray-500">All connections terminated. Secure wipe complete.</p>
+                                <p class="text-gray-500 mt-8">Refresh page to restart (simulated)</p>
+                            </div>
+                        </div>
+                        `;
+                    }, 3000);
+                }
+            };
+            
+            // Event listeners for quick actions
+            document.getElementById('deep-scan').addEventListener('click', () => quickActions.runDeepScan());
+            document.getElementById('credential-trace').addEventListener('click', () => quickActions.runCredentialTrace());
+            document.getElementById('chatter-analysis').addEventListener('click', () => quickActions.runChatterAnalysis());
+            document.getElementById('identity-alert').addEventListener('click', () => quickActions.runIdentityAlert());
+            document.getElementById('killswitch').addEventListener('click', () => quickActions.killswitch());
+            
+            // Terminal control buttons
+            document.getElementById('clear-terminal').addEventListener('click', () => {
+                document.getElementById('terminal-content').innerHTML = '<div class="mb-1"><span class="text-yellow-400">root@shadowwatch:~#</span><span class="code-input"> _</span></div>';
+            });
+            
+            document.getElementById('refresh-terminal').addEventListener('click', () => {
+                quickActions.terminalMessage('[+] Refreshing terminal session...');
+                setTimeout(() => {
+                    quickActions.terminalMessage('[+] Terminal refreshed. All connections stable.');
+                }, 800);
+            });
+        });
+    </script>
+</body>
+</html>
