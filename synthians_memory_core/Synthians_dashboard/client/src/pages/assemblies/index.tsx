@@ -7,19 +7,22 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { RefreshButton } from "@/components/ui/RefreshButton";
 import { Link } from "wouter";
 import { usePollingStore } from "@/lib/store";
+import { useFeatures } from "@/contexts/FeaturesContext";
 
 export default function AssembliesIndex() {
   const { refreshAllData } = usePollingStore();
+  const { explainabilityEnabled } = useFeatures();
   const [searchTerm, setSearchTerm] = useState("");
   const [sortBy, setSortBy] = useState("updated");
   const [sortOrder, setSortOrder] = useState("desc");
   const [statusFilter, setStatusFilter] = useState("all");
   
   // Fetch assemblies data
-  const { data, isLoading, isError } = useAssemblies();
+  const { data, isLoading, isError, error } = useAssemblies();
   
   // Filter and sort assemblies
   const filteredAssemblies = React.useMemo(() => {
@@ -58,20 +61,21 @@ export default function AssembliesIndex() {
     
     // Apply sorting
     filtered.sort((a, b) => {
-      let aValue, bValue;
+      let aValue: string | number = '';
+      let bValue: string | number = '';
       
       if (sortBy === "id") {
-        aValue = a.id;
-        bValue = b.id;
+        aValue = a.id || '';
+        bValue = b.id || '';
       } else if (sortBy === "name") {
-        aValue = a.name;
-        bValue = b.name;
+        aValue = a.name || '';
+        bValue = b.name || '';
       } else if (sortBy === "members") {
-        aValue = a.member_count;
-        bValue = b.member_count;
+        aValue = a.member_count || 0;
+        bValue = b.member_count || 0;
       } else if (sortBy === "updated") {
-        aValue = new Date(a.updated_at).getTime();
-        bValue = new Date(b.updated_at).getTime();
+        aValue = new Date(a.updated_at || 0).getTime();
+        bValue = new Date(b.updated_at || 0).getTime();
       }
       
       if (sortOrder === "asc") {
@@ -140,6 +144,15 @@ export default function AssembliesIndex() {
         <RefreshButton onClick={refreshAllData} />
       </div>
       
+      {isError && (
+        <Alert variant="destructive" className="mb-6">
+          <AlertTitle>Failed to load assemblies</AlertTitle>
+          <AlertDescription>
+            {error?.message || "An error occurred while fetching the assemblies. Please try again later."}
+          </AlertDescription>
+        </Alert>
+      )}
+      
       {/* Filter Controls */}
       <Card className="mb-6">
         <CardContent className="p-4">
@@ -197,7 +210,7 @@ export default function AssembliesIndex() {
         <CardHeader className="px-4 py-3 bg-muted border-b border-border flex justify-between items-center">
           <div className="flex items-center space-x-2">
             <CardTitle className="font-medium">Memory Assemblies</CardTitle>
-            {!isLoading && (
+            {!isLoading && !isError && (
               <Badge variant="outline" className="ml-2">
                 {filteredAssemblies.length} {filteredAssemblies.length === 1 ? 'assembly' : 'assemblies'}
               </Badge>
@@ -273,7 +286,9 @@ export default function AssembliesIndex() {
                       <TableCell className="text-right">
                         <Link href={`/assemblies/${assembly.id}`}>
                           <Button variant="ghost" size="sm" className="text-primary hover:text-accent text-xs">
-                            View <i className="fas fa-chevron-right ml-1"></i>
+                            View {explainabilityEnabled && (
+                              <i className="fas fa-chevron-right ml-1"></i>
+                            )}
                           </Button>
                         </Link>
                       </TableCell>

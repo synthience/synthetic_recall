@@ -3,6 +3,7 @@ import { ServiceStatus } from "@shared/schema";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { ServiceStatus as ServiceStatusComponent } from "../layout/ServiceStatus";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 interface OverviewCardProps {
   title: string;
@@ -10,9 +11,11 @@ interface OverviewCardProps {
   service: ServiceStatus | null;
   metrics: Record<string, string | number> | null;
   isLoading: boolean;
+  isError?: boolean;
+  error?: any;
 }
 
-export function OverviewCard({ title, icon, service, metrics, isLoading }: OverviewCardProps) {
+export function OverviewCard({ title, icon, service, metrics, isLoading, isError = false, error }: OverviewCardProps) {
   return (
     <Card className="overflow-hidden">
       <CardHeader className="px-4 py-3 bg-muted border-b border-border flex justify-between items-center">
@@ -37,6 +40,13 @@ export function OverviewCard({ title, icon, service, metrics, isLoading }: Overv
             <Skeleton className="h-24" />
             <Skeleton className="h-24" />
           </div>
+        ) : isError ? (
+          <Alert variant="destructive" className="mb-4">
+            <AlertTitle>Failed to load data</AlertTitle>
+            <AlertDescription>
+              {error?.message || "There was an error fetching data for this service."}
+            </AlertDescription>
+          </Alert>
         ) : metrics ? (
           <div className="grid grid-cols-2 gap-4 mb-4">
             {Object.entries(metrics).map(([key, value], index) => (
@@ -49,10 +59,9 @@ export function OverviewCard({ title, icon, service, metrics, isLoading }: Overv
         ) : (
           <div className="p-4 text-center text-sm text-gray-400">
             <i className="fas fa-exclamation-circle mr-2"></i>
-            No metrics available
+            No metrics available for this service
           </div>
         )}
-        
         {service && (
           <div className="text-xs text-gray-400 flex justify-between">
             {service.uptime && <span>Uptime: {service.uptime}</span>}
