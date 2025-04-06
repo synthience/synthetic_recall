@@ -19,7 +19,7 @@ log = logging.getLogger("TestAssemblies")
 
 # --- Test Configuration ---
 # Ensure these match your running test server configuration
-TEST_SERVER_URL = "http://localhost:5010"
+TEST_SERVER_URL = "http://localhost:5020"
 EMBEDDING_DIM = 768  # Adjust if your server uses a different dimension
 DEFAULT_WAIT_TIME = 5.0  # Increased: Seconds to wait for async operations like indexing/persistence
 LONG_WAIT_TIME = 7.0  # Increased: Longer wait for potentially slower operations like merging
@@ -45,12 +45,25 @@ async def client():
         # Perform a health check at the start
         try:
             health = await api_client.health_check()
-            assert health.get("status") == "healthy"
-            log.info(f"Memory Core service at {TEST_SERVER_URL} is healthy.")
+            # Handle nested response structure
+            if health.get("success") and "data" in health:
+                health_data = health.get("data", {})
+                assert health_data.get("status") == "healthy"
+                log.info(f"Memory Core service at {TEST_SERVER_URL} is healthy.")
+            else:
+                assert health.get("status") == "healthy"
+                log.info(f"Memory Core service at {TEST_SERVER_URL} is healthy (legacy format).")
+                
             stats = await api_client.get_stats()
+            # Handle nested response structure for stats too
+            if stats.get("success") and "data" in stats:
+                stats_data = stats.get("data", {})
+            else:
+                stats_data = stats
+                
             # Extract embedding dim from stats if possible
             global EMBEDDING_DIM
-            EMBEDDING_DIM = stats.get("api_server", {}).get("embedding_dim", EMBEDDING_DIM)
+            EMBEDDING_DIM = stats_data.get("api_server", {}).get("embedding_dim", EMBEDDING_DIM)
             log.info(f"Using Embedding Dimension: {EMBEDDING_DIM}")
 
         except Exception as e:
@@ -956,7 +969,7 @@ class TestPhase58Assemblies:
             # The fixture handles the config override and cleanup
             await self._test_05_assembly_merging_impl(client, test_run_id)
         except Exception as e:
-            log.error(f"Test 05 failed with error: {e}", exc_info=True)
+            log.error(f"Test 05 failed with error: {e}")
             pytest.fail(f"Test 05 (assembly merging) failed: {e}")
                 
     async def _test_05_assembly_merging_impl(self, client: SynthiansClient, test_run_id: str):

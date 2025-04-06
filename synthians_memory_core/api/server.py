@@ -327,19 +327,34 @@ async def health_check():
         # Use _memories instead of memories to match the updated attribute name
         memory_count = len(app.state.memory_core._memories)
         assembly_count = len(app.state.memory_core.assemblies)
+        # Wrap the successful response according to ServiceStatusResponse schema
         return {
-            "status": "healthy",
-            "uptime_seconds": uptime,
-            "memory_count": memory_count,
-            "assembly_count": assembly_count,
-            "version": "1.0.0"  # Add version information
+            "success": True,
+            "data": {
+                "status": "healthy",
+                "uptime_seconds": uptime,
+                "memory_count": memory_count,
+                "assembly_count": assembly_count,
+                "version": "1.0.0"
+            }
         }
     except Exception as e:
         logger.error("health_check", f"Health check failed: {str(e)}")
-        return {
-            "status": "unhealthy",
-            "error": str(e)
-        }
+        # Wrap the error response according to ServiceStatusResponse schema
+        # Option 1: Return success:false with error message
+        return JSONResponse(
+            status_code=503, # Service Unavailable
+            content={
+                "success": False,
+                "error": f"Health check failed: {str(e)}",
+                "data": { # Include minimal data even on error if possible
+                    "status": "unhealthy",
+                    "error": str(e)
+                }
+            }
+        )
+        # Option 2: Raise HTTPException (FastAPI standard)
+        # raise HTTPException(status_code=503, detail={"success": False, "error": str(e), "data": {"status": "unhealthy"}})
 
 @app.get("/stats")
 async def get_stats():
@@ -433,19 +448,49 @@ async def get_stats():
         try:
             # Try using check_index_integrity instead of check_index_health
             if hasattr(memory_core, 'check_index_integrity'):
-                index_status = await memory_core.check_index_integrity() if asyncio.iscoroutinefunction(memory_core.check_index_integrity) else memory_core.check_index_integrity()
+                # FIX: Handle tuple return properly (is_consistent, diagnostics)
+                index_result = await memory_core.check_index_integrity() if asyncio.iscoroutinefunction(memory_core.check_index_integrity) else memory_core.check_index_integrity()
+                if isinstance(index_result, tuple) and len(index_result) == 2:
+                    is_consistent, diagnostics = index_result
+                    index_status = {
+                        "is_consistent": is_consistent,
+                        "diagnostics": diagnostics
+                    }
+                else:
+                    # Handle unexpected return format (not a tuple)
+                    index_status = index_result if isinstance(index_result, dict) else {"status": "error", "details": f"Unexpected return format: {type(index_result)}"}
             elif hasattr(memory_core, 'verify_index_integrity'):
                 # Some implementations might have renamed this method
                 index_status = await memory_core.verify_index_integrity() if asyncio.iscoroutinefunction(memory_core.verify_index_integrity) else memory_core.verify_index_integrity()
-            elif hasattr(memory_core, 'vector_index') and hasattr(memory_core.vector_index, 'verify_index_integrity'):
+            elif hasattr(memory_core, 'vector_index') and hasattr(memory_core.vector_index, 'check_index_integrity'):
                 # Or it might be on the vector_index object
-                index_status = await memory_core.vector_index.verify_index_integrity() if asyncio.iscoroutinefunction(memory_core.vector_index.verify_index_integrity) else memory_core.vector_index.verify_index_integrity()
+                # FIX: Handle tuple return properly here too
+                index_result = await memory_core.vector_index.check_index_integrity() if asyncio.iscoroutinefunction(memory_core.vector_index.check_index_integrity) else memory_core.vector_index.check_index_integrity()
+                if isinstance(index_result, tuple) and len(index_result) == 2:
+                    is_consistent, diagnostics = index_result
+                    index_status = {
+                        "is_consistent": is_consistent,
+                        "diagnostics": diagnostics
+                    }
+                else:
+                    # Handle unexpected return format (not a tuple)
+                    index_status = index_result if isinstance(index_result, dict) else {"status": "error", "details": f"Unexpected return format: {type(index_result)}"}
             else:
                 # Fallback to a basic status if no method is available
                 index_status = {"status": "unknown", "details": "No index health check method available"}
         except Exception as e:
-            logger.error(f"Error checking index health: {str(e)}")
-            index_status = {"status": "error", "details": str(e)}
+            logger.error(f"Error checking index health: {str(e)}", exc_info=True)
+            index_status = {"status": "error", "details": str(e), "is_consistent": False, "diagnostics": {"error": str(e)}} # Ensure keys exist even on error
+
+        # --- START ADDED CODE (Plan 3.C) ---
+        # Check if 'is_consistent' exists and is False, or fallback to 'is_healthy'
+        is_consistent = index_status.get('is_consistent')
+        if is_consistent is None: # If 'is_consistent' key doesn't exist, try 'is_healthy'
+             is_consistent = index_status.get('is_healthy', True) # Default to True if neither exists
+
+        if not is_consistent:
+             logger.error("Index integrity check failed", extra={"details": index_status.get("diagnostics", {})}) # Log the details dict
+        # --- END ADDED CODE ---
         
         # Get information about activations (Phase 5.9)
         activation_stats = {}
@@ -502,10 +547,11 @@ async def get_stats():
                 "memory_count": index_status.get("indexed_memory_count", 0),
                 "assembly_count": index_status.get("indexed_assembly_count", 0),
                 "embedding_dimension": memory_core.config.get("embedding_dim", 0),
-                "is_healthy": index_status.get("is_healthy", False),
+                "is_healthy": is_consistent, # Use the determined consistency status
                 "drift_count": index_status.get("drift_count", 0),
                 "drift_percentage": index_status.get("drift_percentage", 0),
-                "last_check_timestamp": index_status.get("last_check_timestamp")
+                "last_check_timestamp": index_status.get("last_check_timestamp"),
+                "integrity_details": index_status.get("diagnostics", {}) # Add details to response (Plan 3.C)
             },
             "assembly_stats": {
                 "total_count": assembly_count,
@@ -1295,82 +1341,72 @@ async def check_index_integrity():
         return {"success": False, "error": str(e)}
 
 @app.post("/repair_index", response_model=Dict[str, Any])
-async def repair_index():
+async def repair_index_endpoint(request: Request): # Renamed and accept Request
     """
-    Repair the FAISS vector index by synchronizing with ID mappings.
-    
-    This endpoint attempts to restore consistency between the FAISS index and its ID mappings
-    by rebuilding the index if necessary. Part of Phase 5.8 stability improvements.
-    
-    Enhanced to support full re-indexing from persistence to recover from severe drift or corruption.
-    This rebuilds the index by loading all memories and assemblies from storage and re-adding them.
-    
+    Manually trigger the vector index repair process.
+
+    This endpoint allows manual triggering of the index repair mechanism.
+    It's intended for debugging and maintenance purposes.
+
+    Request Body:
+        repair_type (str, optional): The type of repair to perform ('auto', 'recreate_mapping', 'rebuild_from_persistence', 'force_rebuild').
+                                     Defaults to "auto".
+
     Returns:
-        Dict containing repair results:
-        - success: Whether the repair was successful
-        - repaired: Whether any repairs were actually made
-        - before_stats: Index statistics before repair
-        - after_stats: Index statistics after repair
-        - reindexed_count: Number of items successfully re-indexed (if applicable)
-        - error: Error message if repair failed
+        Dict[str, Any]: Statistics about the repair operation, including success status.
     """
     try:
-        logger.info("[VECTOR_TRACE] Starting FAISS index repair procedure with re-indexing")
-        
-        # Get stats before repair
-        before_stats = app.state.memory_core.vector_index.get_stats()
-        
-        # Perform repair operation - provide persistence and geometry_manager
-        persistence = getattr(app.state.memory_core, "persistence", None)
-        geometry_manager = getattr(app.state.memory_core, "geometry_manager", None)
-        
-        # Detailed repair log
-        repair_result = None
-        
-        if persistence and geometry_manager:
-            logger.info("[VECTOR_TRACE] Persistence and GeometryManager available, performing full re-indexing repair")
-            # Call repair_index with parameters
-            repair_result = await app.state.memory_core.vector_index.repair_index(
-                persistence=persistence,
-                geometry_manager=geometry_manager
-            )
-        else:
-            logger.warning("[VECTOR_TRACE] Persistence or GeometryManager not available, falling back to basic repair")
-            # Fall back to basic repair without re-indexing
-            repair_result = app.state.memory_core.vector_index.repair_index()
-        
-        # Get stats after repair
-        after_stats = app.state.memory_core.vector_index.get_stats()
-        
-        # Check if the repair improved the situation
-        improved = False
-        if after_stats.get("drift_count", 999) < before_stats.get("drift_count", 1000):
-            improved = True
-            
-        logger.info(f"[VECTOR_TRACE] Index repair complete. Repaired: {repair_result is not None}")
-        logger.info(f"[VECTOR_TRACE] Before: {before_stats}")
-        logger.info(f"[VECTOR_TRACE] After: {after_stats}")
-        
-        # Enhanced response with additional repair details
-        response = {
-            "success": True,
-            "repaired": repair_result is not None and repair_result.get("success", False),
-            "improved": improved,
-            "before_stats": before_stats,
-            "after_stats": after_stats
-        }
-        
-        # Add repair details if available
-        if isinstance(repair_result, dict):
-            response.update({
-                "reindexed_count": repair_result.get("reindexed_count", 0),
-                "repair_details": repair_result
-            })
-        
-        return response
+        # Get repair_type from request body
+        try:
+            body = await request.json()
+            repair_type = body.get("repair_type", "auto")
+        except json.JSONDecodeError:
+             raise HTTPException(status_code=400, detail="Invalid JSON body")
+        except Exception as json_err: # Catch other potential errors during body parsing
+             logger.error(f"Error parsing request body for /repair_index: {json_err}", exc_info=True)
+             raise HTTPException(status_code=400, detail=f"Invalid request body: {json_err}")
+
+        logger.info(f"Repair index request received with repair_type: {repair_type}")
+
+        # Access memory core from app state (using request.app.state)
+        if not hasattr(request.app.state, 'memory_core') or request.app.state.memory_core is None:
+             raise HTTPException(status_code=503, detail="Memory core not initialized or unavailable")
+
+        memory_core = request.app.state.memory_core
+
+        # Ensure vector_index, persistence, and geometry_manager exist
+        if not hasattr(memory_core, 'vector_index') or memory_core.vector_index is None:
+             raise HTTPException(status_code=503, detail="Vector index component not available")
+        if not hasattr(memory_core, 'persistence') or memory_core.persistence is None:
+             raise HTTPException(status_code=503, detail="Persistence component not available")
+        if not hasattr(memory_core, 'geometry_manager') or memory_core.geometry_manager is None:
+             raise HTTPException(status_code=503, detail="Geometry manager component not available")
+
+        # --- PASS DEPENDENCIES ---
+        # Call the internal async method directly, passing dependencies
+        if not hasattr(memory_core.vector_index, '_repair_index_async'):
+             raise HTTPException(status_code=500, detail="Internal repair method '_repair_index_async' not found")
+
+        result_stats = await memory_core.vector_index._repair_index_async(
+            persistence=memory_core.persistence,
+            geometry_manager=memory_core.geometry_manager,
+            repair_mode=repair_type
+        )
+        # ---
+
+        # Determine status code based on success
+        status_code = 200 if result_stats.get("success") else 500
+
+        # Return the statistics from the repair operation
+        return JSONResponse(content=result_stats, status_code=status_code)
+
+    except HTTPException as http_exc:
+        # Re-raise HTTP exceptions directly
+        raise http_exc
     except Exception as e:
-        logger.error(f"[VECTOR_TRACE] Error repairing index: {str(e)}", exc_info=True)
-        return {"success": False, "error": str(e)}
+        logger.error(f"Error repairing vector index via API: {str(e)}", exc_info=True)
+        # Return a generic 500 error for other exceptions
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 @app.post("/repair_vector_index_drift", response_model=Dict[str, Any])
 async def repair_vector_index_drift():
@@ -1443,50 +1479,6 @@ async def repair_vector_index_drift_get():
     except Exception as e:
         logger.error(f"Error during vector index repair: {str(e)}")
         return {"success": False, "error": str(e)}
-
-# --- Configuration Endpoints ---
-
-@app.get("/config/runtime/{service_name}")
-async def get_runtime_config(service_name: str):
-    """Get runtime configuration for services.
-    
-    Returns a sanitized subset of configuration for the specified service:
-    - memory-core: Memory Core configuration
-    - neural-memory: Neural Memory configuration  
-    - cce: Context Cascade Engine configuration
-    
-    This endpoint is used by the diagnostic dashboard to display configuration information.
-    """
-    logger.info(f"Retrieving runtime configuration for service: {service_name}")
-    
-    # Basic validation
-    valid_services = ["memory-core", "neural-memory", "cce"]
-    if service_name not in valid_services:
-        raise HTTPException(status_code=404, detail=f"Invalid service: {service_name}. Must be one of {valid_services}")
-    
-    # Only return Memory Core config directly from this service
-    if service_name == "memory-core":
-        # Return a sanitized subset of Memory Core configuration
-        config = {
-            "ENABLE_ASSEMBLIES": getattr(app.state.memory_core, "enable_assemblies", True),
-            "ENABLE_ASSEMBLY_PRUNING": getattr(app.state.memory_core, "enable_assembly_pruning", True),
-            "ENABLE_ASSEMBLY_MERGING": getattr(app.state.memory_core, "enable_assembly_merging", True),
-            "ENABLE_EXPLAINABILITY": getattr(app.state.memory_core, "enable_explainability", True),
-            "VECTOR_INDEX_TYPE": getattr(app.state.memory_core, "vector_index_type", "faiss"),
-            "ASSEMBLY_MERGE_THRESHOLD": getattr(app.state.memory_core, "assembly_merge_threshold", 0.8),
-            "VECTOR_DIM": getattr(app.state.memory_core, "vector_dim", 384),
-            "MAX_ASSEMBLY_SIZE": getattr(app.state.memory_core, "max_assembly_size", 50),
-            "DATA_DIR": getattr(app.state.memory_core, "data_dir", "./data"),
-            "VERSION": getattr(app.state.memory_core, "version", "5.9.1")
-        }
-        return config
-    else:
-        # For other services, we'd need to proxy the request
-        # This would typically be handled by the dashboard proxy
-        raise HTTPException(
-            status_code=501, 
-            detail=f"Configuration for {service_name} not available from this endpoint. Use the dashboard proxy instead."
-        )
 
 # --- Test Endpoints (Disabled by default) ---
 

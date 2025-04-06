@@ -1,3 +1,6 @@
+from fastapi import Depends, Request, HTTPException
+from typing import Any, Dict
+
 """FastAPI routes for the diagnostics features of Memory Core Phase 5.9.
 
 These routes expose diagnostics information such as merge logs and runtime configuration.
@@ -113,6 +116,31 @@ async def get_merge_log(
             "error": str(e)
         }
 
+@router.post("/trigger_retry_loop", status_code=200)
+async def trigger_retry_loop_endpoint(
+    request: Request,
+    explainability_enabled: bool = Depends(check_explainability_enabled) # Ensure feature is enabled
+):
+    """Manually triggers the processing of the pending vector update queue."""
+    # Access memory_core from app state directly
+    if not hasattr(request.app.state, 'memory_core') or request.app.state.memory_core is None:
+        raise HTTPException(status_code=503, detail="Memory core not available")
+    memory_core = request.app.state.memory_core
+
+    if not hasattr(memory_core, 'force_process_pending_updates'):
+         raise HTTPException(status_code=501, detail="Retry loop trigger functionality not implemented in core.")
+
+    try:
+        results = await memory_core.force_process_pending_updates()
+        return {
+            "success": True,
+            "message": f"Triggered processing of pending updates.",
+            "details": results
+        }
+    except Exception as e:
+        logger.error(f"Error during forced processing of pending updates: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal error during forced processing: {str(e)}")
+
 @router.get("/runtime/config/{service_name}", response_model=RuntimeConfigResponse)
 async def get_runtime_config(
     request: Request,
@@ -175,3 +203,26 @@ async def get_runtime_config(
             "retrieval_timestamp": datetime.now(timezone.utc).isoformat(),
             "error": str(e)
         }
+
+
+
+@router.post("/trigger_retry_loop", status_code=200)
+async def trigger_retry_loop_endpoint(
+    request: Request,
+    # memory_core: SynthiansMemoryCore = Depends(get_memory_core) # Use dependency injection if available
+):
+    """Manually triggers the processing of the pending vector update queue."""
+    # Access memory_core from app state directly as Depends might be tricky with test client setup
+    if not hasattr(request.app.state, 'memory_core') or request.app.state.memory_core is None:
+        raise HTTPException(status_code=503, detail="Memory core not available")
+    memory_core = request.app.state.memory_core
+
+    if not hasattr(memory_core, 'force_process_pending_updates'):
+         raise HTTPException(status_code=501, detail="Retry loop trigger functionality not implemented in core.")
+
+    results = await memory_core.force_process_pending_updates()
+    return {
+        "success": True,
+        "message": f"Triggered processing of pending updates.",
+        "details": results
+    }

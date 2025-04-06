@@ -64,8 +64,16 @@ echo "Initializing ephemeral memory system..."
 mkdir -p /workspace/project/memory_store/ephemeral
 chmod 777 /workspace/project/memory_store/ephemeral
 
-# Install Python dependencies
-pip install --no-cache-dir -r requirements.txt
+# Install specific versions of transformers and related packages first
+echo "Installing specific versions of critical packages..."
+pip install --no-cache-dir --no-deps numpy==1.25.2
+pip install --no-cache-dir --no-deps huggingface_hub==0.12.0
+pip install --no-cache-dir --no-deps transformers==4.26.1
+pip install --no-cache-dir --no-deps sentence-transformers==2.2.2
+
+# Install remaining dependencies without upgrading the pinned packages
+echo "Installing remaining dependencies..."
+pip install --no-cache-dir --no-upgrade-strategy eager -r requirements.txt
 
 # Run the GPU diagnostic to check our setup
 echo "Running GPU diagnostic..."

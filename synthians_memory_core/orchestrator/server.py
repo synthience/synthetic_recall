@@ -4,6 +4,7 @@ import asyncio
 from typing import Dict, List, Any, Optional
 import time
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 # Import TensorFlow installer before importing other modules
@@ -98,19 +99,37 @@ async def health():
     status_msg = "OK" if orchestrator_instance else "INITIALIZING"
     detail = "CCE service is running" if orchestrator_instance else "Orchestrator not initialized"
     
-    # Calculate an estimated uptime if possible
-    uptime = 0
-    if orchestrator_instance and hasattr(orchestrator_instance, 'start_time'):
-        uptime = time.time() - orchestrator_instance.start_time
-    
-    return {
-        "status": status_msg,
-        "detail": detail,
-        "uptime": f"{uptime // 86400}d {(uptime % 86400) // 3600}h {(uptime % 3600) // 60}m" if uptime > 0 else "unknown",
-        "is_processing": getattr(orchestrator_instance, 'is_processing', False),
-        "current_variant": getattr(orchestrator_instance, 'current_variant', "unknown"),
-        "dev_mode": os.environ.get("CCE_DEV_MODE", "false").lower() == "true"
-    }
+    try:
+        # Calculate an estimated uptime if possible
+        uptime_seconds = 0.0 # Use float for consistency
+        if orchestrator_instance and hasattr(orchestrator_instance, 'start_time') and orchestrator_instance.start_time:
+             uptime_seconds = time.time() - orchestrator_instance.start_time
+
+        # Construct the data payload matching ServiceStatusData fields where possible
+        health_data = {
+            "status": status_msg, # "OK" or "INITIALIZING"
+            # "detail": detail, # 'detail' is not in ServiceStatusData, use 'error' if status is not ok?
+            "uptime": str(int(uptime_seconds)) + "s", # Return as string to match schema
+            "version": "CCE-1.0", # Placeholder version
+            "error": None if status_msg == "OK" else detail # Map detail to error field if status isn't OK
+        }
+
+        # Wrap the successful response
+        return {
+            "success": True,
+            "data": health_data
+        }
+    except Exception as e:
+        logger.error(f"CCE health check failed: {e}", exc_info=True)
+        # Wrap the error response
+        return JSONResponse(
+            status_code=503, # Service Unavailable
+            content={
+                "success": False,
+                "error": f"Health check failed: {str(e)}",
+                "data": {"status": "error", "uptime": "0s"} # Minimal data on error, with string uptime
+            }
+        )
 
 @app.get("/config")
 async def get_config():
@@ -288,6 +307,91 @@ async def get_recent_cce_responses(request: MetricsRequest = None):
             "metrics": [],
             "count": 0
         }
+
+@app.post("/dev/set_config_value")
+async def set_config_value(request: Dict[str, Any]):
+    """
+    Developer endpoint to modify config values at runtime for testing.
+    This endpoint is intended for testing and debugging only.
+    
+    Args:
+        request: A dictionary with 'key' and 'value' fields
+        
+    Returns:
+        JSON response with previous and new values
+    """
+    orch = get_orchestrator()
+    if not orch:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Orchestrator not initialized"}
+        )
+    
+    key = request.get("key")
+    value = request.get("value")
+    
+    if not key:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Missing 'key' field"}
+        )
+    
+    try:
+        # Get the previous value if possible
+        previous_value = None
+        
+        # First check if this is a memory configuration setting
+        if key.startswith("assembly_") and hasattr(orch.memory_client, "set_config_value"):
+            # Forward assembly configuration to Memory Core
+            try:
+                # Try to get previous value first
+                if hasattr(orch.memory_client, "get_config_value"):
+                    previous_value = await orch.memory_client.get_config_value(key)
+                
+                # Set the new value in Memory Core
+                result = await orch.memory_client.set_config_value(key, value)
+                logger.info(f"[CONFIG] Forwarded {key}={value} to Memory Core")
+                return {
+                    "success": True,
+                    "key": key,
+                    "previous_value": previous_value or result.get("previous_value"),
+                    "new_value": value,
+                    "forwarded": True
+                }
+            except Exception as e:
+                logger.warning(f"[CONFIG] Failed to forward {key}={value} to Memory Core: {e}")
+                # Continue with local config setting
+        
+        # Handle local configuration
+        if hasattr(orch.config, key):
+            previous_value = getattr(orch.config, key)
+            setattr(orch.config, key, value)
+        elif key in orch.config.__dict__:
+            previous_value = orch.config.__dict__[key]
+            orch.config.__dict__[key] = value
+        else:
+            # Add to config dict if it doesn't exist
+            orch.config.__dict__[key] = value
+        
+        # Log the configuration change
+        logger.info(f"[CONFIG] Changed {key} from {previous_value} to {value}")
+        
+        return {
+            "success": True,
+            "key": key,
+            "previous_value": previous_value,
+            "new_value": value
+        }
+        
+    except Exception as e:
+        logger.error(f"[CONFIG] Failed to set {key} to {value}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": f"Failed to set config value: {str(e)}",
+                "key": key
+            }
+        )
 
 # --- Startup and Shutdown Events ---
 

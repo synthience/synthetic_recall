@@ -6,7 +6,9 @@ import numpy as np
 import aiohttp
 import asyncio
 import json
+import time  # Add time module import
 from fastapi import FastAPI, HTTPException, Body, Request, status, Response
+from fastapi.responses import JSONResponse  # Add JSONResponse import
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Tuple, Literal
 import logging
@@ -54,6 +56,7 @@ neural_memory: Optional[NeuralMemoryModule] = None
 surprise_detector: Optional[SurpriseDetector] = None
 geometry_manager: Optional[GeometryManager] = None
 memory_core_url: Optional[str] = None # URL for potential outer loop callbacks
+startup_time: Optional[float] = None # Add startup time tracking
 
 # --- Pydantic Models ---
 
@@ -565,22 +568,49 @@ async def health_check():
     """Basic health check."""
     logger.info("Health check requested.")
     try:
-         tf_version = tf.__version__
-         # Perform a minimal TF computation
-         tensor_sum = tf.reduce_sum(tf.constant([1.0, 2.0])).numpy()
-         can_compute = abs(tensor_sum - 3.0) < 1e-6
-         status_msg = "ok" if can_compute else "error_tf_compute"
-    except Exception as e:
-         logger.error(f"TensorFlow health check failed: {e}", exc_info=True)
-         tf_version = "error"
-         status_msg = f"error_tf_init: {str(e)}"
+        tf_version = tf.__version__
+        # Perform a minimal TF computation
+        tensor_sum = tf.reduce_sum(tf.constant([1.0, 2.0])).numpy()
+        can_compute = abs(tensor_sum - 3.0) < 1e-6
+        status_msg = "ok" if can_compute else "error_tf_compute"
 
-    return {
-         "status": status_msg,
-         "tensorflow_version": tf_version,
-         "neural_memory_initialized": neural_memory is not None,
-         "timestamp": datetime.datetime.utcnow().isoformat() 
-     }
+        # Calculate uptime
+        current_uptime_seconds = 0
+        if startup_time:
+            current_uptime_seconds = time.time() - startup_time
+
+        # Construct the data payload
+        health_data = {
+            "status": status_msg,
+            "tensorflow_version": tf_version,
+            "neural_memory_initialized": neural_memory is not None,
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "uptime": str(int(current_uptime_seconds)) + "s", # Format as string to match schema
+            "version": "NM-1.0" # Placeholder version
+        }
+        # Wrap the successful response
+        return {
+            "success": True,
+            "data": health_data
+        }
+    except Exception as e:
+        logger.error(f"Neural Memory health check failed: {e}", exc_info=True)
+        tf_version = "error"
+        status_msg = f"error_tf_init: {str(e)}"
+        # Wrap the error response
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "success": False,
+                "error": f"Health check failed: {str(e)}",
+                "data": { # Minimal data on error
+                    "status": status_msg,
+                    "tensorflow_version": tf_version,
+                    "neural_memory_initialized": neural_memory is not None,
+                    "uptime": "0s" # Include uptime as string even on error
+                }
+            }
+        )
 
 # --- Introspection and Diagnostic Endpoints ---
 
@@ -780,12 +810,153 @@ async def get_config(request: Optional[ConfigRequest] = None):
         logger.error(f"Config endpoint failed: {e}\n{traceback.format_exc()}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Config error: {str(e)}")
 
+# --- Developer Diagnostic Endpoints ---
+@app.post("/dev/repair_vector_index")
+async def repair_vector_index():
+    """
+    Developer endpoint to repair vector index inconsistencies.
+    This endpoint is intended for testing and debugging only.
+    
+    Returns:
+        JSON response with repair status and diagnostics
+    """
+    try:
+        nm = get_neural_memory()
+        if not nm:
+            return JSONResponse(
+                status_code=500,
+                content={"error": "Neural Memory not initialized"}
+            )
+        
+        # Perform index consistency check
+        if hasattr(nm, "check_index_integrity"):
+            logger.info("Checking index integrity before repair attempt")
+            integrity_result = nm.check_index_integrity()
+            
+            # Log the integrity check result
+            logger.info(f"Index integrity check result: {integrity_result}")
+            
+            # If there are issues, attempt repair
+            if not integrity_result.get("is_consistent", False):
+                logger.warning("Vector index inconsistency detected, attempting repair")
+                
+                # Attempt to clear orphaned assembly entries
+                if hasattr(nm.vector_index, "id_to_index"):
+                    index_mapping = nm.vector_index.id_to_index
+                    orphaned_assemblies = []
+                    
+                    # Find assembly IDs in the index that don't exist in the tracking
+                    for mem_id in list(index_mapping.keys()):
+                        if mem_id.startswith("asm:") and mem_id not in nm.assemblies:
+                            orphaned_assemblies.append(mem_id)
+                    
+                    # Remove orphaned assemblies from the vector index
+                    for asm_id in orphaned_assemblies:
+                        logger.info(f"Removing orphaned assembly ID from vector index: {asm_id}")
+                        await nm.vector_index.remove_vector_async(asm_id)
+                
+                # Check integrity again after repair
+                new_integrity = nm.check_index_integrity()
+                
+                return {
+                    "success": True,
+                    "message": "Vector index repair completed",
+                    "before_repair": integrity_result,
+                    "after_repair": new_integrity,
+                    "orphaned_assemblies_removed": len(orphaned_assemblies) if 'orphaned_assemblies' in locals() else 0
+                }
+            else:
+                return {
+                    "success": True,
+                    "message": "Vector index is already consistent, no repair needed",
+                    "integrity": integrity_result
+                }
+        else:
+            return {
+                "success": False,
+                "message": "Neural Memory instance does not support index integrity checking"
+            }
+    except Exception as e:
+        logger.error(f"Error during vector index repair: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": f"Repair failed: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+        )
+
+# --- Developer Configuration Endpoint ---
+@app.post("/dev/set_config_value")
+async def set_config_value(request: dict = Body(...)):
+    """
+    Developer endpoint to modify config values at runtime for testing.
+    This endpoint is intended for testing and debugging only.
+    
+    Args:
+        request: A JSON object with 'key' and 'value' fields
+        
+    Returns:
+        JSON response with previous and new values
+    """
+    nm = get_neural_memory()
+    if not nm:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Neural Memory not initialized"}
+        )
+    
+    key = request.get("key")
+    value = request.get("value")
+    
+    if not key:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Missing 'key' field"}
+        )
+    
+    try:
+        # Get the previous value if possible
+        previous_value = None
+        if hasattr(nm.config, key):
+            previous_value = getattr(nm.config, key)
+        elif key in nm.config.__dict__:
+            previous_value = nm.config.__dict__[key]
+            
+        # Set the new value
+        if hasattr(nm.config, key):
+            setattr(nm.config, key, value)
+        else:
+            nm.config.__dict__[key] = value
+            
+        # Log the configuration change
+        logger.info(f"[CONFIG] Changed {key} from {previous_value} to {value}")
+        
+        return {
+            "success": True,
+            "key": key,
+            "previous_value": previous_value,
+            "new_value": value
+        }
+        
+    except Exception as e:
+        logger.error(f"[CONFIG] Failed to set {key} to {value}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": f"Failed to set config value: {str(e)}",
+                "key": key
+            }
+        )
+
 # --- App startup/shutdown ---
 @app.on_event("startup")
 async def startup_event():
+    global startup_time # Access global startup_time
+    startup_time = time.time() # Record startup time
     global neural_memory, memory_core_url, surprise_detector, geometry_manager
     logger.info("Synthians Neural Memory API starting up...")
-
+    
     # --- ADD AUTO-INITIALIZATION LOGIC ---
     try:
         logger.info("Attempting auto-initialization of Neural Memory module...")

@@ -1137,7 +1137,7 @@ class ContextCascadeEngine:
 
 
         except Exception as e:
-            logger.error(f"Error during variant pre-update ({self.active_variant_type.value}): {e}", exc_info=True)
+            logger.error(f"Error during variant pre-update ({self.active_variant_type.value}): {e}")
             return {"success": False, "error": str(e)}
 
         return {"success": True, **variant_results} # Default success if no relevant variant
@@ -1466,7 +1466,7 @@ class ContextCascadeEngine:
             step_context["loss"] = update_resp["loss"]
         if "grad_norm" in update_resp:
             step_context["grad_norm"] = update_resp["grad_norm"]
-             # Update projections if returned (they should match if not MAL)
+            # Update projections if returned (they should match if not MAL)
             if update_resp.get("key_projection"): step_context["k_t"] = np.array(update_resp["key_projection"], dtype=np.float32)
             if update_resp.get("value_projection"): step_context["v_t"] = np.array(update_resp["value_projection"], dtype=np.float32)
             response_errors = {}
@@ -1713,15 +1713,17 @@ class ContextCascadeEngine:
         except Exception as e:
             logger.warning(f"Failed to persist variant switch log: {e}")
 
-    async def get_recent_metrics(self, limit: int = 20) -> Dict[str, Any]:
-        """Retrieve recent CCE responses metrics for diagnostics."""
-        # Ensure limit is within reasonable bounds
-        limit = max(1, min(limit, self.recent_responses_buffer.maxlen))
-        
-        # Get items from the deque
-        recent_responses = list(self.recent_responses_buffer)[-limit:]
 
-        # --- Start Aggregation Logic ---
+    async def get_recent_metrics(self, limit: int = 20) -> Dict[str, Any]:
+        """Retrieve and aggregate recent CCE response metrics."""
+        if not hasattr(self, 'recent_responses_buffer'):
+             return {"error": "Recent responses buffer not initialized."}
+
+        recent_responses = list(self.recent_responses_buffer)
+        limit = min(limit, len(recent_responses))
+        recent_responses = recent_responses[-limit:] # Get the most recent 'limit' items
+
+        # --- Aggregation Logic (similar to previous version) ---
         variant_counts = {}
         status_counts = {}
         llm_advice_count = 0
@@ -1729,8 +1731,8 @@ class ContextCascadeEngine:
 
         for resp in recent_responses:
             # Variant Counts
-            variant_type = resp.get("variant_output", {}).get("variant_type", "UNKNOWN")
-            variant_counts[variant_type] = variant_counts.get(variant_type, 0) + 1
+            variant = resp.get("variant_type", "UNKNOWN")
+            variant_counts[variant] = variant_counts.get(variant, 0) + 1
 
             # Status Counts
             status = resp.get("status", "UNKNOWN")
@@ -1772,50 +1774,7 @@ class ContextCascadeEngine:
             "recent_responses": recent_responses  # Return the actual recent responses
         }
 
-    async def _switch_variant_internal(self, new_variant_type: TitansVariantType, reason: str) -> bool:
-        """Switches to a new Titans variant and reinitializes the variant processor.
-        
-        This method allows dynamic switching between TITANS variants during runtime,
-        which can be useful for experimentation and testing. It flushes existing 
-        context to prevent cross-variant contamination, resets the variant processor,
-        and provides an audit trail of variant switches.
-        
-        Note: In multi-worker CCE deployments, this method would need additional
-        synchronization mechanisms beyond the existing processing_lock check.
-        Currently, it's designed for single-worker CCE instances only.
-        
-        Args:
-            new_variant_type: The new variant type to switch to
-            reason: Human-readable reason for the switch
-            
-        Returns:
-            bool: True if the switch was successful, False otherwise.
-        """
-        if new_variant_type == self.active_variant_type:
-            logger.debug(f"Already using variant {new_variant_type.value}, no switch needed")
-            return False
-            
-        old_variant = self.active_variant_type.value
-        logger.info(f"Switching Titans variant: {old_variant} → {new_variant_type.value} (Reason: {reason})")
-        
-        try:
-            # Create the new variant processor
-            self.variant_processor = create_titans_variant(new_variant_type)
-            self.active_variant_type = new_variant_type
-            
-            # Reset sequence context - this is necessary because different variants have
-            # different state expectations and cannot use each other's sequence context
-            self.sequence_context = []
-            self.sequence_context_manager.clear()
-            logger.info(f"Sequence context cleared due to variant switch")
-            
-            # Log the change
-            self._log_variant_switch_metrics(old_variant, new_variant_type.value, reason)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to switch variant to {new_variant_type.value}: {str(e)}")
-            return False
-            
+
     def _log_variant_switch_metrics(self, old_variant: str, new_variant: str, reason: str) -> None:
         """Log metrics about variant switching for monitoring."""
         if not self.metrics_enabled:
@@ -1833,3 +1792,8 @@ class ContextCascadeEngine:
             )
         except Exception as e:
             logger.warning(f"Failed to log variant switch metrics: {str(e)}")
+
+    # Duplicate _switch_variant_internal method implementation removed and replaced with a comment
+    # See the correct implementation at lines 1581-1685
+    # async def _switch_variant_internal(self, new_variant_type: TitansVariantType, reason: str) -> bool:
+    #     ...

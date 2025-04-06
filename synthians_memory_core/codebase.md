@@ -647,6 +647,9 @@ if __name__ == "__main__":
 # api\diagnostics_routes.py
 
 ```py
+from fastapi import Depends, Request, HTTPException
+from typing import Any, Dict
+
 """FastAPI routes for the diagnostics features of Memory Core Phase 5.9.
 
 These routes expose diagnostics information such as merge logs and runtime configuration.
@@ -762,6 +765,31 @@ async def get_merge_log(
             "error": str(e)
         }
 
+@router.post("/trigger_retry_loop", status_code=200)
+async def trigger_retry_loop_endpoint(
+    request: Request,
+    explainability_enabled: bool = Depends(check_explainability_enabled) # Ensure feature is enabled
+):
+    """Manually triggers the processing of the pending vector update queue."""
+    # Access memory_core from app state directly
+    if not hasattr(request.app.state, 'memory_core') or request.app.state.memory_core is None:
+        raise HTTPException(status_code=503, detail="Memory core not available")
+    memory_core = request.app.state.memory_core
+
+    if not hasattr(memory_core, 'force_process_pending_updates'):
+         raise HTTPException(status_code=501, detail="Retry loop trigger functionality not implemented in core.")
+
+    try:
+        results = await memory_core.force_process_pending_updates()
+        return {
+            "success": True,
+            "message": f"Triggered processing of pending updates.",
+            "details": results
+        }
+    except Exception as e:
+        logger.error(f"Error during forced processing of pending updates: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal error during forced processing: {str(e)}")
+
 @router.get("/runtime/config/{service_name}", response_model=RuntimeConfigResponse)
 async def get_runtime_config(
     request: Request,
@@ -824,6 +852,29 @@ async def get_runtime_config(
             "retrieval_timestamp": datetime.now(timezone.utc).isoformat(),
             "error": str(e)
         }
+
+
+
+@router.post("/trigger_retry_loop", status_code=200)
+async def trigger_retry_loop_endpoint(
+    request: Request,
+    # memory_core: SynthiansMemoryCore = Depends(get_memory_core) # Use dependency injection if available
+):
+    """Manually triggers the processing of the pending vector update queue."""
+    # Access memory_core from app state directly as Depends might be tricky with test client setup
+    if not hasattr(request.app.state, 'memory_core') or request.app.state.memory_core is None:
+        raise HTTPException(status_code=503, detail="Memory core not available")
+    memory_core = request.app.state.memory_core
+
+    if not hasattr(memory_core, 'force_process_pending_updates'):
+         raise HTTPException(status_code=501, detail="Retry loop trigger functionality not implemented in core.")
+
+    results = await memory_core.force_process_pending_updates()
+    return {
+        "success": True,
+        "message": f"Triggered processing of pending updates.",
+        "details": results
+    }
 
 ```
 
@@ -1413,19 +1464,34 @@ async def health_check():
         # Use _memories instead of memories to match the updated attribute name
         memory_count = len(app.state.memory_core._memories)
         assembly_count = len(app.state.memory_core.assemblies)
+        # Wrap the successful response according to ServiceStatusResponse schema
         return {
-            "status": "healthy",
-            "uptime_seconds": uptime,
-            "memory_count": memory_count,
-            "assembly_count": assembly_count,
-            "version": "1.0.0"  # Add version information
+            "success": True,
+            "data": {
+                "status": "healthy",
+                "uptime_seconds": uptime,
+                "memory_count": memory_count,
+                "assembly_count": assembly_count,
+                "version": "1.0.0"
+            }
         }
     except Exception as e:
         logger.error("health_check", f"Health check failed: {str(e)}")
-        return {
-            "status": "unhealthy",
-            "error": str(e)
-        }
+        # Wrap the error response according to ServiceStatusResponse schema
+        # Option 1: Return success:false with error message
+        return JSONResponse(
+            status_code=503, # Service Unavailable
+            content={
+                "success": False,
+                "error": f"Health check failed: {str(e)}",
+                "data": { # Include minimal data even on error if possible
+                    "status": "unhealthy",
+                    "error": str(e)
+                }
+            }
+        )
+        # Option 2: Raise HTTPException (FastAPI standard)
+        # raise HTTPException(status_code=503, detail={"success": False, "error": str(e), "data": {"status": "unhealthy"}})
 
 @app.get("/stats")
 async def get_stats():
@@ -1531,7 +1597,17 @@ async def get_stats():
                 index_status = {"status": "unknown", "details": "No index health check method available"}
         except Exception as e:
             logger.error(f"Error checking index health: {str(e)}")
-            index_status = {"status": "error", "details": str(e)}
+            index_status = {"status": "error", "details": str(e), "is_consistent": False, "diagnostics": {"error": str(e)}} # Ensure keys exist even on error
+
+        # --- START ADDED CODE (Plan 3.C) ---
+        # Check if 'is_consistent' exists and is False, or fallback to 'is_healthy'
+        is_consistent = index_status.get('is_consistent')
+        if is_consistent is None: # If 'is_consistent' key doesn't exist, try 'is_healthy'
+             is_consistent = index_status.get('is_healthy', True) # Default to True if neither exists
+
+        if not is_consistent:
+             logger.error("Index integrity check failed", extra={"details": index_status.get("diagnostics", {})}) # Log the details dict
+        # --- END ADDED CODE ---
         
         # Get information about activations (Phase 5.9)
         activation_stats = {}
@@ -1588,10 +1664,11 @@ async def get_stats():
                 "memory_count": index_status.get("indexed_memory_count", 0),
                 "assembly_count": index_status.get("indexed_assembly_count", 0),
                 "embedding_dimension": memory_core.config.get("embedding_dim", 0),
-                "is_healthy": index_status.get("is_healthy", False),
+                "is_healthy": is_consistent, # Use the determined consistency status
                 "drift_count": index_status.get("drift_count", 0),
                 "drift_percentage": index_status.get("drift_percentage", 0),
-                "last_check_timestamp": index_status.get("last_check_timestamp")
+                "last_check_timestamp": index_status.get("last_check_timestamp"),
+                "integrity_details": index_status.get("diagnostics", {}) # Add details to response (Plan 3.C)
             },
             "assembly_stats": {
                 "total_count": assembly_count,
@@ -2381,82 +2458,72 @@ async def check_index_integrity():
         return {"success": False, "error": str(e)}
 
 @app.post("/repair_index", response_model=Dict[str, Any])
-async def repair_index():
+async def repair_index_endpoint(request: Request): # Renamed and accept Request
     """
-    Repair the FAISS vector index by synchronizing with ID mappings.
-    
-    This endpoint attempts to restore consistency between the FAISS index and its ID mappings
-    by rebuilding the index if necessary. Part of Phase 5.8 stability improvements.
-    
-    Enhanced to support full re-indexing from persistence to recover from severe drift or corruption.
-    This rebuilds the index by loading all memories and assemblies from storage and re-adding them.
-    
+    Manually trigger the vector index repair process.
+
+    This endpoint allows manual triggering of the index repair mechanism.
+    It's intended for debugging and maintenance purposes.
+
+    Request Body:
+        repair_type (str, optional): The type of repair to perform ('auto', 'recreate_mapping', 'rebuild_from_persistence', 'force_rebuild').
+                                     Defaults to "auto".
+
     Returns:
-        Dict containing repair results:
-        - success: Whether the repair was successful
-        - repaired: Whether any repairs were actually made
-        - before_stats: Index statistics before repair
-        - after_stats: Index statistics after repair
-        - reindexed_count: Number of items successfully re-indexed (if applicable)
-        - error: Error message if repair failed
+        Dict[str, Any]: Statistics about the repair operation, including success status.
     """
     try:
-        logger.info("[VECTOR_TRACE] Starting FAISS index repair procedure with re-indexing")
-        
-        # Get stats before repair
-        before_stats = app.state.memory_core.vector_index.get_stats()
-        
-        # Perform repair operation - provide persistence and geometry_manager
-        persistence = getattr(app.state.memory_core, "persistence", None)
-        geometry_manager = getattr(app.state.memory_core, "geometry_manager", None)
-        
-        # Detailed repair log
-        repair_result = None
-        
-        if persistence and geometry_manager:
-            logger.info("[VECTOR_TRACE] Persistence and GeometryManager available, performing full re-indexing repair")
-            # Call repair_index with parameters
-            repair_result = await app.state.memory_core.vector_index.repair_index(
-                persistence=persistence,
-                geometry_manager=geometry_manager
-            )
-        else:
-            logger.warning("[VECTOR_TRACE] Persistence or GeometryManager not available, falling back to basic repair")
-            # Fall back to basic repair without re-indexing
-            repair_result = app.state.memory_core.vector_index.repair_index()
-        
-        # Get stats after repair
-        after_stats = app.state.memory_core.vector_index.get_stats()
-        
-        # Check if the repair improved the situation
-        improved = False
-        if after_stats.get("drift_count", 999) < before_stats.get("drift_count", 1000):
-            improved = True
-            
-        logger.info(f"[VECTOR_TRACE] Index repair complete. Repaired: {repair_result is not None}")
-        logger.info(f"[VECTOR_TRACE] Before: {before_stats}")
-        logger.info(f"[VECTOR_TRACE] After: {after_stats}")
-        
-        # Enhanced response with additional repair details
-        response = {
-            "success": True,
-            "repaired": repair_result is not None and repair_result.get("success", False),
-            "improved": improved,
-            "before_stats": before_stats,
-            "after_stats": after_stats
-        }
-        
-        # Add repair details if available
-        if isinstance(repair_result, dict):
-            response.update({
-                "reindexed_count": repair_result.get("reindexed_count", 0),
-                "repair_details": repair_result
-            })
-        
-        return response
+        # Get repair_type from request body
+        try:
+            body = await request.json()
+            repair_type = body.get("repair_type", "auto")
+        except json.JSONDecodeError:
+             raise HTTPException(status_code=400, detail="Invalid JSON body")
+        except Exception as json_err: # Catch other potential errors during body parsing
+             logger.error(f"Error parsing request body for /repair_index: {json_err}", exc_info=True)
+             raise HTTPException(status_code=400, detail=f"Invalid request body: {json_err}")
+
+        logger.info(f"Repair index request received with repair_type: {repair_type}")
+
+        # Access memory core from app state (using request.app.state)
+        if not hasattr(request.app.state, 'memory_core') or request.app.state.memory_core is None:
+             raise HTTPException(status_code=503, detail="Memory core not initialized or unavailable")
+
+        memory_core = request.app.state.memory_core
+
+        # Ensure vector_index, persistence, and geometry_manager exist
+        if not hasattr(memory_core, 'vector_index') or memory_core.vector_index is None:
+             raise HTTPException(status_code=503, detail="Vector index component not available")
+        if not hasattr(memory_core, 'persistence') or memory_core.persistence is None:
+             raise HTTPException(status_code=503, detail="Persistence component not available")
+        if not hasattr(memory_core, 'geometry_manager') or memory_core.geometry_manager is None:
+             raise HTTPException(status_code=503, detail="Geometry manager component not available")
+
+        # --- PASS DEPENDENCIES ---
+        # Call the internal async method directly, passing dependencies
+        if not hasattr(memory_core.vector_index, '_repair_index_async'):
+             raise HTTPException(status_code=500, detail="Internal repair method '_repair_index_async' not found")
+
+        result_stats = await memory_core.vector_index._repair_index_async(
+            persistence=memory_core.persistence,
+            geometry_manager=memory_core.geometry_manager,
+            repair_mode=repair_type
+        )
+        # ---
+
+        # Determine status code based on success
+        status_code = 200 if result_stats.get("success") else 500
+
+        # Return the statistics from the repair operation
+        return JSONResponse(content=result_stats, status_code=status_code)
+
+    except HTTPException as http_exc:
+        # Re-raise HTTP exceptions directly
+        raise http_exc
     except Exception as e:
-        logger.error(f"[VECTOR_TRACE] Error repairing index: {str(e)}", exc_info=True)
-        return {"success": False, "error": str(e)}
+        logger.error(f"Error repairing vector index via API: {str(e)}", exc_info=True)
+        # Return a generic 500 error for other exceptions
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 @app.post("/repair_vector_index_drift", response_model=Dict[str, Any])
 async def repair_vector_index_drift():
@@ -2529,50 +2596,6 @@ async def repair_vector_index_drift_get():
     except Exception as e:
         logger.error(f"Error during vector index repair: {str(e)}")
         return {"success": False, "error": str(e)}
-
-# --- Configuration Endpoints ---
-
-@app.get("/config/runtime/{service_name}")
-async def get_runtime_config(service_name: str):
-    """Get runtime configuration for services.
-    
-    Returns a sanitized subset of configuration for the specified service:
-    - memory-core: Memory Core configuration
-    - neural-memory: Neural Memory configuration  
-    - cce: Context Cascade Engine configuration
-    
-    This endpoint is used by the diagnostic dashboard to display configuration information.
-    """
-    logger.info(f"Retrieving runtime configuration for service: {service_name}")
-    
-    # Basic validation
-    valid_services = ["memory-core", "neural-memory", "cce"]
-    if service_name not in valid_services:
-        raise HTTPException(status_code=404, detail=f"Invalid service: {service_name}. Must be one of {valid_services}")
-    
-    # Only return Memory Core config directly from this service
-    if service_name == "memory-core":
-        # Return a sanitized subset of Memory Core configuration
-        config = {
-            "ENABLE_ASSEMBLIES": getattr(app.state.memory_core, "enable_assemblies", True),
-            "ENABLE_ASSEMBLY_PRUNING": getattr(app.state.memory_core, "enable_assembly_pruning", True),
-            "ENABLE_ASSEMBLY_MERGING": getattr(app.state.memory_core, "enable_assembly_merging", True),
-            "ENABLE_EXPLAINABILITY": getattr(app.state.memory_core, "enable_explainability", True),
-            "VECTOR_INDEX_TYPE": getattr(app.state.memory_core, "vector_index_type", "faiss"),
-            "ASSEMBLY_MERGE_THRESHOLD": getattr(app.state.memory_core, "assembly_merge_threshold", 0.8),
-            "VECTOR_DIM": getattr(app.state.memory_core, "vector_dim", 384),
-            "MAX_ASSEMBLY_SIZE": getattr(app.state.memory_core, "max_assembly_size", 50),
-            "DATA_DIR": getattr(app.state.memory_core, "data_dir", "./data"),
-            "VERSION": getattr(app.state.memory_core, "version", "5.9.1")
-        }
-        return config
-    else:
-        # For other services, we'd need to proxy the request
-        # This would typically be handled by the dashboard proxy
-        raise HTTPException(
-            status_code=501, 
-            detail=f"Configuration for {service_name} not available from this endpoint. Use the dashboard proxy instead."
-        )
 
 # --- Test Endpoints (Disabled by default) ---
 
@@ -31374,7 +31397,7 @@ class ContextCascadeEngine:
 
 
         except Exception as e:
-            logger.error(f"Error during variant pre-update ({self.active_variant_type.value}): {e}", exc_info=True)
+            logger.error(f"Error during variant pre-update ({self.active_variant_type.value}): {e}")
             return {"success": False, "error": str(e)}
 
         return {"success": True, **variant_results} # Default success if no relevant variant
@@ -31703,7 +31726,7 @@ class ContextCascadeEngine:
             step_context["loss"] = update_resp["loss"]
         if "grad_norm" in update_resp:
             step_context["grad_norm"] = update_resp["grad_norm"]
-             # Update projections if returned (they should match if not MAL)
+            # Update projections if returned (they should match if not MAL)
             if update_resp.get("key_projection"): step_context["k_t"] = np.array(update_resp["key_projection"], dtype=np.float32)
             if update_resp.get("value_projection"): step_context["v_t"] = np.array(update_resp["value_projection"], dtype=np.float32)
             response_errors = {}
@@ -31950,15 +31973,17 @@ class ContextCascadeEngine:
         except Exception as e:
             logger.warning(f"Failed to persist variant switch log: {e}")
 
-    async def get_recent_metrics(self, limit: int = 20) -> Dict[str, Any]:
-        """Retrieve recent CCE responses metrics for diagnostics."""
-        # Ensure limit is within reasonable bounds
-        limit = max(1, min(limit, self.recent_responses_buffer.maxlen))
-        
-        # Get items from the deque
-        recent_responses = list(self.recent_responses_buffer)[-limit:]
 
-        # --- Start Aggregation Logic ---
+    async def get_recent_metrics(self, limit: int = 20) -> Dict[str, Any]:
+        """Retrieve and aggregate recent CCE response metrics."""
+        if not hasattr(self, 'recent_responses_buffer'):
+             return {"error": "Recent responses buffer not initialized."}
+
+        recent_responses = list(self.recent_responses_buffer)
+        limit = min(limit, len(recent_responses))
+        recent_responses = recent_responses[-limit:] # Get the most recent 'limit' items
+
+        # --- Aggregation Logic (similar to previous version) ---
         variant_counts = {}
         status_counts = {}
         llm_advice_count = 0
@@ -31966,8 +31991,8 @@ class ContextCascadeEngine:
 
         for resp in recent_responses:
             # Variant Counts
-            variant_type = resp.get("variant_output", {}).get("variant_type", "UNKNOWN")
-            variant_counts[variant_type] = variant_counts.get(variant_type, 0) + 1
+            variant = resp.get("variant_type", "UNKNOWN")
+            variant_counts[variant] = variant_counts.get(variant, 0) + 1
 
             # Status Counts
             status = resp.get("status", "UNKNOWN")
@@ -32009,50 +32034,7 @@ class ContextCascadeEngine:
             "recent_responses": recent_responses  # Return the actual recent responses
         }
 
-    async def _switch_variant_internal(self, new_variant_type: TitansVariantType, reason: str) -> bool:
-        """Switches to a new Titans variant and reinitializes the variant processor.
-        
-        This method allows dynamic switching between TITANS variants during runtime,
-        which can be useful for experimentation and testing. It flushes existing 
-        context to prevent cross-variant contamination, resets the variant processor,
-        and provides an audit trail of variant switches.
-        
-        Note: In multi-worker CCE deployments, this method would need additional
-        synchronization mechanisms beyond the existing processing_lock check.
-        Currently, it's designed for single-worker CCE instances only.
-        
-        Args:
-            new_variant_type: The new variant type to switch to
-            reason: Human-readable reason for the switch
-            
-        Returns:
-            bool: True if the switch was successful, False otherwise.
-        """
-        if new_variant_type == self.active_variant_type:
-            logger.debug(f"Already using variant {new_variant_type.value}, no switch needed")
-            return False
-            
-        old_variant = self.active_variant_type.value
-        logger.info(f"Switching Titans variant: {old_variant} → {new_variant_type.value} (Reason: {reason})")
-        
-        try:
-            # Create the new variant processor
-            self.variant_processor = create_titans_variant(new_variant_type)
-            self.active_variant_type = new_variant_type
-            
-            # Reset sequence context - this is necessary because different variants have
-            # different state expectations and cannot use each other's sequence context
-            self.sequence_context = []
-            self.sequence_context_manager.clear()
-            logger.info(f"Sequence context cleared due to variant switch")
-            
-            # Log the change
-            self._log_variant_switch_metrics(old_variant, new_variant_type.value, reason)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to switch variant to {new_variant_type.value}: {str(e)}")
-            return False
-            
+
     def _log_variant_switch_metrics(self, old_variant: str, new_variant: str, reason: str) -> None:
         """Log metrics about variant switching for monitoring."""
         if not self.metrics_enabled:
@@ -32070,6 +32052,11 @@ class ContextCascadeEngine:
             )
         except Exception as e:
             logger.warning(f"Failed to log variant switch metrics: {str(e)}")
+
+    # Duplicate _switch_variant_internal method implementation removed and replaced with a comment
+    # See the correct implementation at lines 1581-1685
+    # async def _switch_variant_internal(self, new_variant_type: TitansVariantType, reason: str) -> bool:
+    #     ...
 
 ```
 
@@ -32935,6 +32922,7 @@ import asyncio
 from typing import Dict, List, Any, Optional
 import time
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 # Import TensorFlow installer before importing other modules
@@ -33029,19 +33017,37 @@ async def health():
     status_msg = "OK" if orchestrator_instance else "INITIALIZING"
     detail = "CCE service is running" if orchestrator_instance else "Orchestrator not initialized"
     
-    # Calculate an estimated uptime if possible
-    uptime = 0
-    if orchestrator_instance and hasattr(orchestrator_instance, 'start_time'):
-        uptime = time.time() - orchestrator_instance.start_time
-    
-    return {
-        "status": status_msg,
-        "detail": detail,
-        "uptime": f"{uptime // 86400}d {(uptime % 86400) // 3600}h {(uptime % 3600) // 60}m" if uptime > 0 else "unknown",
-        "is_processing": getattr(orchestrator_instance, 'is_processing', False),
-        "current_variant": getattr(orchestrator_instance, 'current_variant', "unknown"),
-        "dev_mode": os.environ.get("CCE_DEV_MODE", "false").lower() == "true"
-    }
+    try:
+        # Calculate an estimated uptime if possible
+        uptime_seconds = 0.0 # Use float for consistency
+        if orchestrator_instance and hasattr(orchestrator_instance, 'start_time') and orchestrator_instance.start_time:
+             uptime_seconds = time.time() - orchestrator_instance.start_time
+
+        # Construct the data payload matching ServiceStatusData fields where possible
+        health_data = {
+            "status": status_msg, # "OK" or "INITIALIZING"
+            # "detail": detail, # 'detail' is not in ServiceStatusData, use 'error' if status is not ok?
+            "uptime": str(int(uptime_seconds)) + "s", # Return as string to match schema
+            "version": "CCE-1.0", # Placeholder version
+            "error": None if status_msg == "OK" else detail # Map detail to error field if status isn't OK
+        }
+
+        # Wrap the successful response
+        return {
+            "success": True,
+            "data": health_data
+        }
+    except Exception as e:
+        logger.error(f"CCE health check failed: {e}", exc_info=True)
+        # Wrap the error response
+        return JSONResponse(
+            status_code=503, # Service Unavailable
+            content={
+                "success": False,
+                "error": f"Health check failed: {str(e)}",
+                "data": {"status": "error", "uptime": "0s"} # Minimal data on error, with string uptime
+            }
+        )
 
 @app.get("/config")
 async def get_config():
@@ -33219,6 +33225,91 @@ async def get_recent_cce_responses(request: MetricsRequest = None):
             "metrics": [],
             "count": 0
         }
+
+@app.post("/dev/set_config_value")
+async def set_config_value(request: Dict[str, Any]):
+    """
+    Developer endpoint to modify config values at runtime for testing.
+    This endpoint is intended for testing and debugging only.
+    
+    Args:
+        request: A dictionary with 'key' and 'value' fields
+        
+    Returns:
+        JSON response with previous and new values
+    """
+    orch = get_orchestrator()
+    if not orch:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Orchestrator not initialized"}
+        )
+    
+    key = request.get("key")
+    value = request.get("value")
+    
+    if not key:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Missing 'key' field"}
+        )
+    
+    try:
+        # Get the previous value if possible
+        previous_value = None
+        
+        # First check if this is a memory configuration setting
+        if key.startswith("assembly_") and hasattr(orch.memory_client, "set_config_value"):
+            # Forward assembly configuration to Memory Core
+            try:
+                # Try to get previous value first
+                if hasattr(orch.memory_client, "get_config_value"):
+                    previous_value = await orch.memory_client.get_config_value(key)
+                
+                # Set the new value in Memory Core
+                result = await orch.memory_client.set_config_value(key, value)
+                logger.info(f"[CONFIG] Forwarded {key}={value} to Memory Core")
+                return {
+                    "success": True,
+                    "key": key,
+                    "previous_value": previous_value or result.get("previous_value"),
+                    "new_value": value,
+                    "forwarded": True
+                }
+            except Exception as e:
+                logger.warning(f"[CONFIG] Failed to forward {key}={value} to Memory Core: {e}")
+                # Continue with local config setting
+        
+        # Handle local configuration
+        if hasattr(orch.config, key):
+            previous_value = getattr(orch.config, key)
+            setattr(orch.config, key, value)
+        elif key in orch.config.__dict__:
+            previous_value = orch.config.__dict__[key]
+            orch.config.__dict__[key] = value
+        else:
+            # Add to config dict if it doesn't exist
+            orch.config.__dict__[key] = value
+        
+        # Log the configuration change
+        logger.info(f"[CONFIG] Changed {key} from {previous_value} to {value}")
+        
+        return {
+            "success": True,
+            "key": key,
+            "previous_value": previous_value,
+            "new_value": value
+        }
+        
+    except Exception as e:
+        logger.error(f"[CONFIG] Failed to set {key} to {value}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": f"Failed to set config value: {str(e)}",
+                "key": key
+            }
+        )
 
 # --- Startup and Shutdown Events ---
 
@@ -39220,6 +39311,7 @@ import { ServiceStatus } from "@shared/schema";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { ServiceStatus as ServiceStatusComponent } from "../layout/ServiceStatus";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 interface OverviewCardProps {
   title: string;
@@ -39227,9 +39319,11 @@ interface OverviewCardProps {
   service: ServiceStatus | null;
   metrics: Record<string, string | number> | null;
   isLoading: boolean;
+  isError?: boolean;
+  error?: any;
 }
 
-export function OverviewCard({ title, icon, service, metrics, isLoading }: OverviewCardProps) {
+export function OverviewCard({ title, icon, service, metrics, isLoading, isError = false, error }: OverviewCardProps) {
   return (
     <Card className="overflow-hidden">
       <CardHeader className="px-4 py-3 bg-muted border-b border-border flex justify-between items-center">
@@ -39254,6 +39348,13 @@ export function OverviewCard({ title, icon, service, metrics, isLoading }: Overv
             <Skeleton className="h-24" />
             <Skeleton className="h-24" />
           </div>
+        ) : isError ? (
+          <Alert variant="destructive" className="mb-4">
+            <AlertTitle>Failed to load data</AlertTitle>
+            <AlertDescription>
+              {error?.message || "There was an error fetching data for this service."}
+            </AlertDescription>
+          </Alert>
         ) : metrics ? (
           <div className="grid grid-cols-2 gap-4 mb-4">
             {Object.entries(metrics).map(([key, value], index) => (
@@ -39266,10 +39367,9 @@ export function OverviewCard({ title, icon, service, metrics, isLoading }: Overv
         ) : (
           <div className="p-4 text-center text-sm text-gray-400">
             <i className="fas fa-exclamation-circle mr-2"></i>
-            No metrics available
+            No metrics available for this service
           </div>
         )}
-        
         {service && (
           <div className="text-xs text-gray-400 flex justify-between">
             {service.uptime && <span>Uptime: {service.uptime}</span>}
@@ -43094,9 +43194,10 @@ import { cn } from '@/lib/utils';
 interface RefreshButtonProps {
   onClick: () => void;
   className?: string;
+  isLoading?: boolean;
 }
 
-export function RefreshButton({ onClick, className }: RefreshButtonProps) {
+export function RefreshButton({ onClick, className, isLoading = false }: RefreshButtonProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const handleRefresh = () => {
@@ -43109,17 +43210,20 @@ export function RefreshButton({ onClick, className }: RefreshButtonProps) {
     }, 1000);
   };
 
+  // Determine if the button should be spinning/disabled
+  const isSpinning = isRefreshing || isLoading;
+
   return (
     <Button
       variant="ghost"
       size="icon"
       onClick={handleRefresh}
       className={cn(className)}
-      disabled={isRefreshing}
+      disabled={isSpinning}
     >
       <i className={cn(
         "fas fa-sync-alt",
-        isRefreshing && "animate-spin"
+        isSpinning && "animate-spin"
       )}></i>
     </Button>
   );
@@ -45632,12 +45736,20 @@ export const useRuntimeConfig = (serviceName: string | null) => {
   });
 };
 
-export const verifyMemoryCoreIndex = async () => {
-  return api.post('/memory-core/admin/verify_index');
+export const verifyMemoryCoreIndex = async () => { // Renamed back to original name to fix import error
+  // Correct method and path
+  return api.get('/memory-core/check_index_integrity');
 };
 
 export const triggerMemoryCoreRetryLoop = async () => {
-  return api.post('/memory-core/admin/trigger_retry_loop');
+  // Correct method and path (uses the NEWLY implemented endpoint)
+  return api.post('/memory-core/diagnostics/trigger_retry_loop');
+};
+
+// Add missing function from plan
+export const repairMemoryCoreIndex = async (repairType: string = 'auto') => {
+  // Correct method and path
+  return api.post('/memory-core/repair_index', { repair_type: repairType });
 };
 
 export const initializeNeuralMemory = async () => {
@@ -45864,6 +45976,41 @@ export function formatTimeAgo(dateString: string | null | undefined): string {
     console.error('Error formatting date:', dateString, error);
     return 'Invalid date';
   }
+}
+
+
+/**
+ * Format a duration in seconds into a human-readable string (e.g., 1h 2m 3s).
+ */
+export function formatDuration(totalSeconds: number | null | undefined): string {
+  if (totalSeconds === null || totalSeconds === undefined || totalSeconds < 0) {
+    return 'Unknown';
+  }
+
+  if (totalSeconds < 1) {
+    return '< 1s';
+  }
+
+  const days = Math.floor(totalSeconds / (3600 * 24));
+  const hours = Math.floor((totalSeconds % (3600 * 24)) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+
+  const parts: string[] = [];
+  if (days > 0) {
+    parts.push(`${days}d`);
+  }
+  if (hours > 0) {
+    parts.push(`${hours}h`);
+  }
+  if (minutes > 0) {
+    parts.push(`${minutes}m`);
+  }
+  if (seconds > 0 || parts.length === 0) { // Always show seconds if no other parts or if non-zero
+    parts.push(`${seconds}s`);
+  }
+
+  return parts.join(' ');
 }
 
 ```
@@ -46970,19 +47117,22 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { RefreshButton } from "@/components/ui/RefreshButton";
 import { Link } from "wouter";
 import { usePollingStore } from "@/lib/store";
+import { useFeatures } from "@/contexts/FeaturesContext";
 
 export default function AssembliesIndex() {
   const { refreshAllData } = usePollingStore();
+  const { explainabilityEnabled } = useFeatures();
   const [searchTerm, setSearchTerm] = useState("");
   const [sortBy, setSortBy] = useState("updated");
   const [sortOrder, setSortOrder] = useState("desc");
   const [statusFilter, setStatusFilter] = useState("all");
   
   // Fetch assemblies data
-  const { data, isLoading, isError } = useAssemblies();
+  const { data, isLoading, isError, error } = useAssemblies();
   
   // Filter and sort assemblies
   const filteredAssemblies = React.useMemo(() => {
@@ -47021,20 +47171,21 @@ export default function AssembliesIndex() {
     
     // Apply sorting
     filtered.sort((a, b) => {
-      let aValue, bValue;
+      let aValue: string | number = '';
+      let bValue: string | number = '';
       
       if (sortBy === "id") {
-        aValue = a.id;
-        bValue = b.id;
+        aValue = a.id || '';
+        bValue = b.id || '';
       } else if (sortBy === "name") {
-        aValue = a.name;
-        bValue = b.name;
+        aValue = a.name || '';
+        bValue = b.name || '';
       } else if (sortBy === "members") {
-        aValue = a.member_count;
-        bValue = b.member_count;
+        aValue = a.member_count || 0;
+        bValue = b.member_count || 0;
       } else if (sortBy === "updated") {
-        aValue = new Date(a.updated_at).getTime();
-        bValue = new Date(b.updated_at).getTime();
+        aValue = new Date(a.updated_at || 0).getTime();
+        bValue = new Date(b.updated_at || 0).getTime();
       }
       
       if (sortOrder === "asc") {
@@ -47103,6 +47254,15 @@ export default function AssembliesIndex() {
         <RefreshButton onClick={refreshAllData} />
       </div>
       
+      {isError && (
+        <Alert variant="destructive" className="mb-6">
+          <AlertTitle>Failed to load assemblies</AlertTitle>
+          <AlertDescription>
+            {error?.message || "An error occurred while fetching the assemblies. Please try again later."}
+          </AlertDescription>
+        </Alert>
+      )}
+      
       {/* Filter Controls */}
       <Card className="mb-6">
         <CardContent className="p-4">
@@ -47160,7 +47320,7 @@ export default function AssembliesIndex() {
         <CardHeader className="px-4 py-3 bg-muted border-b border-border flex justify-between items-center">
           <div className="flex items-center space-x-2">
             <CardTitle className="font-medium">Memory Assemblies</CardTitle>
-            {!isLoading && (
+            {!isLoading && !isError && (
               <Badge variant="outline" className="ml-2">
                 {filteredAssemblies.length} {filteredAssemblies.length === 1 ? 'assembly' : 'assemblies'}
               </Badge>
@@ -47236,7 +47396,9 @@ export default function AssembliesIndex() {
                       <TableCell className="text-right">
                         <Link href={`/assemblies/${assembly.id}`}>
                           <Button variant="ghost" size="sm" className="text-primary hover:text-accent text-xs">
-                            View <i className="fas fa-chevron-right ml-1"></i>
+                            View {explainabilityEnabled && (
+                              <i className="fas fa-chevron-right ml-1"></i>
+                            )}
                           </Button>
                         </Link>
                       </TableCell>
@@ -47264,15 +47426,19 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { RefreshButton } from "@/components/ui/RefreshButton";
 import { ServiceStatus as ServiceStatusComponent } from "@/components/layout/ServiceStatus";
 import { CCEChart } from "@/components/dashboard/CCEChart";
 import { usePollingStore } from "@/lib/store";
 import { ServiceStatus, CCEResponse } from "@shared/schema";
+import { useFeatures } from "@/contexts/FeaturesContext";
+import { formatDuration, formatTimeAgo } from "@/lib/utils";
 
 export default function CCE() {
   const { refreshAllData } = usePollingStore();
   const [activeTab, setActiveTab] = useState("overview");
+  const { explainabilityEnabled } = useFeatures();
   
   // Fetch CCE data
   const cceHealth = useCCEHealth();
@@ -47280,11 +47446,14 @@ export default function CCE() {
   const recentCCEResponses = useRecentCCEResponses();
   
   // Prepare service status object
-  const serviceStatus: ServiceStatus | null = cceHealth.data?.data ? {
+  const serviceStatus: ServiceStatus | null = cceHealth.data?.success && cceHealth.data.data ? {
     name: "Context Cascade Engine",
-    status: cceHealth.data.data.status === "ok" ? "Healthy" : "Unhealthy",
+    // Access status from nested data property and use robust check
+    status: ["ok", "healthy"].includes(cceHealth.data.data.status?.toLowerCase()) ? "Healthy" : "Unhealthy",
     url: "/api/cce/health",
-    uptime: cceHealth.data.data.uptime || "Unknown",
+    // Handle both uptime formats (string or number)
+    uptime: cceHealth.data.data.uptime || 
+           (cceHealth.data.data.uptime_seconds ? formatDuration(cceHealth.data.data.uptime_seconds) : "Unknown"),
     version: cceHealth.data.data.version || "Unknown"
   } : null;
   
@@ -47310,6 +47479,16 @@ export default function CCE() {
   const formatTime = (timestamp: string) => {
     return new Date(timestamp).toLocaleTimeString();
   };
+  
+  // Check for loading and error states
+  const isLoading = cceHealth.isLoading || cceStatus.isLoading || recentCCEResponses.isLoading;
+  const hasError = cceHealth.isError || cceStatus.isError || recentCCEResponses.isError;
+
+  // Safely access memory stats
+  const memoryUsage = cceStatus.data?.data?.memory_stats?.used_mb;
+  const avgResponseTime = recentCCEResponses.data?.data?.avg_response_time_ms;
+  const recentResponses = recentCCEResponses.data?.data?.recent_responses || [];
+  const responsesCount = recentResponses.length;
 
   return (
     <>
@@ -47320,7 +47499,7 @@ export default function CCE() {
             Monitoring the <code className="text-primary">Context Cascade Engine</code> and variant selection
           </p>
         </div>
-        <RefreshButton onClick={refreshAllData} />
+        <RefreshButton onClick={refreshAllData} isLoading={isLoading} />
       </div>
       
       {/* Status Card */}
@@ -47328,212 +47507,381 @@ export default function CCE() {
         <CardHeader className="pb-2">
           <div className="flex justify-between">
             <CardTitle>Service Status</CardTitle>
-            {serviceStatus ? (
+            {cceHealth.isLoading ? (
+              <Skeleton className="h-5 w-20" />
+            ) : cceHealth.isError ? (
+              <Badge variant="destructive">
+                <i className="fas fa-exclamation-circle mr-1"></i>
+                Error
+              </Badge>
+            ) : serviceStatus ? (
               <ServiceStatusComponent service={serviceStatus} />
             ) : (
-              <Skeleton className="h-5 w-20" />
+              <Badge variant="destructive">
+                <i className="fas fa-times-circle mr-1"></i>
+                Unreachable
+              </Badge>
             )}
           </div>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
-            <div>
-              <p className="text-sm text-gray-500 mb-1">Connection</p>
-              {cceHealth.isLoading ? (
-                <Skeleton className="h-5 w-32" />
-              ) : serviceStatus ? (
-                <p className="text-lg">{serviceStatus.url}</p>
-              ) : (
-                <p className="text-red-500">Unreachable</p>
+          {cceHealth.isError ? (
+            <Alert variant="destructive" className="mb-4">
+              <AlertTitle>Failed to connect to Context Cascade Engine</AlertTitle>
+              <AlertDescription>
+                {cceHealth.error?.message || "Unable to fetch service health information. Please verify the CCE service is running."}
+              </AlertDescription>
+            </Alert>
+          ) : cceHealth.isLoading ? (
+            <div className="space-y-4">
+              <div className="flex justify-between">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-4 w-32" />
+              </div>
+              <div className="flex justify-between">
+                <Skeleton className="h-4 w-28" />
+                <Skeleton className="h-4 w-40" />
+              </div>
+              <div className="flex justify-between">
+                <Skeleton className="h-4 w-20" />
+                <Skeleton className="h-4 w-36" />
+              </div>
+            </div>
+          ) : serviceStatus ? (
+            <div className="space-y-2">
+              <div className="flex justify-between">
+                <span className="text-sm text-gray-500">Version</span>
+                <span className="text-sm font-mono">{serviceStatus.version}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm text-gray-500">Uptime</span>
+                <span className="text-sm font-mono">{serviceStatus.uptime}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm text-gray-500">Active Variant</span>
+                <span className="text-sm font-mono">
+                  {recentCCEResponses.isLoading ? (
+                    <Skeleton className="h-4 w-20 inline-block" />
+                  ) : (
+                    activeVariant
+                  )}
+                </span>
+              </div>
+              {memoryUsage !== undefined && (
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-500">Memory Usage</span>
+                  <span className="text-sm font-mono">
+                    {memoryUsage.toFixed(1)} MB
+                  </span>
+                </div>
               )}
             </div>
-            <div>
-              <p className="text-sm text-gray-500 mb-1">Uptime</p>
-              {cceHealth.isLoading ? (
-                <Skeleton className="h-5 w-32" />
-              ) : serviceStatus?.uptime ? (
-                <p className="text-lg">{serviceStatus.uptime}</p>
-              ) : (
-                <p className="text-gray-400">Unknown</p>
-              )}
+          ) : (
+            <div className="text-center py-4 text-gray-400">
+              <p>No status information available</p>
             </div>
-            <div>
-              <p className="text-sm text-gray-500 mb-1">Active Variant</p>
-              {recentCCEResponses.isLoading ? (
-                <Skeleton className="h-5 w-32" />
-              ) : (
-                <p className="text-lg font-mono text-secondary">{activeVariant}</p>
-              )}
-            </div>
-          </div>
+          )}
         </CardContent>
       </Card>
       
-      {/* Tabs for different views */}
-      <Tabs defaultValue="variants" className="mb-6">
+      {/* Tabs */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-6">
         <TabsList>
-          <TabsTrigger value="variants" onClick={() => setActiveTab("variants")}>Variant Selection</TabsTrigger>
-          <TabsTrigger value="llm" onClick={() => setActiveTab("llm")}>LLM Guidance</TabsTrigger>
-          <TabsTrigger value="errors" onClick={() => setActiveTab("errors")}>Errors</TabsTrigger>
+          <TabsTrigger value="overview">
+            Overview
+          </TabsTrigger>
+          <TabsTrigger value="responses">
+            Recent Responses
+          </TabsTrigger>
+          {explainabilityEnabled && (
+            <TabsTrigger value="diagnostics">
+              Diagnostics
+            </TabsTrigger>
+          )}
         </TabsList>
-        
-        <TabsContent value="variants" className="mt-4">
-          <div className="grid grid-cols-1 gap-6">
-            <CCEChart
-              title="Variant Distribution (Last 12 Hours)"
-              data={recentCCEResponses.data?.data?.recent_responses || []}
-              isLoading={recentCCEResponses.isLoading}
-            />
-            
+
+        {/* Overview Tab */}
+        <TabsContent value="overview" className="mt-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             <Card>
-              <CardHeader>
-                <CardTitle>Recent Variant Selections</CardTitle>
+              <CardHeader className="pb-2">
+                <CardTitle>Latest CCE Activity</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {recentCCEResponses.isLoading ? (
+                  <div className="space-y-4">
+                    <Skeleton className="h-20 w-full" />
+                    <Skeleton className="h-4 w-3/4" />
+                    <Skeleton className="h-4 w-1/2" />
+                  </div>
+                ) : recentCCEResponses.isError ? (
+                  <Alert variant="destructive">
+                    <AlertTitle>Failed to load recent responses</AlertTitle>
+                    <AlertDescription>
+                      {recentCCEResponses.error?.message || "An error occurred while fetching recent CCE responses."}
+                    </AlertDescription>
+                  </Alert>
+                ) : responsesCount > 0 ? (
+                  <div className="space-y-4">
+                    <div>
+                      <p className="text-sm text-gray-500 mb-1">Latest Response</p>
+                      <div className="bg-card border rounded-md p-3">
+                        <div className="flex justify-between mb-2">
+                          <Badge variant="outline">
+                            {recentResponses[0].variant_output?.variant_type || "Unknown"}
+                          </Badge>
+                          <span className="text-xs text-gray-500">
+                            {formatTime(recentResponses[0].timestamp)}
+                          </span>
+                        </div>
+                        <p className="text-sm truncate">
+                          {recentResponses[0].input?.substring(0, 60)}...
+                        </p>
+                        {recentResponses[0].status === "error" && (
+                          <Alert variant="destructive" className="mt-2">
+                            <AlertDescription>
+                              {recentResponses[0].error || "Unknown error"}
+                            </AlertDescription>
+                          </Alert>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-sm text-gray-500 mb-1">Errors ({errorResponses.length})</p>
+                      {errorResponses.length > 0 ? (
+                        <div className="text-sm text-destructive">
+                          {errorResponses.length} error(s) in the last {responsesCount} responses
+                        </div>
+                      ) : (
+                        <div className="text-sm text-primary">No errors detected</div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-4 text-gray-400">
+                    <p>No recent responses available</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle>Variant Usage</CardTitle>
               </CardHeader>
               <CardContent>
                 {recentCCEResponses.isLoading ? (
                   <div className="space-y-4">
                     <Skeleton className="h-32 w-full" />
+                    <Skeleton className="h-4 w-2/3" />
                   </div>
-                ) : variantSelections.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="w-[120px]">Timestamp</TableHead>
-                          <TableHead>Selected Variant</TableHead>
-                          <TableHead>Reason</TableHead>
-                          <TableHead className="text-center">Perf. Used</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {variantSelections.map((response: CCEResponse, index: number) => (
-                          <TableRow key={index}>
-                            <TableCell className="font-mono text-xs">
-                              {formatTime(response.timestamp)}
-                            </TableCell>
-                            <TableCell>
-                              <Badge className="bg-muted text-secondary">
-                                {response.variant_selection?.selected_variant}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-sm">
-                              {response.variant_selection?.reason || "N/A"}
-                            </TableCell>
-                            <TableCell className="text-center">
-                              {response.variant_selection?.performance_used ? (
-                                <i className="fas fa-check text-green-400"></i>
-                              ) : (
-                                <i className="fas fa-times text-gray-500"></i>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                ) : recentCCEResponses.isError ? (
+                  <Alert variant="destructive">
+                    <AlertTitle>Failed to load variant data</AlertTitle>
+                    <AlertDescription>
+                      {recentCCEResponses.error?.message || "An error occurred while fetching variant usage data."}
+                    </AlertDescription>
+                  </Alert>
+                ) : responsesCount > 0 ? (
+                  <div>
+                    <div className="h-32 mb-4 text-center text-gray-400">
+                      <CCEChart 
+                        data={recentResponses} 
+                        isLoading={recentCCEResponses.isLoading}
+                        isError={recentCCEResponses.isError}
+                        error={recentCCEResponses.error}
+                        title="Variant Distribution"
+                      />
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <p className="text-xs">Most Used Variant:</p>
+                          <p className="font-mono">
+                            {/* Logic to determine most used variant */}
+                            {activeVariant}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs">Avg. Response Time:</p>
+                          <p className="font-mono">
+                            {avgResponseTime !== undefined ? 
+                              `${avgResponseTime.toFixed(2)} ms` : "N/A"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 ) : (
-                  <p className="text-gray-400 text-center py-4">No variant selection data available</p>
+                  <div className="text-center py-4 text-gray-400">
+                    <p>No variant data available</p>
+                  </div>
                 )}
               </CardContent>
             </Card>
           </div>
         </TabsContent>
-        
-        <TabsContent value="llm" className="mt-4">
+
+        {/* Responses Tab */}
+        <TabsContent value="responses" className="mt-4">
           <Card>
-            <CardHeader>
-              <CardTitle>LLM Guidance Usage</CardTitle>
+            <CardHeader className="pb-2">
+              <CardTitle>Recent CCE Responses</CardTitle>
             </CardHeader>
             <CardContent>
               {recentCCEResponses.isLoading ? (
                 <div className="space-y-4">
-                  <Skeleton className="h-64 w-full" />
-                </div>
-              ) : llmGuidanceResponses.length > 0 ? (
-                <div className="space-y-4">
-                  {llmGuidanceResponses.map((response: CCEResponse, index: number) => (
-                    <div key={index} className="border border-border rounded-lg p-4">
-                      <div className="flex justify-between mb-3">
-                        <span className="text-xs text-gray-400">
-                          {new Date(response.timestamp).toLocaleString()}
-                        </span>
-                        <Badge variant="outline" className="text-primary border-primary">
-                          Confidence: {response.llm_advice_used?.confidence_level.toFixed(2)}
-                        </Badge>
-                      </div>
-                      
-                      <h4 className="text-sm font-medium mb-2">Adjusted Advice</h4>
-                      <div className="bg-muted p-3 rounded text-sm mb-4 font-mono">
-                        {response.llm_advice_used?.adjusted_advice || "N/A"}
-                      </div>
-                      
-                      {response.llm_advice_used?.raw_advice && (
-                        <>
-                          <h4 className="text-sm font-medium mb-2">Raw LLM Advice</h4>
-                          <div className="bg-muted p-3 rounded text-sm mb-4 font-mono text-xs overflow-auto max-h-32">
-                            {response.llm_advice_used.raw_advice}
-                          </div>
-                        </>
-                      )}
-                      
-                      {response.llm_advice_used?.adjustment_reason && (
-                        <div className="text-xs text-gray-400">
-                          <span className="text-secondary">Adjustment Reason:</span> {response.llm_advice_used.adjustment_reason}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-gray-400 text-center py-4">No LLM guidance data available</p>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-        
-        <TabsContent value="errors" className="mt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Recent Errors</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {recentCCEResponses.isLoading ? (
-                <div className="space-y-4">
+                  <Skeleton className="h-8 w-full" />
                   <Skeleton className="h-32 w-full" />
                 </div>
-              ) : errorResponses.length > 0 ? (
-                <div className="space-y-4">
-                  {errorResponses.map((response: CCEResponse, index: number) => (
-                    <div key={index} className="border border-border rounded-lg p-4 bg-red-900/10">
-                      <div className="flex items-start">
-                        <i className="fas fa-exclamation-circle text-destructive mr-3 mt-1"></i>
-                        <div>
-                          <div className="flex items-center mb-2">
-                            <h4 className="text-sm font-medium mr-2">Error at {formatTime(response.timestamp)}</h4>
-                            <Badge variant="destructive">Error</Badge>
-                          </div>
-                          <p className="text-sm text-gray-300 mb-2">{response.error_details}</p>
-                          
-                          {response.variant_selection && (
-                            <div className="text-xs text-gray-400">
-                              <span>Attempted variant: </span>
-                              <span className="text-primary">{response.variant_selection.selected_variant}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+              ) : recentCCEResponses.isError ? (
+                <Alert variant="destructive">
+                  <AlertTitle>Failed to load recent responses</AlertTitle>
+                  <AlertDescription>
+                    {recentCCEResponses.error?.message || "An error occurred while fetching recent CCE responses."}
+                  </AlertDescription>
+                </Alert>
+              ) : responsesCount > 0 ? (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Time</TableHead>
+                        <TableHead>Input</TableHead>
+                        <TableHead>Variant</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {recentResponses.map((response: CCEResponse, index: number) => (
+                        <TableRow key={index}>
+                          <TableCell className="whitespace-nowrap">
+                            {formatTime(response.timestamp)}
+                          </TableCell>
+                          <TableCell className="max-w-xs truncate">
+                            {response.input?.substring(0, 50) || "N/A"}...
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">
+                              {response.variant_output?.variant_type || "Unknown"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {response.status === "error" ? (
+                              <Badge variant="destructive">Error</Badge>
+                            ) : (
+                              <Badge variant="default">Success</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
                 </div>
               ) : (
-                <div className="text-center py-8">
-                  <i className="fas fa-check-circle text-green-400 text-2xl mb-2"></i>
-                  <p className="text-gray-400">No errors detected in recent responses</p>
+                <div className="text-center py-8 text-gray-400">
+                  <p>No recent responses available</p>
                 </div>
               )}
             </CardContent>
           </Card>
         </TabsContent>
+
+        {/* Diagnostics Tab - Only show if explainabilityEnabled is true */}
+        {explainabilityEnabled && (
+          <TabsContent value="diagnostics" className="mt-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>LLM Guidance</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {recentCCEResponses.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-8 w-full" />
+                      <Skeleton className="h-40 w-full" />
+                    </div>
+                  ) : recentCCEResponses.isError ? (
+                    <Alert variant="destructive">
+                      <AlertTitle>Failed to load LLM guidance data</AlertTitle>
+                      <AlertDescription>
+                        {recentCCEResponses.error?.message || "An error occurred while fetching LLM guidance data."}
+                      </AlertDescription>
+                    </Alert>
+                  ) : llmGuidanceResponses.length > 0 ? (
+                    <div className="space-y-4">
+                      {llmGuidanceResponses.map((response: CCEResponse, idx: number) => (
+                        <div key={idx} className="border rounded-md p-3">
+                          <div className="flex justify-between mb-2">
+                            <Badge variant="outline">
+                              {response.variant_output?.variant_type || "Unknown"}
+                            </Badge>
+                            <span className="text-xs text-gray-500">
+                              {formatTime(response.timestamp)}
+                            </span>
+                          </div>
+                          <p className="text-sm mb-2 font-semibold">LLM Advice:</p>
+                          <p className="text-sm bg-primary/5 p-2 rounded">
+                            {response.llm_advice || "No specific advice recorded"}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 text-gray-400">
+                      <p>No LLM guidance data available</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>Variant Selection History</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {recentCCEResponses.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-8 w-full" />
+                      <Skeleton className="h-40 w-full" />
+                    </div>
+                  ) : recentCCEResponses.isError ? (
+                    <Alert variant="destructive">
+                      <AlertTitle>Failed to load variant selection data</AlertTitle>
+                      <AlertDescription>
+                        {recentCCEResponses.error?.message || "An error occurred while fetching variant selection data."}
+                      </AlertDescription>
+                    </Alert>
+                  ) : variantSelections.length > 0 ? (
+                    <div className="space-y-4">
+                      {variantSelections.map((response: CCEResponse, idx: number) => (
+                        <div key={idx} className="border rounded-md p-3">
+                          <div className="flex justify-between mb-2">
+                            <Badge variant="outline">
+                              {response.variant_output?.variant_type || "Unknown"}
+                            </Badge>
+                            <span className="text-xs text-gray-500">
+                              {formatTime(response.timestamp)}
+                            </span>
+                          </div>
+                          <div className="text-sm">
+                            <p className="mb-1"><span className="font-semibold">Input:</span> {response.input?.substring(0, 40)}...</p>
+                            <p><span className="font-semibold">Reason:</span> {response.variant_selection?.reason || "No reason provided"}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 text-gray-400">
+                      <p>No variant selection data available</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+        )}
       </Tabs>
     </>
   );
@@ -47945,10 +48293,26 @@ export default function Config() {
                   Failed to load Neural Memory configuration
                 </div>
               ) : neuralConfig.data?.config ? (
-                <div className="space-y-0">
-                  {Object.entries(neuralConfig.data.config).map(([key, value]) => (
-                    <ConfigItem key={key} label={key} value={value} />
-                  ))}
+                <div>
+                  {explainabilityEnabled && (
+                    <div className="bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200 p-3 rounded-md mb-4">
+                      <h3 className="font-semibold mb-1">Explainability Features: Enabled</h3>
+                      <p className="text-sm">Diagnostic and explainability features are currently active.</p>
+                    </div>
+                  )}
+
+                  {!explainabilityEnabled && (
+                    <div className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 p-3 rounded-md mb-4">
+                      <h3 className="font-semibold mb-1">Explainability Features: Disabled</h3>
+                      <p className="text-sm">Set <code className="bg-muted p-1 rounded">ENABLE_EXPLAINABILITY=true</code> to activate diagnostic features.</p>
+                    </div>
+                  )}
+                  
+                  <div className="space-y-0">
+                    {Object.entries(neuralConfig.data.config).map(([key, value]) => (
+                      <ConfigItem key={key} label={key} value={value} />
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <div className="text-center py-8 text-gray-400">
@@ -47979,10 +48343,26 @@ export default function Config() {
                   Failed to load CCE configuration
                 </div>
               ) : cceConfig.data?.config ? (
-                <div className="space-y-0">
-                  {Object.entries(cceConfig.data.config).map(([key, value]) => (
-                    <ConfigItem key={key} label={key} value={value} />
-                  ))}
+                <div>
+                  {explainabilityEnabled && (
+                    <div className="bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200 p-3 rounded-md mb-4">
+                      <h3 className="font-semibold mb-1">Explainability Features: Enabled</h3>
+                      <p className="text-sm">Diagnostic and explainability features are currently active.</p>
+                    </div>
+                  )}
+
+                  {!explainabilityEnabled && (
+                    <div className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 p-3 rounded-md mb-4">
+                      <h3 className="font-semibold mb-1">Explainability Features: Disabled</h3>
+                      <p className="text-sm">Set <code className="bg-muted p-1 rounded">ENABLE_EXPLAINABILITY=true</code> to activate diagnostic features.</p>
+                    </div>
+                  )}
+                  
+                  <div className="space-y-0">
+                    {Object.entries(cceConfig.data.config).map(([key, value]) => (
+                      <ConfigItem key={key} label={key} value={value} />
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <div className="text-center py-8 text-gray-400">
@@ -48611,6 +48991,7 @@ import { AssemblyTable } from "@/components/dashboard/AssemblyTable";
 import { ServiceStatus } from "@/components/layout/ServiceStatus";
 import { usePollingStore } from "@/lib/store";
 import { ServiceStatus as ServiceStatusType } from "@shared/schema";
+import { formatDuration, formatTimeAgo } from "@/lib/utils";
 
 export default function MemoryCore() {
   const { refreshAllData } = usePollingStore();
@@ -48622,17 +49003,24 @@ export default function MemoryCore() {
   const assemblies = useAssemblies();
   
   // Prepare service status object
-  const serviceStatus = memoryCoreHealth.data?.data ? {
+  const serviceStatus = memoryCoreHealth.data?.success && memoryCoreHealth.data.data ? {
     name: "Memory Core",
-    status: memoryCoreHealth.data.data.status === "ok" ? "Healthy" : "Unhealthy",
+    // Access status from nested data property and use robust check
+    status: ["ok", "healthy"].includes(memoryCoreHealth.data.data.status?.toLowerCase()) ? "Healthy" : "Unhealthy",
     url: "/api/memory-core/health",
-    uptime: memoryCoreHealth.data.data.uptime || "Unknown",
+    // Handle both uptime formats (string or number)
+    uptime: memoryCoreHealth.data.data.uptime || 
+           (memoryCoreHealth.data.data.uptime_seconds ? formatDuration(memoryCoreHealth.data.data.uptime_seconds) : "Unknown"),
     version: memoryCoreHealth.data.data.version || "Unknown"
   } as ServiceStatusType : null;
   
   // Calculate warning thresholds for vector index drift
   const isDriftAboveWarning = (memoryCoreStats.data?.data?.vector_index_stats?.drift_count ?? 0) > 50;
   const isDriftAboveCritical = (memoryCoreStats.data?.data?.vector_index_stats?.drift_count ?? 0) > 100;
+  
+  // Check for loading and error states
+  const isLoading = memoryCoreHealth.isLoading || memoryCoreStats.isLoading || assemblies.isLoading;
+  const hasError = memoryCoreHealth.isError || memoryCoreStats.isError || assemblies.isError;
   
   return (
     <>
@@ -48643,7 +49031,7 @@ export default function MemoryCore() {
             Detailed monitoring of the <code className="text-primary">SynthiansMemoryCore</code>
           </p>
         </div>
-        <RefreshButton onClick={refreshAllData} />
+        <RefreshButton onClick={refreshAllData} isLoading={isLoading} />
       </div>
       
       {/* Status Card */}
@@ -48713,309 +49101,375 @@ export default function MemoryCore() {
         </CardContent>
       </Card>
       
-      {/* Tabs for different views */}
-      <Tabs defaultValue="overview" className="mb-6">
-        <TabsList>
-          <TabsTrigger value="overview" onClick={() => setActiveTab("overview")}>Overview</TabsTrigger>
-          <TabsTrigger value="vector-index" onClick={() => setActiveTab("vector-index")}>Vector Index</TabsTrigger>
-          <TabsTrigger value="assemblies" onClick={() => setActiveTab("assemblies")}>Assemblies</TabsTrigger>
-          <TabsTrigger value="persistence" onClick={() => setActiveTab("persistence")}>Persistence</TabsTrigger>
+      {/* Main Content Tabs */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-6">
+        <TabsList className="mb-4">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="vector-index">Vector Index</TabsTrigger>
+          <TabsTrigger value="assemblies">Assemblies</TabsTrigger>
+          <TabsTrigger value="persistence">Persistence</TabsTrigger>
         </TabsList>
         
-        <TabsContent value="overview" className="mt-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card className="col-span-2">
-              <CardHeader>
-                <CardTitle>Core Stats</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {memoryCoreStats.isLoading ? (
-                  <div className="space-y-4">
-                    <Skeleton className="h-16 w-full" />
-                    <Skeleton className="h-16 w-full" />
-                  </div>
-                ) : memoryCoreStats.isError ? (
-                  <Alert variant="destructive">
-                    <AlertTitle>Failed to load statistics</AlertTitle>
-                    <AlertDescription>
-                      {memoryCoreStats.error?.message || "An error occurred while fetching Memory Core statistics."}
-                    </AlertDescription>
-                  </Alert>
-                ) : memoryCoreStats.data?.data?.core_stats ? (
-                  <div className="grid grid-cols-2 gap-6">
-                    <div>
-                      <div className="mb-4">
-                        <p className="text-sm text-gray-500">Total Memories</p>
-                        <p className="text-2xl font-mono">
-                          {memoryCoreStats.data.data.core_stats.total_memories.toLocaleString()}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-gray-500">Dirty Memories</p>
-                        <p className="text-2xl font-mono">
-                          {memoryCoreStats.data.data.core_stats.dirty_memories.toLocaleString()}
-                        </p>
-                      </div>
+        {/* Overview Tab */}
+        <TabsContent value="overview">
+          {memoryCoreStats.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Failed to load Memory Core statistics</AlertTitle>
+              <AlertDescription>
+                {memoryCoreStats.error?.message || "There was an error fetching Memory Core stats. Please try again."}
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>Memory Stats</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {memoryCoreStats.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
                     </div>
-                    <div>
-                      <div className="mb-4">
-                        <p className="text-sm text-gray-500">Total Assemblies</p>
-                        <p className="text-2xl font-mono">
-                          {memoryCoreStats.data.data.core_stats.total_assemblies.toLocaleString()}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-gray-500">Pending Vector Updates</p>
-                        <p className="text-2xl font-mono">
-                          {memoryCoreStats.data.data.core_stats.pending_vector_updates.toLocaleString()}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-4 text-gray-400">
-                    <p>No statistics available</p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-            
-            <Card>
-              <CardHeader>
-                <CardTitle>Performance</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {memoryCoreStats.isLoading ? (
-                  <div className="space-y-4">
-                    <Skeleton className="h-8 w-full" />
-                    <Skeleton className="h-8 w-full" />
-                  </div>
-                ) : memoryCoreStats.isError ? (
-                  <Alert variant="destructive">
-                    <AlertDescription>
-                      Failed to load performance data
-                    </AlertDescription>
-                  </Alert>
-                ) : memoryCoreStats.data?.data?.quick_recal_stats || memoryCoreStats.data?.data?.threshold_stats ? (
-                  <div className="space-y-4">
-                    {memoryCoreStats.data?.data?.quick_recal_stats && (
-                      <div>
-                        <div className="flex justify-between mb-1">
-                          <p className="text-sm text-gray-500">Quick Recall Rate</p>
-                          <p className="text-sm font-mono">
-                            {((memoryCoreStats.data.data.quick_recal_stats.recall_rate ?? 0) * 100).toFixed(2)}%
-                          </p>
-                        </div>
-                        <Progress value={(memoryCoreStats.data.data.quick_recal_stats.recall_rate ?? 0) * 100} className="h-2" />
-                      </div>
-                    )}
-                    {memoryCoreStats.data?.data?.threshold_stats && (
-                      <div>
-                        <div className="flex justify-between mb-1">
-                          <p className="text-sm text-gray-500">Threshold Recall Rate</p>
-                          <p className="text-sm font-mono">
-                            {((memoryCoreStats.data.data.threshold_stats.recall_rate ?? 0) * 100).toFixed(2)}%
-                          </p>
-                        </div>
-                        <Progress value={(memoryCoreStats.data.data.threshold_stats.recall_rate ?? 0) * 100} className="h-2" />
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-gray-400">Performance data unavailable</p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-        
-        <TabsContent value="vector-index" className="mt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Vector Index Stats</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {memoryCoreStats.isLoading ? (
-                <div className="space-y-4">
-                  <Skeleton className="h-8 w-full" />
-                  <Skeleton className="h-8 w-full" />
-                  <Skeleton className="h-8 w-full" />
-                </div>
-              ) : memoryCoreStats.isError ? (
-                <Alert variant="destructive">
-                  <AlertTitle>Failed to load vector index data</AlertTitle>
-                  <AlertDescription>
-                    {memoryCoreStats.error?.message || "An error occurred while fetching vector index information."}
-                  </AlertDescription>
-                </Alert>
-              ) : memoryCoreStats.data?.data?.vector_index_stats ? (
-                <div className="space-y-6">
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Index Size</p>
-                      <p className="text-lg font-mono">
-                        {memoryCoreStats.data.data.vector_index_stats.count.toLocaleString()}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Mapping Count</p>
-                      <p className="text-lg font-mono">
-                        {memoryCoreStats.data.data.vector_index_stats.mapping_count.toLocaleString()}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Indexed Vectors</p>
-                      <p className="text-lg font-mono">
-                        {memoryCoreStats.data.data.vector_index_stats.count.toLocaleString()}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Drift Count</p>
-                      <p className="text-lg font-mono">
-                        {(memoryCoreStats.data.data.vector_index_stats.drift_count ?? 0).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-                  
-                  <div>
-                    <div className="mb-2">
-                      <h3 className="font-medium">Health & Consistency</h3>
-                      <p className="text-sm text-gray-500">Statistics about consistency between memory store and vector index</p>
-                    </div>
+                  ) : (
                     <Table>
-                      <TableHeader>
-                        <TableRow className="bg-muted">
-                          <TableHead className="w-1/2">Metric</TableHead>
-                          <TableHead>Value</TableHead>
-                          <TableHead>Status</TableHead>
-                        </TableRow>
-                      </TableHeader>
                       <TableBody>
                         <TableRow>
-                          <TableCell className="font-medium">Index Score</TableCell>
-                          <TableCell>
-                            {(memoryCoreStats.data.data.vector_index_stats.count / 
-                              (memoryCoreStats.data.data.core_stats.total_memories || 1)).toFixed(2)}
-                          </TableCell>
-                          <TableCell>
-                            {(memoryCoreStats.data.data.vector_index_stats.count / 
-                              (memoryCoreStats.data.data.core_stats.total_memories || 1)) > 0.95 ? (
-                              <Badge className="bg-green-100 dark:bg-green-900/20 text-green-600 dark:text-green-400">
-                                <i className="fas fa-check mr-1"></i>
-                                Good
-                              </Badge>
-                            ) : (memoryCoreStats.data.data.vector_index_stats.count / 
-                              (memoryCoreStats.data.data.core_stats.total_memories || 1)) > 0.8 ? (
-                              <Badge className="bg-yellow-100 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400">
-                                <i className="fas fa-exclamation-triangle mr-1"></i>
-                                Warning
-                              </Badge>
-                            ) : (
-                              <Badge className="bg-red-100 dark:bg-red-900/20 text-red-600 dark:text-red-400">
-                                <i className="fas fa-times mr-1"></i>
-                                Critical
-                              </Badge>
-                            )}
+                          <TableCell className="font-medium">Total Memories</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.core_stats?.total_memories?.toLocaleString() ?? 'N/A'}
                           </TableCell>
                         </TableRow>
                         <TableRow>
-                          <TableCell className="font-medium">Drift Count</TableCell>
-                          <TableCell>
-                            {(memoryCoreStats.data.data.vector_index_stats.drift_count ?? 0).toLocaleString()}
-                          </TableCell>
-                          <TableCell>
-                            {(memoryCoreStats.data.data.vector_index_stats.drift_count ?? 0) < 10 ? (
-                              <Badge className="bg-green-100 dark:bg-green-900/20 text-green-600 dark:text-green-400">
-                                <i className="fas fa-check mr-1"></i>
-                                Good
-                              </Badge>
-                            ) : (memoryCoreStats.data.data.vector_index_stats.drift_count ?? 0) < 50 ? (
-                              <Badge className="bg-yellow-100 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400">
-                                <i className="fas fa-exclamation-triangle mr-1"></i>
-                                Warning
-                              </Badge>
-                            ) : (
-                              <Badge className="bg-red-100 dark:bg-red-900/20 text-red-600 dark:text-red-400">
-                                <i className="fas fa-times mr-1"></i>
-                                Critical
-                              </Badge>
-                            )}
+                          <TableCell className="font-medium">Total Assemblies</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.core_stats?.total_assemblies?.toLocaleString() ?? 'N/A'}
                           </TableCell>
                         </TableRow>
                         <TableRow>
-                          <TableCell className="font-medium">Index Type</TableCell>
-                          <TableCell colSpan={2}>
-                            {memoryCoreStats.data.data.vector_index_stats.index_type || 'Unknown'}
+                          <TableCell className="font-medium">Dirty Memories</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.core_stats?.dirty_memories?.toLocaleString() ?? 0}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Pending Vector Updates</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.core_stats?.pending_vector_updates?.toLocaleString() ?? 0}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Core Initialized</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.core_stats?.initialized ? (
+                              <Badge variant="secondary">Yes</Badge>
+                            ) : (
+                              <Badge variant="destructive">No</Badge>
+                            )}
                           </TableCell>
                         </TableRow>
                       </TableBody>
                     </Table>
-                  </div>
-                </div>
-              ) : (
-                <div className="text-center py-4 text-gray-400">
-                  <p>Vector index data unavailable</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>Assembly Stats</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {memoryCoreStats.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                    </div>
+                  ) : (
+                    <Table>
+                      <TableBody>
+                        <TableRow>
+                          <TableCell className="font-medium">Total Count</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.assemblies?.total_count?.toLocaleString() ?? 'N/A'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Indexed Count</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.assemblies?.indexed_count?.toLocaleString() ?? 'N/A'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Vector Indexed Count</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.assemblies?.vector_indexed_count?.toLocaleString() ?? 'N/A'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Average Size</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.assemblies?.average_size?.toFixed(2) ?? 'N/A'} memories
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Pruning Enabled</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.assemblies?.pruning_enabled ? (
+                              <Badge variant="secondary">Yes</Badge>
+                            ) : (
+                              <Badge variant="outline">No</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Merging Enabled</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.assemblies?.merging_enabled ? (
+                              <Badge variant="secondary">Yes</Badge>
+                            ) : (
+                              <Badge variant="outline">No</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </TabsContent>
+        
+        <TabsContent value="vector-index" className="mt-4">
+          {memoryCoreStats.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Failed to load Vector Index statistics</AlertTitle>
+              <AlertDescription>
+                {memoryCoreStats.error?.message || "There was an error fetching Vector Index data. Please try again."}
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <Card className="col-span-2">
+                <CardHeader className="pb-2">
+                  <CardTitle>Vector Index Status</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {memoryCoreStats.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                    </div>
+                  ) : (
+                    <Table>
+                      <TableBody>
+                        <TableRow>
+                          <TableCell className="font-medium">Total Vectors</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.vector_index_stats?.total_vectors?.toLocaleString() ?? 'N/A'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Index Size</TableCell>
+                          <TableCell className="text-right">
+                            {typeof memoryCoreStats.data?.data?.vector_index_stats?.index_size_mb === 'number' ? 
+                              `${memoryCoreStats.data.data.vector_index_stats.index_size_mb.toFixed(2)} MB` : 'N/A'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Vector Dimensions</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.vector_index_stats?.vector_dimensions ?? 'N/A'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Drift Count</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              {memoryCoreStats.data?.data?.vector_index_stats?.drift_count?.toLocaleString() ?? '0'}
+                              {isDriftAboveWarning && !isDriftAboveCritical && (
+                                <Badge variant="secondary">WARNING</Badge>
+                              )}
+                              {isDriftAboveCritical && (
+                                <Badge variant="destructive">CRITICAL</Badge>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Index Health</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.vector_index_stats?.healthy ? (
+                              <Badge variant="secondary">Healthy</Badge>
+                            ) : (
+                              <Badge variant="destructive">Unhealthy</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Pending Updates</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.vector_index_stats?.pending_updates?.toLocaleString() ?? '0'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Last Update</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.vector_index_stats?.last_update_at ? 
+                              formatTimeAgo(memoryCoreStats.data.data.vector_index_stats.last_update_at) : 'Never'}
+                          </TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>Performance</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {memoryCoreStats.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-12 w-full" />
+                      <Skeleton className="h-12 w-full" />
+                      <Skeleton className="h-12 w-full" />
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      {memoryCoreStats.data?.data?.quick_recall_stats && (
+                        <div>
+                          <div className="flex justify-between mb-1">
+                            <p className="text-sm text-gray-500">Quick Recall Rate</p>
+                            <p className="text-sm font-mono">
+                              {((memoryCoreStats.data.data.quick_recall_stats.recall_rate ?? 0) * 100).toFixed(2)}%
+                            </p>
+                          </div>
+                          <Progress 
+                            value={(memoryCoreStats.data.data.quick_recall_stats.recall_rate ?? 0) * 100} 
+                            className="h-2" 
+                          />
+                          <div className="flex justify-between text-xs text-gray-500 mt-1">
+                            <span>Avg. Latency: {memoryCoreStats.data.data.quick_recall_stats?.avg_latency_ms?.toFixed(2) ?? 'N/A'} ms</span>
+                            <span>Count: {memoryCoreStats.data.data.quick_recall_stats?.count ?? 0}</span>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {memoryCoreStats.data?.data?.threshold_stats && (
+                        <div>
+                          <div className="flex justify-between mb-1">
+                            <p className="text-sm text-gray-500">Threshold Recall Rate</p>
+                            <p className="text-sm font-mono">
+                              {((memoryCoreStats.data.data.threshold_stats.recall_rate ?? 0) * 100).toFixed(2)}%
+                            </p>
+                          </div>
+                          <Progress 
+                            value={(memoryCoreStats.data.data.threshold_stats.recall_rate ?? 0) * 100} 
+                            className="h-2" 
+                          />
+                          <div className="flex justify-between text-xs text-gray-500 mt-1">
+                            <span>Avg. Latency: {memoryCoreStats.data.data.threshold_stats?.avg_latency_ms?.toFixed(2) ?? 'N/A'} ms</span>
+                            <span>Count: {memoryCoreStats.data.data.threshold_stats?.count ?? 0}</span>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {!memoryCoreStats.data?.data?.quick_recall_stats && !memoryCoreStats.data?.data?.threshold_stats && (
+                        <p className="text-gray-400 text-center py-4">No performance data available</p>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          )}
         </TabsContent>
         
         <TabsContent value="assemblies" className="mt-4">
-          <AssemblyTable 
-            assemblies={assemblies.data?.data || []} 
-            isLoading={assemblies.isLoading}
-            isError={assemblies.isError}
-            error={assemblies.error}
-          />
+          {assemblies.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Failed to load assemblies</AlertTitle>
+              <AlertDescription>
+                {assemblies.error?.message || "There was an error fetching assembly data. Please try again."}
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle>Memory Assemblies</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <AssemblyTable
+                  assemblies={assemblies.data?.data || []}
+                  isLoading={assemblies.isLoading}
+                  isError={assemblies.isError}
+                  error={assemblies.error}
+                  showFilters={true}
+                />
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
         
         <TabsContent value="persistence" className="mt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Persistence Status</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {memoryCoreStats.isLoading ? (
-                <div className="space-y-4">
-                  <Skeleton className="h-8 w-full" />
-                  <Skeleton className="h-8 w-full" />
-                </div>
-              ) : memoryCoreStats.isError ? (
-                <Alert variant="destructive">
-                  <AlertTitle>Failed to load persistence data</AlertTitle>
-                  <AlertDescription>
-                    {memoryCoreStats.error?.message || "An error occurred while fetching persistence information."}
-                  </AlertDescription>
-                </Alert>
-              ) : memoryCoreStats.data?.data?.persistence_stats ? (
-                <div className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Last Update</p>
-                      <p className="text-lg">
-                        {memoryCoreStats.data.data.persistence_stats.last_update ? 
-                          new Date(memoryCoreStats.data.data.persistence_stats.last_update).toLocaleString() : 
-                          'Never'}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Last Backup</p>
-                      <p className="text-lg">
-                        {memoryCoreStats.data.data.persistence_stats.last_backup ? 
-                          new Date(memoryCoreStats.data.data.persistence_stats.last_backup).toLocaleString() : 
-                          'Never'}
-                      </p>
-                    </div>
+          {memoryCoreStats.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Failed to load persistence statistics</AlertTitle>
+              <AlertDescription>
+                {memoryCoreStats.error?.message || "There was an error fetching persistence data. Please try again."}
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle>Persistence Status</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {memoryCoreStats.isLoading ? (
+                  <div className="space-y-4">
+                    <Skeleton className="h-16 w-full" />
+                    <Skeleton className="h-16 w-full" />
                   </div>
-                </div>
-              ) : (
-                <div className="text-center py-4 text-gray-400">
-                  <p>Persistence data unavailable</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                ) : (
+                  <Table>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-medium">Last Update</TableCell>
+                        <TableCell className="text-right">
+                          {memoryCoreStats.data?.data?.persistence_stats?.last_update ? 
+                            formatTimeAgo(memoryCoreStats.data.data.persistence_stats.last_update) : 
+                            'Never'}
+                        </TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-medium">Last Backup</TableCell>
+                        <TableCell className="text-right">
+                          {memoryCoreStats.data?.data?.persistence_stats?.last_backup ? 
+                            formatTimeAgo(memoryCoreStats.data.data.persistence_stats.last_backup) : 
+                            'Never'}
+                        </TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-medium">Database Status</TableCell>
+                        <TableCell className="text-right">
+                          {memoryCoreHealth.data?.data?.status?.toLowerCase() === 'healthy' ? (
+                            <Badge variant="secondary">Healthy</Badge>
+                          ) : (
+                            <Badge variant="destructive">Problem Detected</Badge>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
       </Tabs>
     </>
@@ -49211,6 +49665,7 @@ import { MetricsChart } from "@/components/dashboard/MetricsChart";
 import { usePollingStore } from "@/lib/store";
 import { ServiceStatus as ServiceStatusType } from "@shared/schema";
 import { useFeatures } from "@/contexts/FeaturesContext";
+import { formatDuration } from "@/lib/utils";
 
 export default function NeuralMemory() {
   const { refreshAllData } = usePollingStore();
@@ -49223,11 +49678,14 @@ export default function NeuralMemory() {
   const neuralMemoryDiagnostics = useNeuralMemoryDiagnostics(timeWindow);
   
   // Prepare service status object
-  const serviceStatus = neuralMemoryHealth.data?.data ? {
+  const serviceStatus = neuralMemoryHealth.data?.success && neuralMemoryHealth.data.data ? {
     name: "Neural Memory",
-    status: neuralMemoryHealth.data.data.status === "ok" ? "Healthy" : "Unhealthy",
+    // Access status from nested data property and use robust check
+    status: ["ok", "healthy"].includes(neuralMemoryHealth.data.data.status?.toLowerCase()) ? "Healthy" : "Unhealthy",
     url: "/api/neural-memory/health",
-    uptime: neuralMemoryHealth.data.data.uptime || "Unknown",
+    // Handle both uptime formats (string or number)
+    uptime: neuralMemoryHealth.data.data.uptime || 
+           (neuralMemoryHealth.data.data.uptime_seconds ? formatDuration(neuralMemoryHealth.data.data.uptime_seconds) : "Unknown"),
     version: neuralMemoryHealth.data.data.version || "Unknown"
   } as ServiceStatusType : null;
   
@@ -49250,6 +49708,10 @@ export default function NeuralMemory() {
   // Determine if any metrics are in warning/critical state
   const isGradNormHigh = 
     (neuralMemoryDiagnostics.data?.data?.avg_grad_norm ?? 0) > 0.8;
+    
+  // Check for loading and error states
+  const isLoading = neuralMemoryHealth.isLoading || neuralMemoryStatus.isLoading || neuralMemoryDiagnostics.isLoading;
+  const hasError = neuralMemoryHealth.isError || neuralMemoryStatus.isError || neuralMemoryDiagnostics.isError;
   
   return (
     <>
@@ -49260,7 +49722,7 @@ export default function NeuralMemory() {
             Detailed monitoring of the <code className="text-primary">NeuralMemoryModule</code>
           </p>
         </div>
-        <RefreshButton onClick={refreshAllData} />
+        <RefreshButton onClick={refreshAllData} isLoading={isLoading} />
       </div>
       
       {/* Status Card */}
@@ -49316,11 +49778,11 @@ export default function NeuralMemory() {
                 )}
               </div>
               <div>
-                <p className="text-sm text-gray-500 mb-1">Version</p>
+                <p className="text-sm text-gray-500 mb-1">TensorFlow Version</p>
                 {neuralMemoryHealth.isLoading ? (
                   <Skeleton className="h-5 w-32" />
-                ) : serviceStatus?.version ? (
-                  <p className="text-lg">{serviceStatus.version}</p>
+                ) : neuralMemoryHealth.data?.data?.tensorflow_version ? (
+                  <p className="text-lg">{neuralMemoryHealth.data.data.tensorflow_version}</p>
                 ) : (
                   <p className="text-gray-400">Unknown</p>
                 )}
@@ -49330,12 +49792,142 @@ export default function NeuralMemory() {
         </CardContent>
       </Card>
       
-      {/* Configuration Overview */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Neural Memory Configuration</CardTitle>
-        </CardHeader>
-        <CardContent>
+      {/* Main Tabs */}
+      <Tabs defaultValue="diagnostics" className="mb-6">
+        <TabsList className="mb-4">
+          <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
+          <TabsTrigger value="configuration">Configuration</TabsTrigger>
+          {explainabilityEnabled && (
+            <TabsTrigger value="metrics">Detailed Metrics</TabsTrigger>
+          )}
+        </TabsList>
+        
+        <TabsContent value="diagnostics" className="mt-4">
+          {neuralMemoryDiagnostics.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Failed to load Neural Memory diagnostics</AlertTitle>
+              <AlertDescription>
+                {neuralMemoryDiagnostics.error?.message || "There was an error fetching diagnostic data. Please try again."}
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Performance Metrics */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>Performance Metrics</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {neuralMemoryDiagnostics.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                    </div>
+                  ) : neuralMemoryDiagnostics.data?.data ? (
+                    <div className="space-y-4">
+                      <div>
+                        <div className="flex justify-between mb-1">
+                          <p className="text-sm text-gray-500">Average Loss</p>
+                          <p className="text-sm font-mono">
+                            {neuralMemoryDiagnostics.data.data.avg_loss.toFixed(5)}
+                          </p>
+                        </div>
+                        <Progress 
+                          value={Math.min(neuralMemoryDiagnostics.data.data.avg_loss * 100, 100)} 
+                          className="h-2" 
+                        />
+                      </div>
+                      <div>
+                        <div className="flex justify-between mb-1">
+                          <p className="text-sm text-gray-500">Gradient Norm</p>
+                          <p className={`text-sm font-mono ${isGradNormHigh ? "text-amber-500" : ""}`}>
+                            {neuralMemoryDiagnostics.data.data.avg_grad_norm.toFixed(5)}
+                            {isGradNormHigh && <span className="ml-2 text-amber-500">⚠</span>}
+                          </p>
+                        </div>
+                        <Progress 
+                          value={Math.min(neuralMemoryDiagnostics.data.data.avg_grad_norm * 100, 100)} 
+                          className={isGradNormHigh ? "h-2 bg-amber-900/20" : "h-2"} 
+                        />
+                      </div>
+                      <div>
+                        <div className="flex justify-between mb-1">
+                          <p className="text-sm text-gray-500">QR Boost</p>
+                          <p className="text-sm font-mono">
+                            {neuralMemoryDiagnostics.data.data.avg_qr_boost.toFixed(5)}
+                          </p>
+                        </div>
+                        <Progress 
+                          value={Math.min(neuralMemoryDiagnostics.data.data.avg_qr_boost * 100, 100)} 
+                          className="h-2" 
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-gray-400 text-center py-8">No diagnostic data available</p>
+                  )}
+                </CardContent>
+              </Card>
+              
+              {/* Emotional Loop */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>Emotional Loop</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {neuralMemoryDiagnostics.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                    </div>
+                  ) : neuralMemoryDiagnostics.data?.data?.emotional_loop ? (
+                    <div className="space-y-4">
+                      <div>
+                        <p className="text-sm text-gray-500 mb-1">Dominant Emotions</p>
+                        <div className="flex flex-wrap gap-1">
+                          {neuralMemoryDiagnostics.data.data.emotional_loop.dominant_emotions.map((emotion: string, index: number) => (
+                            <Badge key={index} variant="secondary">{emotion}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500 mb-1">Entropy</p>
+                        <p className="text-lg">
+                          {neuralMemoryDiagnostics.data.data.emotional_loop.entropy.toFixed(3)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500 mb-1">Bias Index</p>
+                        <p className="text-lg">
+                          {neuralMemoryDiagnostics.data.data.emotional_loop.bias_index.toFixed(3)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500 mb-1">Match Rate</p>
+                        <div className="flex justify-between mb-1">
+                          <span></span>
+                          <p className="text-sm font-mono">
+                            {(neuralMemoryDiagnostics.data.data.emotional_loop.match_rate * 100).toFixed(1)}%
+                          </p>
+                        </div>
+                        <Progress 
+                          value={neuralMemoryDiagnostics.data.data.emotional_loop.match_rate * 100} 
+                          className="h-2" 
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-gray-400 text-center py-8">No emotional loop data available</p>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </TabsContent>
+        
+        <TabsContent value="configuration" className="mt-4">
           {neuralMemoryStatus.isLoading ? (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Skeleton className="h-16 w-full" />
@@ -49349,12 +49941,12 @@ export default function NeuralMemory() {
                 {neuralMemoryStatus.error?.message || "An error occurred while fetching Neural Memory configuration."}
               </AlertDescription>
             </Alert>
-          ) : neuralMemoryStatus.data?.data ? (
+          ) : neuralMemoryStatus.data ? (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <p className="text-sm text-gray-500 mb-1">Initialization Status</p>
                 <p className="text-lg">
-                  {neuralMemoryStatus.data.data.initialized ? (
+                  {neuralMemoryStatus.data.initialized ? (
                     <span className="text-green-400">Initialized</span>
                   ) : (
                     <span className="text-yellow-400">Not Initialized</span>
@@ -49364,13 +49956,13 @@ export default function NeuralMemory() {
               <div>
                 <p className="text-sm text-gray-500 mb-1">Dimensions</p>
                 <p className="text-lg font-mono">
-                  {neuralMemoryStatus.data.data.config?.dimensions || "Unknown"}
+                  {neuralMemoryStatus.data.config?.dimensions || "Unknown"}
                 </p>
               </div>
               <div>
                 <p className="text-sm text-gray-500 mb-1">Hidden Size</p>
                 <p className="text-lg font-mono">
-                  {neuralMemoryStatus.data.data.config?.hidden_size || "Unknown"}
+                  {neuralMemoryStatus.data.config?.hidden_size || "Unknown"}
                 </p>
               </div>
             </div>
@@ -49379,182 +49971,98 @@ export default function NeuralMemory() {
               <p>No configuration data available</p>
             </div>
           )}
-        </CardContent>
-      </Card>
-      
-      {/* Warning if high grad norm */}
-      {isGradNormHigh && neuralMemoryDiagnostics.data?.data && !neuralMemoryDiagnostics.isError && (
-        <Alert variant="destructive" className="mb-6">
-          <AlertTitle className="flex items-center">
-            <i className="fas fa-exclamation-circle mr-2"></i>
-            High Gradient Norm Detected
-          </AlertTitle>
-          <AlertDescription>
-            The gradient norm of {neuralMemoryDiagnostics.data.data.avg_grad_norm.toFixed(4)} exceeds the recommended threshold of 0.7500.
-          </AlertDescription>
-        </Alert>
-      )}
-      
-      {/* Tabs for Performance Metrics */}
-      <Tabs defaultValue="performance" className="mb-6">
-        <TabsList>
-          <TabsTrigger value="performance">Performance Metrics</TabsTrigger>
-          <TabsTrigger value="emotional">Emotional Loop</TabsTrigger>
-          {explainabilityEnabled && (
-            <TabsTrigger value="recommendations">Recommendations</TabsTrigger>
-          )}
-        </TabsList>
-        
-        <TabsContent value="performance" className="mt-4">
-          <div className="grid grid-cols-1 gap-6">
-            <MetricsChart
-              title="Neural Memory Performance"
-              data={chartData}
-              dataKeys={[
-                { key: "loss", color: "#FF008C", name: "Loss" },
-                { key: "grad_norm", color: "#1EE4FF", name: "Gradient Norm" },
-                { key: "qr_boost", color: "#FF3EE8", name: "QR Boost" }
-              ]}
-              isLoading={neuralMemoryDiagnostics.isLoading}
-              isError={neuralMemoryDiagnostics.isError}
-              error={neuralMemoryDiagnostics.error}
-              timeRange={timeWindow}
-              onTimeRangeChange={setTimeWindow}
-              summary={[
-                { 
-                  label: "Avg. Loss", 
-                  value: neuralMemoryDiagnostics.data?.data?.avg_loss?.toFixed(4) || "--", 
-                  color: "text-primary" 
-                },
-                { 
-                  label: "Avg. Grad Norm", 
-                  value: neuralMemoryDiagnostics.data?.data?.avg_grad_norm?.toFixed(4) || "--",
-                  color: isGradNormHigh ? "text-destructive" : "text-secondary"
-                },
-                { 
-                  label: "Avg. QR Boost", 
-                  value: neuralMemoryDiagnostics.data?.data?.avg_qr_boost?.toFixed(4) || "--",
-                  color: "text-primary" 
-                }
-              ]}
-            />
-          </div>
-        </TabsContent>
-        
-        <TabsContent value="emotional" className="mt-4">
-          {neuralMemoryDiagnostics.isLoading ? (
-            <Card>
-              <CardContent className="pt-6">
-                <div className="space-y-4">
-                  <Skeleton className="h-8 w-full" />
-                  <Skeleton className="h-24 w-full" />
-                  <Skeleton className="h-8 w-full" />
-                </div>
-              </CardContent>
-            </Card>
-          ) : neuralMemoryDiagnostics.isError ? (
-            <Alert variant="destructive">
-              <AlertTitle>Failed to load emotional loop data</AlertTitle>
-              <AlertDescription>
-                {neuralMemoryDiagnostics.error?.message || "An error occurred while fetching emotional loop diagnostics."}
-              </AlertDescription>
-            </Alert>
-          ) : neuralMemoryDiagnostics.data?.data?.emotional_loop ? (
-            <Card>
-              <CardContent className="pt-6">
-                <div className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Emotional Entropy</p>
-                      <p className="text-lg font-mono">
-                        {neuralMemoryDiagnostics.data.data.emotional_loop.entropy.toFixed(4)}
-                      </p>
-                      <Progress 
-                        value={neuralMemoryDiagnostics.data.data.emotional_loop.entropy * 100} 
-                        className="h-1.5 mt-2" 
-                      />
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Bias Index</p>
-                      <p className="text-lg font-mono">
-                        {neuralMemoryDiagnostics.data.data.emotional_loop.bias_index.toFixed(4)}
-                      </p>
-                      <Progress 
-                        value={neuralMemoryDiagnostics.data.data.emotional_loop.bias_index * 100} 
-                        className="h-1.5 mt-2" 
-                      />
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Match Rate</p>
-                      <p className="text-lg font-mono">
-                        {(neuralMemoryDiagnostics.data.data.emotional_loop.match_rate * 100).toFixed(2)}%
-                      </p>
-                      <Progress 
-                        value={neuralMemoryDiagnostics.data.data.emotional_loop.match_rate * 100} 
-                        className="h-1.5 mt-2" 
-                      />
-                    </div>
-                  </div>
-                  
-                  <div>
-                    <p className="text-sm text-gray-500 mb-1">Dominant Emotions</p>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {neuralMemoryDiagnostics.data.data.emotional_loop.dominant_emotions.map((emotion: string, idx: number) => (
-                        <Badge key={idx} variant="outline" className="bg-primary/5">
-                          {emotion}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="text-center py-8 text-gray-400">
-              <p>No emotional loop data available</p>
-            </div>
-          )}
         </TabsContent>
         
         {explainabilityEnabled && (
-          <TabsContent value="recommendations" className="mt-4">
+          <TabsContent value="metrics" className="mt-4">
             {neuralMemoryDiagnostics.isLoading ? (
               <Card>
                 <CardContent className="pt-6">
                   <div className="space-y-4">
                     <Skeleton className="h-8 w-full" />
-                    <Skeleton className="h-16 w-full" />
-                    <Skeleton className="h-16 w-full" />
+                    <Skeleton className="h-40 w-full" />
+                    <Skeleton className="h-8 w-full" />
                   </div>
                 </CardContent>
               </Card>
             ) : neuralMemoryDiagnostics.isError ? (
               <Alert variant="destructive">
-                <AlertTitle>Failed to load recommendations</AlertTitle>
+                <AlertTitle>Failed to load metrics data</AlertTitle>
                 <AlertDescription>
-                  {neuralMemoryDiagnostics.error?.message || "An error occurred while fetching Neural Memory recommendations."}
+                  {neuralMemoryDiagnostics.error?.message || "An error occurred while fetching Neural Memory metrics data."}
                 </AlertDescription>
               </Alert>
-            ) : neuralMemoryDiagnostics.data?.data?.recommendations && neuralMemoryDiagnostics.data.data.recommendations.length > 0 ? (
-              <Card>
-                <CardContent className="pt-6">
-                  <div className="space-y-4">
-                    {neuralMemoryDiagnostics.data.data.recommendations.map((recommendation: string, idx: number) => (
-                      <Alert key={idx} className="bg-primary/5 border-primary/20">
-                        <div className="flex">
-                          <i className="fas fa-lightbulb text-secondary mt-1 mr-2"></i>
-                          <AlertDescription className="text-primary-foreground">
-                            {recommendation}
-                          </AlertDescription>
-                        </div>
-                      </Alert>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
+            ) : neuralMemoryDiagnostics.data?.data ? (
+              <div className="grid grid-cols-1 gap-6">
+                <MetricsChart
+                  title="Neural Memory Performance"
+                  data={chartData}
+                  dataKeys={[
+                    { key: "loss", color: "#FF008C", name: "Loss" },
+                    { key: "grad_norm", color: "#1EE4FF", name: "Gradient Norm" },
+                    { key: "qr_boost", color: "#FF3EE8", name: "QR Boost" }
+                  ]}
+                  isLoading={neuralMemoryDiagnostics.isLoading}
+                  isError={neuralMemoryDiagnostics.isError}
+                  error={neuralMemoryDiagnostics.error}
+                  timeRange={timeWindow}
+                  onTimeRangeChange={setTimeWindow}
+                  summary={[
+                    { 
+                      label: "Avg. Loss", 
+                      value: neuralMemoryDiagnostics.data?.data?.avg_loss?.toFixed(4) || "--", 
+                      color: "text-primary" 
+                    },
+                    { 
+                      label: "Avg. Grad Norm", 
+                      value: neuralMemoryDiagnostics.data?.data?.avg_grad_norm?.toFixed(4) || "--",
+                      color: isGradNormHigh ? "text-destructive" : "text-secondary"
+                    },
+                    { 
+                      label: "Avg. QR Boost", 
+                      value: neuralMemoryDiagnostics.data?.data?.avg_qr_boost?.toFixed(4) || "--",
+                      color: "text-primary" 
+                    }
+                  ]}
+                />
+                
+                {/* Recommendations section */}
+                {neuralMemoryDiagnostics.data?.data?.recommendations?.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle>System Recommendations</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <ul className="list-disc list-inside space-y-2">
+                        {neuralMemoryDiagnostics.data.data.recommendations.map((rec: string, idx: number) => (
+                          <li key={idx} className="text-sm">{rec}</li>
+                        ))}
+                      </ul>
+                    </CardContent>
+                  </Card>
+                )}
+                
+                {/* Alerts section */}
+                {neuralMemoryDiagnostics.data?.data?.alerts?.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle>System Alerts</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        {neuralMemoryDiagnostics.data.data.alerts.map((alert: string, idx: number) => (
+                          <Alert key={idx} variant="destructive">
+                            <AlertDescription>{alert}</AlertDescription>
+                          </Alert>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
             ) : (
               <div className="text-center py-8 text-gray-400">
-                <p>No recommendations available</p>
+                <p>No metrics data available</p>
               </div>
             )}
           </TabsContent>
@@ -49603,6 +50111,7 @@ import { AssemblyTable } from "@/components/dashboard/AssemblyTable";
 import { SystemArchitecture } from "@/components/dashboard/SystemArchitecture";
 import { DiagnosticAlerts } from "@/components/dashboard/DiagnosticAlerts";
 import { CCEChart } from "@/components/dashboard/CCEChart";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { 
   useMemoryCoreHealth,
   useNeuralMemoryHealth,
@@ -49611,10 +50120,11 @@ import {
   useAssemblies,
   useNeuralMemoryDiagnostics,
   useRecentCCEResponses,
-  useAlerts
+  useAlerts,
 } from "@/lib/api";
 import { ServiceStatus } from "@shared/schema";
 import { useFeatures } from "@/contexts/FeaturesContext";
+import { formatDuration } from "@/lib/utils"; // Import the new function
 
 export default function Overview() {
   const [timeRange, setTimeRange] = useState<string>("12h");
@@ -49631,44 +50141,56 @@ export default function Overview() {
   const alerts = useAlerts();
   
   // Prepare data for Memory Core status card
-  const memoryCoreService: ServiceStatus | null = memoryCoreHealth.data?.data ? {
+  const memoryCoreService: ServiceStatus | null = memoryCoreHealth.data?.success && memoryCoreHealth.data.data ? {
     name: "Memory Core",
-    status: memoryCoreHealth.data.data.status === "ok" ? "Healthy" : "Unhealthy",
+    status: ["ok", "healthy"].includes(memoryCoreHealth.data.data.status?.toLowerCase()) ? "Healthy" : "Unhealthy",
     url: "/api/memory-core/health",
-    uptime: memoryCoreHealth.data.data.uptime || "Unknown",
+    // Handle both uptime formats (string or number)
+    uptime: memoryCoreHealth.data.data.uptime || 
+           (memoryCoreHealth.data.data.uptime_seconds ? formatDuration(memoryCoreHealth.data.data.uptime_seconds) : "Unknown"),
     version: memoryCoreHealth.data.data.version || "Unknown"
   } : null;
   
-  const memoryCoreMetrics = memoryCoreStats.data?.data ? {
-    "Total Memories": memoryCoreStats.data.data.core_stats.total_memories.toLocaleString(),
-    "Total Assemblies": memoryCoreStats.data.data.core_stats.total_assemblies.toLocaleString()
+  // Adjust Memory Core metrics access if needed (assuming stats endpoint *does* follow {success, data} structure)
+  const memoryCoreMetrics = memoryCoreStats.data?.success && memoryCoreStats.data.data ? {
+    "Total Memories": memoryCoreStats.data.data.core_stats.total_memories?.toLocaleString() ?? 'N/A',
+    "Total Assemblies": memoryCoreStats.data.data.core_stats.total_assemblies?.toLocaleString() ?? 'N/A'
   } : null;
   
   // Prepare data for Neural Memory status card
-  const neuralMemoryService: ServiceStatus | null = neuralMemoryHealth.data?.data ? {
+  const neuralMemoryService: ServiceStatus | null = neuralMemoryHealth.data?.success && neuralMemoryHealth.data.data ? {
     name: "Neural Memory",
-    status: neuralMemoryHealth.data.data.status === "ok" ? "Healthy" : "Unhealthy",
+    status: ["ok", "healthy"].includes(neuralMemoryHealth.data.data.status?.toLowerCase()) ? "Healthy" : "Unhealthy",
     url: "/api/neural-memory/health",
-    uptime: neuralMemoryHealth.data.data.uptime || "Unknown",
+    // Handle both uptime formats (Neural Memory returns string, Memory Core returns number)
+    uptime: neuralMemoryHealth.data.data.uptime || 
+           (neuralMemoryHealth.data.data.uptime_seconds ? formatDuration(neuralMemoryHealth.data.data.uptime_seconds) : "Unknown"),
     version: neuralMemoryHealth.data.data.version || "Unknown"
   } : null;
   
-  const neuralMemoryMetrics = neuralMemoryDiagnostics.data?.data ? {
-    "Avg. Loss": neuralMemoryDiagnostics.data.data.avg_loss.toFixed(4),
-    "Grad Norm": neuralMemoryDiagnostics.data.data.avg_grad_norm.toFixed(4)
+  // Adjust Neural Memory metrics access (assuming diagnostics endpoint follows {success, data} structure)
+  const neuralMemoryMetrics = neuralMemoryDiagnostics.data?.success && neuralMemoryDiagnostics.data.data ? {
+    "Avg. Loss": neuralMemoryDiagnostics.data.data.avg_loss?.toFixed(4) ?? '--',
+    "Grad Norm": neuralMemoryDiagnostics.data.data.avg_grad_norm?.toFixed(4) ?? '--'
   } : null;
   
   // Prepare data for CCE status card
-  const cceService: ServiceStatus | null = cceHealth.data?.data ? {
+  // Note: CCE health endpoint might return different structure based on logs (e.g., 'detail')
+  // We prioritize the schema structure first.
+  const cceService: ServiceStatus | null = cceHealth.data?.success && cceHealth.data.data ? {
     name: "Context Cascade Engine",
-    status: cceHealth.data.data.status === "ok" ? "Healthy" : "Unhealthy",
+    status: ["ok", "healthy"].includes(cceHealth.data.data.status?.toLowerCase()) ? "Healthy" : "Unhealthy",
     url: "/api/cce/health",
-    uptime: cceHealth.data.data.uptime || "Unknown",
-    version: cceHealth.data.data.version || "Unknown"
+    // Handle both uptime formats (string or number)
+    uptime: cceHealth.data.data.uptime || 
+           (cceHealth.data.data.uptime_seconds ? formatDuration(cceHealth.data.data.uptime_seconds) : "Unknown"),
+    version: cceHealth.data.data.version || "Unknown",
+    details: cceHealth.data.data.error || undefined // Use error field if status is not healthy
   } : null;
   
-  const cceMetrics = recentCCEResponses.data?.data?.recent_responses?.length ? {
-    "Active Variant": recentCCEResponses.data.data.recent_responses[0]?.variant_output?.variant_type || "Unknown"
+  // Adjust CCE metrics access (assuming recent_cce_responses follows {success, data} structure)
+  const cceMetrics = recentCCEResponses.data?.success && recentCCEResponses.data.data?.recent_responses?.length ? {
+    "Active Variant": recentCCEResponses.data.data.recent_responses[0]?.variant_selection?.selected_variant || "Unknown"
   } : null;
   
   // Prepare data for Neural Memory chart
@@ -49704,100 +50226,161 @@ export default function Overview() {
   // Prepare assemblies data
   const recentAssemblies = assemblies.data?.data || [];
   
+  // Check for service-wide errors
+  const hasServiceErrors = memoryCoreHealth.isError || neuralMemoryHealth.isError || cceHealth.isError;
+  
+  // Loading and error handling
+  const isLoading = memoryCoreHealth.isLoading || neuralMemoryHealth.isLoading || cceHealth.isLoading || 
+                  memoryCoreStats.isLoading || assemblies.isLoading || neuralMemoryDiagnostics.isLoading || 
+                  recentCCEResponses.isLoading || alerts.isLoading;
+
+  const hasError = memoryCoreHealth.isError || neuralMemoryHealth.isError || cceHealth.isError || 
+                 memoryCoreStats.isError || assemblies.isError || neuralMemoryDiagnostics.isError || 
+                 recentCCEResponses.isError || alerts.isError;
+
+  const errorMessages = [];
+  if (memoryCoreHealth.error) errorMessages.push(`Memory Core health check failed: ${memoryCoreHealth.error.message}`);
+  if (neuralMemoryHealth.error) errorMessages.push(`Neural Memory health check failed: ${neuralMemoryHealth.error.message}`);
+  if (cceHealth.error) errorMessages.push(`CCE health check failed: ${cceHealth.error.message}`);
+  if (memoryCoreStats.error) errorMessages.push(`Memory Core stats retrieval failed: ${memoryCoreStats.error.message}`);
+  if (assemblies.error) errorMessages.push(`Assemblies retrieval failed: ${assemblies.error.message}`);
+  if (neuralMemoryDiagnostics.error) errorMessages.push(`Neural Memory diagnostics retrieval failed: ${neuralMemoryDiagnostics.error.message}`);
+  if (recentCCEResponses.error) errorMessages.push(`Recent CCE responses retrieval failed: ${recentCCEResponses.error.message}`);
+  if (alerts.error) errorMessages.push(`Alerts retrieval failed: ${alerts.error.message}`);
+
   return (
-    <>
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold text-white mb-1">System Overview</h2>
-        <p className="text-sm text-gray-400">At-a-glance status of all core services</p>
-      </div>
-
-      {/* Status Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        <OverviewCard
-          title="Memory Core"
-          icon="database"
-          service={memoryCoreService}
-          metrics={memoryCoreMetrics}
-          isLoading={memoryCoreHealth.isLoading || memoryCoreStats.isLoading}
-        />
-        
-        <OverviewCard
-          title="Neural Memory"
-          icon="brain"
-          service={neuralMemoryService}
-          metrics={neuralMemoryMetrics}
-          isLoading={neuralMemoryHealth.isLoading || neuralMemoryDiagnostics.isLoading}
-        />
-        
-        <OverviewCard
-          title="Context Cascade Engine"
-          icon="sitemap"
-          service={cceService}
-          metrics={cceMetrics}
-          isLoading={cceHealth.isLoading || recentCCEResponses.isLoading}
-        />
-      </div>
-
-      {/* Performance Metrics */}
-      <div className="mb-8">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <MetricsChart
-            title="Neural Memory - Training Loss"
-            data={neuralMemoryChartData}
-            dataKeys={[
-              { key: "loss", color: "#FF008C", name: "Avg. Loss" },
-              { key: "grad_norm", color: "#1EE4FF", name: "Grad Norm" }
-            ]}
-            isLoading={neuralMemoryDiagnostics.isLoading}
-            isError={neuralMemoryDiagnostics.isError}
-            error={neuralMemoryDiagnostics.error}
-            timeRange={timeRange}
-            onTimeRangeChange={setTimeRange}
-            summary={[
-              { label: "Current", value: neuralMemoryDiagnostics.data?.data?.avg_loss?.toFixed(4) || "--", color: "text-primary" },
-              { label: "Min", value: minLoss, color: "text-secondary" },
-              { label: "Max", value: maxLoss, color: "text-destructive" }
-            ]}
-          />
-          
-          <CCEChart
-            title="CCE - Variant Selection"
-            data={recentCCEResponses.data?.data?.recent_responses || []}
-            isLoading={recentCCEResponses.isLoading}
-            isError={recentCCEResponses.isError}
-            error={recentCCEResponses.error}
-          />
-        </div>
-      </div>
+    <div className="container mx-auto py-4 space-y-6">
+      <h1 className="text-2xl font-bold mb-4">Synthians Cognitive Dashboard</h1>
       
-      {/* Assemblies and Diagnostics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-        <AssemblyTable
-          title="Last Updated Assemblies"
-          assemblies={recentAssemblies.slice(0, 5)}
-          isLoading={assemblies.isLoading}
-          isError={assemblies.isError}
-          error={assemblies.error}
-          showFilters={false}
-        />
-        
-        {explainabilityEnabled && (
-          <DiagnosticAlerts
-            alerts={alerts.data?.data || []}
-            isLoading={alerts.isLoading}
-            isError={alerts.isError}
-            error={alerts.error}
-          />
-        )}
-      </div>
-      
-      {/* System Architecture */}
-      {explainabilityEnabled && (
-        <div className="mb-8">
-          <SystemArchitecture />
-        </div>
+      {hasError && (
+        <Alert variant="destructive" className="mb-4">
+          <AlertTitle>Error retrieving dashboard data</AlertTitle>
+          <AlertDescription>
+            <ul className="list-disc pl-4">
+              {errorMessages.map((msg, idx) => (
+                <li key={idx}>{msg}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
       )}
-    </>
+      
+      {isLoading && (
+        <div className="text-lg text-gray-500 mb-4">Loading...</div>
+      )}
+      
+      {!isLoading && !hasError && (
+        <>
+          <div className="mb-6">
+            <h2 className="text-xl font-semibold text-white mb-1">System Overview</h2>
+            <p className="text-sm text-gray-400">At-a-glance status of all core services</p>
+          </div>
+
+          {/* Service-wide error alert */}
+          {hasServiceErrors && (
+            <Alert variant="destructive" className="mb-6">
+              <AlertTitle>Service Health Check Failed</AlertTitle>
+              <AlertDescription>
+                One or more services are experiencing connectivity issues. Check network connectivity or service logs.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Status Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+            <OverviewCard
+              title="Memory Core"
+              icon="database"
+              service={memoryCoreService}
+              metrics={memoryCoreMetrics}
+              isLoading={memoryCoreHealth.isLoading || memoryCoreStats.isLoading}
+              isError={memoryCoreHealth.isError || memoryCoreStats.isError}
+              error={memoryCoreHealth.error || memoryCoreStats.error}
+            />
+            
+            <OverviewCard
+              title="Neural Memory"
+              icon="brain"
+              service={neuralMemoryService}
+              metrics={neuralMemoryMetrics}
+              isLoading={neuralMemoryHealth.isLoading || neuralMemoryDiagnostics.isLoading}
+              isError={neuralMemoryHealth.isError || neuralMemoryDiagnostics.isError}
+              error={neuralMemoryHealth.error || neuralMemoryDiagnostics.error}
+            />
+            
+            <OverviewCard
+              title="Context Cascade Engine"
+              icon="sitemap"
+              service={cceService}
+              metrics={cceMetrics}
+              isLoading={cceHealth.isLoading || recentCCEResponses.isLoading}
+              isError={cceHealth.isError || recentCCEResponses.isError}
+              error={cceHealth.error || recentCCEResponses.error}
+            />
+          </div>
+
+          {/* Performance Metrics */}
+          <div className="mb-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <MetricsChart
+                title="Neural Memory - Training Loss"
+                data={neuralMemoryChartData}
+                dataKeys={[
+                  { key: "loss", color: "#FF008C", name: "Avg. Loss" },
+                  { key: "grad_norm", color: "#1EE4FF", name: "Grad Norm" }
+                ]}
+                isLoading={neuralMemoryDiagnostics.isLoading}
+                isError={neuralMemoryDiagnostics.isError}
+                error={neuralMemoryDiagnostics.error}
+                timeRange={timeRange}
+                onTimeRangeChange={setTimeRange}
+                summary={[
+                  { label: "Current", value: neuralMemoryDiagnostics.data?.data?.avg_loss?.toFixed(4) || "--", color: "text-primary" },
+                  { label: "Min", value: minLoss, color: "text-secondary" },
+                  { label: "Max", value: maxLoss, color: "text-destructive" }
+                ]}
+              />
+              
+              <CCEChart
+                title="CCE - Variant Selection"
+                data={recentCCEResponses.data?.data?.recent_responses || []}
+                isLoading={recentCCEResponses.isLoading}
+                isError={recentCCEResponses.isError}
+                error={recentCCEResponses.error}
+              />
+            </div>
+          </div>
+          
+          {/* Assemblies and Diagnostics */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+            <AssemblyTable
+              title="Last Updated Assemblies"
+              assemblies={recentAssemblies.slice(0, 5)}
+              isLoading={assemblies.isLoading}
+              isError={assemblies.isError}
+              error={assemblies.error}
+              showFilters={false}
+            />
+            
+            {explainabilityEnabled && (
+              <DiagnosticAlerts
+                alerts={alerts.data?.data || []}
+                isLoading={alerts.isLoading}
+                isError={alerts.isError}
+                error={alerts.error}
+              />
+            )}
+          </div>
+          
+          {/* System Architecture */}
+          {explainabilityEnabled && (
+            <div className="mb-8">
+              <SystemArchitecture />
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -52837,12 +53420,16 @@ export type User = typeof users.$inferSelect;
 
 // ServiceStatus interfaces for health endpoints
 export interface ServiceStatusData {
-  status: string; // 'ok' or 'error'
-  uptime?: string;
+  status: string; // 'healthy' or 'unhealthy'
+  uptime_seconds?: number;
+  uptime?: string; // For Neural Memory which returns uptime as string
   version?: string;
   memory_count?: number;
   assembly_count?: number;
   error?: string | null;
+  timestamp?: string; // For Neural Memory which includes timestamp
+  tensorflow_version?: string; // For Neural Memory
+  neural_memory_initialized?: boolean; // For Neural Memory
 }
 
 export interface ServiceStatusResponse {
@@ -52871,6 +53458,13 @@ export interface MemoryVectorIndexStats {
   is_id_map: boolean;
   drift_warning?: boolean;
   drift_critical?: boolean;
+  // Added fields from Phase 5.8
+  total_vectors?: number;
+  index_size_mb?: number;
+  vector_dimensions?: number;
+  healthy?: boolean;
+  pending_updates?: number;
+  last_update_at?: string;
 }
 
 export interface MemoryAssemblyStats {
@@ -52900,11 +53494,15 @@ export interface MemoryStatsData {
     last_update?: string;
     last_backup?: string;
   };
-  quick_recal_stats?: {
+  quick_recall_stats?: {
     recall_rate?: number;
+    avg_latency_ms?: number;
+    count?: number;
   };
   threshold_stats?: {
     recall_rate?: number;
+    avg_latency_ms?: number;
+    count?: number;
   };
   vector_index_stats: MemoryVectorIndexStats;
   assemblies: MemoryAssemblyStats;
@@ -52953,6 +53551,8 @@ export interface NeuralMemoryDiagnosticsResponse {
 export interface CCEResponse {
   timestamp: string;
   status: 'success' | 'error';
+  input?: string;
+  error?: string;
   variant_output: {
     variant_type: string;
   };
@@ -52961,6 +53561,7 @@ export interface CCEResponse {
     reason: string;
     performance_used: boolean;
   };
+  llm_advice?: string;
   llm_advice_used?: {
     raw_advice?: string;
     adjusted_advice: string;
@@ -52985,6 +53586,7 @@ export interface CCEConfigResponse {
 
 export interface CCEMetricsData {
   recent_responses: CCEResponse[];
+  avg_response_time_ms?: number;
 }
 
 export interface CCEMetricsResponse {
@@ -53036,6 +53638,11 @@ export interface CCEStatusData {
   is_processing: boolean;
   current_variant: string;
   dev_mode: boolean;
+  memory_stats?: {
+    used_mb: number;
+    total_mb: number;
+    percentage: number;
+  };
 }
 
 export interface CCEStatusResponse {
@@ -53390,6 +53997,41 @@ export default defineConfig({
     outDir: path.resolve(__dirname, "dist", "public"),
     emptyOutDir: true,
   },
+  server: {
+    proxy: {
+      // Proxy /api/memory-core requests to Memory Core service
+      // Assuming 'synthians_core' is the service name in docker-compose.yml
+      '/api/memory-core': {
+        target: 'http://synthians_core:5010',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api\/memory-core/, ''),
+      },
+      // Proxy /api/neural-memory requests to Neural Memory service
+      // Assuming 'trainer-server' is the service name in docker-compose.yml
+      '/api/neural-memory': {
+        target: 'http://trainer-server:8001',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api\/neural-memory/, ''),
+      },
+      // Proxy /api/cce requests to Context Cascade Engine service
+      // Assuming 'context-cascade-orchestrator' is the service name in docker-compose.yml
+      '/api/cce': {
+        target: 'http://context-cascade-orchestrator:8002',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api\/cce/, ''),
+      },
+      // Optional: Proxy for alerts if handled by a separate backend part
+      // '/api/alerts': {
+      //   target: 'http://localhost:YOUR_ALERT_PORT', // Adjust if needed
+      //   changeOrigin: true,
+      //   secure: false,
+      //   rewrite: (path) => path.replace(/^\/api\/alerts/, ''),
+      // },
+    },
+  },
 });
 
 ```
@@ -53397,6 +54039,7 @@ export default defineConfig({
 # synthians_memory_core.py
 
 ```py
+
 # synthians_memory_core/synthians_memory_core.py
 
 import time
@@ -53413,6 +54056,7 @@ from datetime import timezone, datetime, timedelta # Ensure datetime is imported
 import copy
 import traceback # Import traceback for detailed error logging
 import math
+import queue # Added for the retry loop exception type
 import aiofiles # For async file operations
 import os # Ensure os is imported
 
@@ -53478,12 +54122,17 @@ class SynthiansMemoryCore:
             'initial_retrieval_threshold': 0.75,
             'vector_index_type': 'Cosine',  # 'L2', 'IP', 'Cosine'
             'persistence_batch_size': 100, # Batch size for persistence loop
-            'check_index_on_retrieval': True, # New config option
-            'index_check_interval': 3600, # New config option
+            'check_index_on_retrieval': True, # New config option - Controls check *during* retrieval
+            'check_index_periodic': True,     # New config option - Controls periodic background check
+            'index_check_interval': 3600, # New config option - Interval for periodic check
             'migrate_to_idmap': True, # New config option
             'enable_assemblies': True, # CRITICAL: Explicitly enable assembly subsystem
             'enable_assembly_pruning': True, # Enable pruning of inactive assemblies
             'enable_assembly_merging': True, # Enable merging of similar assemblies
+            # Retry loop config
+            'vector_retry_interval_seconds': 60,
+            'vector_retry_batch_size': 10,
+            'max_vector_retry_attempts': 5,
             # Phase 5.9: Configuration for explainability and diagnostics
             'ENABLE_EXPLAINABILITY': False, # Default to disabled in production
             'merge_log_max_entries': 1000, # Maximum entries in merge log file
@@ -53494,6 +54143,7 @@ class SynthiansMemoryCore:
         }
 
         logger.info("SynthiansMemoryCore", "Initializing...", self.config)
+        self.start_time = time.time() # Record start time for uptime calculation
 
         # --- Core Components ---
         self.geometry_manager = GeometryManager({
@@ -53501,6 +54151,9 @@ class SynthiansMemoryCore:
             'geometry_type': self.config['geometry'],
             'curvature': self.config['hyperbolic_curvature']
         })
+
+        # Pending vector update queue for failed index operations
+        self._pending_vector_updates = asyncio.Queue()
 
         self.quick_recal = UnifiedQuickRecallCalculator({
             'embedding_dim': self.config['embedding_dim'],
@@ -53522,7 +54175,9 @@ class SynthiansMemoryCore:
             initial_threshold=self.config['initial_retrieval_threshold']
         ) if self.config['adaptive_threshold_enabled'] else None
 
-        self.metadata_synthesizer = MetadataSynthesizer()  # Initialize metadata synthesizer
+        # Pass geometry_manager to MetadataSynthesizer
+        self.metadata_synthesizer = MetadataSynthesizer(geometry_manager=self.geometry_manager)
+
 
         # Retrieve the debug flag from config
         force_skip_idmap = self.config.get('force_skip_idmap_debug', False)
@@ -53544,36 +54199,16 @@ class SynthiansMemoryCore:
             force_skip_idmap_debug=force_skip_idmap # <<< PASS THE FLAG
         )
 
-        # Check if we should migrate the index (if not skipped and not already IDMap)
-        # This check might need adjustment based on how force_skip_idmap interacts
-        # with migrate_to_idmap logic downstream, but for now, keep original migration check.
-        if migrate_to_idmap and not force_skip_idmap: # Only attempt migration if enabled and not skipped
-            # Check if the index object exists and is not None before checking attributes
-            # Also, we need to initialize the index first before checking its type or migrating.
-            # Let's move the migration logic to the initialize method or ensure index is loaded/created first.
-            # For now, commenting out the immediate migration check here.
-            # is_index_id_map = hasattr(self.vector_index.index, 'id_map') if self.vector_index.index else False
-            # if not is_index_id_map:
-            #     logger.info("Attempting to migrate vector index to use IndexIDMap...")
-                # The actual migration should happen after index initialization
-                # success = self.vector_index.migrate_to_idmap() # This call seems misplaced here.
-                # ... logging ...
-            pass # Defer migration check logic
-        elif not migrate_to_idmap:
-             logger.warning("Migrating vector index to use IndexIDMap is disabled by config.")
-        elif force_skip_idmap:
-            logger.warning("IndexIDMap usage is being forcefully skipped by debug flag.")
-
         # --- Memory State ---
         self._memories: Dict[str, MemoryEntry] = {} # In-memory cache/working set
         self.assemblies: Dict[str, MemoryAssembly] = {}
         self.memory_to_assemblies: Dict[str, Set[str]] = {}
         self._dirty_memories: Set[str] = set() # Track modified memory IDs for persistence
-        
+
         # --- Phase 5.9: Activation and Merge Tracking ---
         self._assembly_activation_counts: Dict[str, int] = {}  # Track assembly activation counts
         self._last_activation_persist_time = time.time()  # Track when we last persisted activation stats
-        
+
         # Initialize the MergeTracker for merge event logging
         merge_log_dir = os.path.join(self.config['storage_path'], 'logs')
         merge_log_file = os.path.join(merge_log_dir, 'merge_log.jsonl')
@@ -53595,7 +54230,7 @@ class SynthiansMemoryCore:
         self._lock = asyncio.Lock()
         self._background_tasks: List[asyncio.Task] = []
         self._initialized = False
-        self._shutdown_signal = asyncio.Event()
+        self._shutdown_signal = asyncio.Event() # Use _shutdown_signal consistently
 
         logger.info("SynthiansMemoryCore", "Core components initialized.")
 
@@ -53620,45 +54255,44 @@ class SynthiansMemoryCore:
                 initialized_ok = await self.vector_index.initialize()
                 if not initialized_ok:
                     logger.error("Vector Index initialization failed!")
-                    # Decide if core can run without vector index (likely not)
                     return False  # Fail initialization if vector index fails
                 logger.info("MemoryVectorIndex initialized.")
             else:
                 logger.error("Vector Index component is None during initialization!")
                 return False  # Cannot proceed without vector index
-                
+
             # Initialize the MergeTracker for Phase 5.9
             if hasattr(self, 'merge_tracker') and self.merge_tracker:
                 await self.merge_tracker.initialize()
                 logger.info("MergeTracker initialized.")
-            
+
             # Load assembly activation statistics if available
-            await self._load_activation_stats()
-            
+            await self._load_activation_stats() # FIX: Calling restored method
+            logger.info("Assembly activation stats loaded/initialized.")
+
             # --- PHASE 5.8.A: Vector Index Integrity Check and Auto-Repair ---
             # Mark as initialized temporarily so drift detection can run
             self._initialized = True
-            
+
             # Set auto-repair based on config or environment variable
             auto_repair = os.environ.get("ENABLE_INDEX_AUTO_REPAIR", "true").lower() in ("true", "1")
-            
+
             logger.info("SynthiansMemoryCore", f"Checking vector index integrity with auto-repair={auto_repair}...")
             drift_result = await self.detect_and_repair_index_drift(auto_repair=auto_repair)
-            
+
             if not drift_result.get("success", False):
                 if auto_repair:
                     # Auto-repair failed
                     logger.error(
-                        "SynthiansMemoryCore", 
+                        "SynthiansMemoryCore",
                         "Vector index auto-repair failed during initialization",
                         {"details": drift_result}
                     )
-                    # We'll continue despite the error - system may still function with partial data
                     logger.warning("SynthiansMemoryCore", "Continuing with initialization despite failed repair")
                 else:
                     # Drift detected but auto-repair disabled
                     logger.warning(
-                        "SynthiansMemoryCore", 
+                        "SynthiansMemoryCore",
                         "Vector index drift detected during initialization but auto-repair disabled",
                         {"details": drift_result}
                     )
@@ -53669,48 +54303,56 @@ class SynthiansMemoryCore:
                 else:
                     logger.info("SynthiansMemoryCore", "Vector index successfully repaired during initialization")
             # --- END PHASE 5.8.A ---
-            
-            # TODO: Load memories from persistence into cache if needed?
-            # (Currently done on demand by get_memory_by_id_async)
+
+            # Load initial memories into cache if needed?
+            # Consider loading a subset based on recency or importance if full load is too much
+            # await self.load_initial_memories() # Example call
 
             # Check if we should start background tasks
             if self.config.get('start_background_tasks_on_init', True):
-                # Start background tasks for persistence, decay, and vector index drift repair
-                # Create the persistence loop task
+                # Start background tasks
                 persistence_task = asyncio.create_task(self._persistence_loop())
                 persistence_task.set_name("persistence_loop")
                 self._background_tasks.append(persistence_task)
                 logger.info("SynthiansMemoryCore", "Started persistence background loop")
-                
-                # Create the decay/pruning loop task
+
                 decay_task = asyncio.create_task(self._decay_and_pruning_loop())
                 decay_task.set_name("decay_and_pruning_loop")
                 self._background_tasks.append(decay_task)
                 logger.info("SynthiansMemoryCore", "Started decay/pruning background loop")
-                
-                # Create the auto-repair drift loop task
+
                 drift_task = asyncio.create_task(self._auto_repair_drift_loop())
                 drift_task.set_name("auto_repair_drift_loop")
                 self._background_tasks.append(drift_task)
                 logger.info("SynthiansMemoryCore", "Started auto-repair drift background loop")
+
+                retry_task = asyncio.create_task(self._vector_update_retry_loop())
+                retry_task.set_name("vector_update_retry_loop")
+                self._background_tasks.append(retry_task)
+                logger.info("SynthiansMemoryCore", "Started vector update retry background loop")
             else:
                 logger.warning("SynthiansMemoryCore", "Background tasks disabled due to start_background_tasks_on_init=False")
-            
-            # Confirm initialization is complete (might have been set to True earlier)
+
+            # Confirm initialization is complete
             self._initialized = True
             logger.info("SynthiansMemoryCore initialization complete.")
             return True
 
+        except AttributeError as ae: # Catch the specific error
+             logger.error(f"AttributeError during SynthiansMemoryCore initialization: {ae}", exc_info=True)
+             self._initialized = False
+             if hasattr(self, 'vector_index') and self.vector_index: self.vector_index.state = "ERROR"
+             return False
         except Exception as e:
             logger.error(f"Critical error during SynthiansMemoryCore initialization: {e}", exc_info=True)
-            self._initialized = False  # Ensure it's marked as not initialized
+            self._initialized = False
             if hasattr(self, 'vector_index') and self.vector_index:
-                 self.vector_index.state = "ERROR"  # Mark index state explicitly
+                 self.vector_index.state = "ERROR"
             return False
 
     async def cleanup(self):
         """Clean up resources before shutdown.
-        
+
         Part of Phase 5.8 stability improvements to ensure proper resource
         management during application shutdown.
         """
@@ -53724,7 +54366,7 @@ class SynthiansMemoryCore:
                 else:
                     # Fallback to our own persistence method
                     await self._persist_dirty_items()
-            
+
             # --- PHASE 5.8.B: Vector Index Persistence on Cleanup ---
             # Save vector index as part of cleanup
             if hasattr(self, 'vector_index') and self.vector_index is not None:
@@ -53738,7 +54380,7 @@ class SynthiansMemoryCore:
                 except Exception as e:
                     logger.error("SynthiansMemoryCore", f"Error saving vector index during cleanup: {str(e)}", exc_info=True)
             # --- END PHASE 5.8.B ---
-            
+
             # Cancel any pending tasks
             if hasattr(self, '_background_tasks'):
                 for task in self._background_tasks:
@@ -53746,7 +54388,7 @@ class SynthiansMemoryCore:
                         task_name = task.get_name() if hasattr(task, 'get_name') else 'unnamed'
                         logger.info("SynthiansMemoryCore", f"Cancelling background task {task_name}")
                         task.cancel()
-            
+
             logger.info("SynthiansMemoryCore", "Cleanup completed successfully")
             return True
         except Exception as e:
@@ -53829,7 +54471,7 @@ class SynthiansMemoryCore:
         # Reset state
         self._initialized = False
         # Reset shutdown signal for potential re-initialization
-        self._shutdown_signal = asyncio.Event()
+        self._shutdown_signal = asyncio.Event() # Recreate the event
         logger.info("SynthiansMemoryCore", "Shutdown sequence complete.")
 
     # --- Core Memory Operations ---
@@ -53942,11 +54584,11 @@ class SynthiansMemoryCore:
             self._memories[memory.id] = memory
             self._dirty_memories.add(memory.id) # Mark for persistence
             logger.info("SynthiansMemoryCore", f"Stored new memory {memory.id}", {"quickrecal": quickrecal_score})
-        
+
         # 7.1 CRITICAL: Persist to disk and verify success
         logger.info("SynthiansMemoryCore", f"[PERSIST_CHECK] Saving memory {memory.id} to disk...")
         save_ok = await self.persistence.save_memory(memory)
-        
+
         if not save_ok:
             logger.error("SynthiansMemoryCore", f"CRITICAL PERSISTENCE FAILURE for memory {memory.id}. Memory not saved to disk!")
             # Remove from cache since persistence failed
@@ -53962,7 +54604,7 @@ class SynthiansMemoryCore:
         # Check if assemblies are actually enabled in the configuration
         assemblies_enabled = self.config.get('enable_assemblies', True)
         logger.info(f"[ASSEMBLY_DEBUG] Assembly processing enabled: {assemblies_enabled}")
-        
+
         if assemblies_enabled:
             # Trace the assembly update call
             try:
@@ -53971,7 +54613,7 @@ class SynthiansMemoryCore:
                 # Verify assemblies were updated by logging count
                 logger.info(f"[ASSEMBLY_DEBUG] Current assembly count: {len(self.assemblies)}")
             except Exception as e:
-                logger.error(f"[ASSEMBLY_DEBUG] Error in _update_assemblies: {str(e)}")
+                logger.error(f"[ASSEMBLY_DEBUG] Error in _update_assemblies: {str(e)}", exc_info=True)
         else:
             logger.warning(f"[ASSEMBLY_DEBUG] Skipping assembly update - assemblies disabled in config")
 
@@ -53980,14 +54622,25 @@ class SynthiansMemoryCore:
             # Only proceed with vector indexing if persistence succeeded
             if not save_ok:
                 logger.error("SynthiansMemoryCore", f"Skipping vector index add for {memory.id} due to persistence failure")
-                return None
-                
-            logger.debug("Adding memory to vector index...")
-            added_to_index = await self.vector_index.add_async(memory.id, normalized_embedding)
-            if not added_to_index:
-                logger.error(f"Failed to add memory {memory.id} to vector index.")
-                return None
-        logger.debug("SynthiansMemoryCore", f"Added memory {memory.id} to vector index")
+                # No need to return None here, memory *was* processed, just index failed initially
+            else:
+                logger.debug(f"Adding memory {memory.id} to vector index...")
+                added_to_index = await self.vector_index.add_async(memory.id, normalized_embedding)
+                if not added_to_index:
+                     # Queue failed operation for retry
+                    await self._pending_vector_updates.put({
+                        "operation": "add",
+                        "id": memory.id,
+                        "embedding": normalized_embedding.tolist(), # Store as list
+                        "is_assembly": False,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "retry_count": 0
+                    })
+                    logger.error(f"Failed to add memory {memory.id} to vector index. Queued for retry.")
+                    # Continue even if initial add fails, rely on retry loop
+                else:
+                    logger.debug(f"SynthiansMemoryCore", f"Added memory {memory.id} to vector index")
+
 
         proc_time = (time.time() - start_time) * 1000
         logger.debug("SynthiansMemoryCore", f"Processed new memory {memory.id}", {"time_ms": proc_time})
@@ -54008,36 +54661,33 @@ class SynthiansMemoryCore:
         """
         if not self._initialized: await self.initialize()
         start_time = time.time()
-        
+
         # --- PHASE 5.8 - Check index integrity on each retrieval (optional) ---
-        if self.config.get('check_index_on_retrieval', True):  # Default to True for safety
+        if self.config.get('check_index_on_retrieval', True):
             try:
-                is_consistent, diagnostics = await self.vector_index.verify_index_integrity()
+                # FIX: Await the coroutine
+                is_consistent, diagnostics = await self.vector_index.check_index_integrity()
                 if not is_consistent:
-                    drift_amount = abs(diagnostics.get("faiss_count", 0) - diagnostics.get("id_mapping_count", 0))
+                    drift_amount = abs(diagnostics.get("faiss_count", 0) - diagnostics.get("mapping_count", 0))
                     logger.warning(
-                        "SynthiansMemoryCore", 
+                        "SynthiansMemoryCore",
                         "Vector index inconsistency detected during retrieval - ABORTING RETRIEVAL",
-                        {"faiss_count": diagnostics.get("faiss_count"), 
-                         "id_mapping_count": diagnostics.get("id_mapping_count"),
+                        {"faiss_count": diagnostics.get("faiss_count"),
+                         "id_mapping_count": diagnostics.get("mapping_count"),
                          "drift_amount": drift_amount}
                     )
-                    # Schedule an auto-repair (non-blocking)
                     repair_task = asyncio.create_task(self.detect_and_repair_index_drift(auto_repair=True))
-                    
-                    # CRITICAL: Abort retrieval completely to avoid poisoned results
                     return {
-                        "success": False, 
-                        "memories": [], 
+                        "success": False, "memories": [],
                         "error": f"Vector index drift detected ({drift_amount} entries). Auto-repair scheduled."
                     }
             except Exception as e:
-                logger.error("SynthiansMemoryCore", f"Error checking index integrity: {str(e)}")
+                logger.error("SynthiansMemoryCore", f"Error checking index integrity during retrieval: {str(e)}", exc_info=True)
         # --- END PHASE 5.8 ---
-        
+
         # Add diagnostic logging for parameter passing
         logger.debug(f"[retrieve_memories] START retrieve_memories: Received threshold argument = {threshold} (type: {type(threshold)})")
-        
+
         query_embedding = None
         try:
             # Generate embedding for the query if necessary
@@ -54047,7 +54697,7 @@ class SynthiansMemoryCore:
                      logger.error("SynthiansMemoryCore", "Failed to generate query embedding.")
                      return {"success": False, "memories": [], "error": "Failed to generate query embedding"}
                 logger.debug("SynthiansMemoryCore", "Query embedding generated")
-                
+
                 # Validate and normalize query embedding first
                 query_embedding = self.geometry_manager._validate_vector(query_embedding, "Query Embedding")
                 if query_embedding is None:
@@ -54061,36 +54711,37 @@ class SynthiansMemoryCore:
                 current_threshold = self.threshold_calibrator.get_current_threshold()
                 logger.debug(f"Using calibrated threshold: {current_threshold:.4f}")
             elif current_threshold is None:
-                # TEMPORARILY set threshold to 0.0 for debugging the '0 memories' issue
-                # Will revert to self.config['initial_retrieval_threshold'] once issue is resolved
-                current_threshold = 0.0  # DEBUG: Lowered to 0.0 to see if any memories pass
-                logger.warning(f"[DEBUG MODE] Using debug threshold of {current_threshold} to diagnose '0 memories' issue")
+                current_threshold = self.config['initial_retrieval_threshold']
+                logger.debug(f"Using default initial threshold: {current_threshold:.4f}")
             else:
                 logger.debug(f"Using explicit threshold from request: {current_threshold:.4f}")
 
             # Make vector index integrity check configurable and periodic
-            check_index = self.config.get('check_index_on_retrieval', False)
+            check_index_periodic = self.config.get('check_index_periodic', True)
             current_time = time.time()
             last_check_time = getattr(self, '_last_index_check_time', 0)
-            check_interval = self.config.get('index_check_interval', 3600)  # Default: check once per hour
-            
-            if check_index or (current_time - last_check_time > check_interval):
-                is_consistent, diagnostics = await self.vector_index.verify_index_integrity()
-                self._last_index_check_time = current_time
-                logger.debug(f"Vector index status - Consistent: {is_consistent}, FAISS: {diagnostics.get('faiss_count')}, Mapping: {diagnostics.get('mapping_count')}")
-                
-                # Warn if inconsistency detected
-                if not is_consistent:
-                    logger.warning(f"Vector index inconsistency detected! FAISS count: {diagnostics.get('faiss_count')}, Mapping count: {diagnostics.get('mapping_count')}")
+            check_interval = self.config.get('index_check_interval', 3600)
+
+            # FIX: Use check_index_integrity (async)
+            if check_index_periodic and not self.config.get('check_index_on_retrieval', True) and (current_time - last_check_time > check_interval):
+                try:
+                    # FIX: Await the coroutine
+                    is_consistent, diagnostics = await self.vector_index.check_index_integrity()
+                    self._last_index_check_time = current_time
+                    logger.debug(f"Periodic Vector index status - Consistent: {is_consistent}, FAISS: {diagnostics.get('faiss_count')}, Mapping: {diagnostics.get('mapping_count')}")
+                    if not is_consistent:
+                        logger.warning(f"Periodic Vector index inconsistency detected! FAISS count: {diagnostics.get('faiss_count')}, Mapping count: {diagnostics.get('mapping_count')}")
+                except Exception as periodic_check_err:
+                     logger.error(f"Error during periodic index check: {periodic_check_err}", exc_info=True)
 
             # Perform the retrieval using candidate generation
             candidates, assembly_activation_scores = await self._get_candidate_memories(query_embedding, top_k * 5) # Get more candidates for filtering
-            
+
             # ENHANCED: Log the raw candidates with more detail
             logger.info(f"[FAISS Results] Raw candidates count: {len(candidates)}")
             candidate_ids = [c.get('id') for c in candidates[:10]]
             logger.debug(f"First 10 candidate IDs: {candidate_ids}")
-            
+
             # If no candidates found, return empty results
             if not candidates:
                 logger.debug(f"No candidate memories found.")
@@ -54102,135 +54753,88 @@ class SynthiansMemoryCore:
                 try:
                     activated_assemblies_with_scores = await self._activate_assemblies(query_embedding)
                     logger.debug(f"Activated {len(activated_assemblies_with_scores)} assemblies for retrieval operation")
-                    
+
                     # Create a lookup dictionary for quick access to activation scores
                     assembly_activation_scores = {asm.assembly_id: score for asm, score in activated_assemblies_with_scores}
                 except Exception as e:
-                    logger.error(f"Error during assembly activation: {e}")
-            
+                    logger.error(f"Error during assembly activation: {e}", exc_info=True)
+
             # Step 3: Score and sort candidate memories
             scored_candidates = []
             if query_embedding is not None:
                 logger.debug(f"Query embedding dimension: {query_embedding.shape}")
                 logger.warning(f"CRITICAL DEBUG: Found {len(candidates)} raw candidates - first ID: {candidates[0].get('id') if candidates else 'None'}")
-                
+
             for memory_dict in candidates:
                 memory_embedding_list = memory_dict.get("embedding")
                 if memory_embedding_list is not None and query_embedding is not None:
                     try:
                         # Re-convert list to numpy array
                         memory_embedding_np = np.array(memory_embedding_list, dtype=np.float32)
-                        
+
                         # ENHANCED: Add detailed validation logging
                         mem_id = memory_dict.get('id')
                         logger.debug(f"Processing memory {mem_id} for similarity calculation")
-                        
+
                         # ADDED: Explicit validation of memory embedding
                         memory_embedding_np = self.geometry_manager._validate_vector(memory_embedding_np, f"Memory {mem_id}")
                         if memory_embedding_np is None:
                             logger.warning(f"Memory {mem_id} embedding validation failed. Using zero vector.")
                             memory_embedding_np = np.zeros(self.config['embedding_dim'], dtype=np.float32)
-                        
+
                         # ADDED: Explicit alignment of vectors before similarity calculation
                         before_shapes = f"Before alignment - Query: {query_embedding.shape}, Memory: {memory_embedding_np.shape}"
                         logger.debug(before_shapes)
-                        
+
                         aligned_query, aligned_memory = self.geometry_manager._align_vectors(query_embedding, memory_embedding_np)
-                        
+
                         after_shapes = f"After alignment - Query: {aligned_query.shape}, Memory: {aligned_memory.shape}"
                         logger.debug(after_shapes)
-                        
+
                         # Check for NaN or Inf values in aligned vectors
                         if np.isnan(aligned_memory).any() or np.isinf(aligned_memory).any():
                             logger.warning(f"Memory {mem_id} aligned embedding contains NaN/Inf values. Replacing with zeros.")
                             aligned_memory = np.nan_to_num(aligned_memory, nan=0.0, posinf=0.0, neginf=0.0)
-                        
+
                         # Use GeometryManager to calculate similarity with aligned vectors
                         similarity = self.geometry_manager.calculate_similarity(aligned_query, aligned_memory)
                         logger.debug(f"  Calculated similarity: {similarity:.4f}")
-                        
+
                         memory_dict["similarity"] = similarity
-                        memory_dict["relevance_score"] = similarity
-                        
-                        # ADDED: Calculate and apply assembly boost (Phase 5.8)
+                        memory_dict["relevance_score"] = similarity # Start with base similarity
+
+                        # Apply assembly boost
                         assembly_boost = 0.0
                         max_activation = 0.0
                         boost_reason = "none"
-                        mem_id = memory_dict.get("id")
                         associated_assembly_ids = set()
-                        
-                        # Get the assemblies associated with this memory
-                        async with self._lock:  # Need lock to access memory_to_assemblies safely
-                            mem_id_lower = mem_id.lower() if isinstance(mem_id, str) else mem_id
+                        async with self._lock:
                             associated_assembly_ids = self.memory_to_assemblies.get(mem_id, set())
-                            # Try lowercase version if not found
-                            if not associated_assembly_ids and mem_id != mem_id_lower:
-                                associated_assembly_ids = self.memory_to_assemblies.get(mem_id_lower, set())
-                                if associated_assembly_ids:
-                                    logger.debug(f"Found assemblies using lowercase memory ID: {mem_id_lower}")
-                        
-                        # Enhanced debug logging
-                        logger.debug(f"Memory {mem_id} is associated with assemblies: {associated_assembly_ids}")
-                        logger.debug(f"Available activation scores: {assembly_activation_scores}")
-                        
-                        # Use the pre-calculated assembly activation scores from earlier
-                        # Remove incorrect line that tried to redefine assembly_activation_scores locally
-                        
+
                         if associated_assembly_ids:
-                            # Find max activation score from the activated assemblies
                             active_assemblies = []
                             for asm_id in associated_assembly_ids:
                                 activation = assembly_activation_scores.get(asm_id, 0.0)
-                                logger.debug(f"Assembly {asm_id} activation: {activation}")
-                                if activation > 0:
-                                    # Check if assembly is synchronized with vector index
-                                    if asm_id in self.assemblies and self.assemblies[asm_id].vector_index_updated_at:
-                                        active_assemblies.append((asm_id, activation))
-                                        logger.debug(f"Adding assembly {asm_id} with activation {activation} to active_assemblies")
-                                    else:
-                                        logger.debug(f"Assembly {asm_id} not synchronized, skipping boost")
-                            
+                                if activation > 0 and asm_id in self.assemblies and self.assemblies[asm_id].vector_index_updated_at:
+                                    active_assemblies.append((asm_id, activation))
+
                             if active_assemblies:
-                                # Find max activation among synchronized assemblies
                                 max_asm_id, max_activation = max(active_assemblies, key=lambda x: x[1], default=("", 0.0))
-                                logger.debug(f"Max activation for memory {mem_id}: {max_activation} from assembly {max_asm_id}")
-                                
-                                # Calculate boost based on configuration
-                                boost_mode = self.config.get('assembly_boost_mode', 'linear')
                                 boost_factor = self.config.get('assembly_boost_factor', 0.2)
-                                
-                                if boost_mode == "linear":
-                                    assembly_boost = max_activation * boost_factor
-                                    boost_reason = f"linear(act:{max_activation:.2f}*f:{boost_factor:.2f})"
-                                elif boost_mode == "multiplicative":
-                                    assembly_boost = similarity * max_activation * boost_factor
-                                    boost_reason = f"multiplicative(sim:{similarity:.2f}*act:{max_activation:.2f}*f:{boost_factor:.2f})"
-                                else:
-                                    # Default additive behavior
-                                    assembly_boost = max_activation * boost_factor
-                                    boost_reason = f"default(act:{max_activation:.2f}*f:{boost_factor:.2f})"
-                                
-                                # Clamp boost to prevent exceeding 1.0 total score
-                                assembly_boost = min(assembly_boost, max(0.0, 1.0 - similarity))
-                                
-                                # Update relevance score with boost
+                                assembly_boost = max_activation * boost_factor # Simple linear boost for now
+                                boost_reason = f"linear(act:{max_activation:.2f}*f:{boost_factor:.2f})"
+                                assembly_boost = min(assembly_boost, max(0.0, 1.0 - similarity)) # Clamp
                                 memory_dict["relevance_score"] = min(1.0, similarity + assembly_boost)
-                                logger.debug(f"Memory {mem_id}: Applied assembly boost {assembly_boost:.4f} from assembly {max_asm_id} (activation: {max_activation:.4f})")
-                            else:
-                                boost_reason = "no_activated_assemblies"
-                        else:
-                            boost_reason = "no_associated_assemblies"
-                        
-                        # Store boost information in the memory dictionary
+                                logger.debug(f"Memory {mem_id}: Applied assembly boost {assembly_boost:.4f}")
+                            else: boost_reason = "no_activated_sync_assemblies"
+                        else: boost_reason = "no_associated_assemblies"
+
                         memory_dict["boost_info"] = {
-                            "base_similarity": float(similarity),
-                            "assembly_boost": float(assembly_boost),
-                            "max_activation": float(max_activation),
-                            "boost_reason": boost_reason
+                            "base_similarity": float(similarity), "assembly_boost": float(assembly_boost),
+                            "max_activation": float(max_activation), "boost_reason": boost_reason
                         }
-                        
                         scored_candidates.append(memory_dict)
-                        logger.debug(f"Memory {mem_id}: similarity={similarity:.4f}")
+
                     except Exception as e:
                         # Log the specific exception
                         logger.warning(f"Error calculating similarity for memory {memory_dict.get('id')}: {str(e)}")
@@ -54245,122 +54849,87 @@ class SynthiansMemoryCore:
                         logger.warning(f"Memory {memory_dict.get('id')} is missing embedding")
                     if query_embedding is None:
                         logger.warning("Query embedding is None")
-                    
+
                     # Even if embedding is missing, include in results with zero similarity
                     memory_dict["similarity"] = 0.0
                     memory_dict["relevance_score"] = 0.0
                     scored_candidates.append(memory_dict)
-            
-            # Sort by similarity score (descending)
-            sorted_candidates = sorted(scored_candidates, key=lambda x: x.get("similarity", 0.0), reverse=True)
+
+            # Sort by relevance score (which includes assembly boost)
+            sorted_candidates = sorted(scored_candidates, key=lambda x: x.get("relevance_score", 0.0), reverse=True)
 
             # ENHANCED: Log all candidates with their scores before filtering
             logger.info(f"[Similarity Results] Found {len(sorted_candidates)} scored candidates before threshold filtering")
             logger.debug(f"Threshold filtering: Using threshold {current_threshold:.4f}")
-            
-            similarities = [(c.get('id'), c.get('similarity', 0.0)) for c in sorted_candidates[:10]]
-            logger.debug(f"Top 10 similarities: {similarities}")
-            
-            # Apply threshold filtering
-            logger.info(f"[Threshold Filtering] Starting threshold filtering with {len(sorted_candidates)} candidates")
+
+            relevance_scores = [(c.get('id'), c.get('relevance_score', 0.0)) for c in sorted_candidates[:10]]
+            logger.debug(f"Top 10 relevance scores (with boost): {relevance_scores}")
+
+            # Apply threshold filtering based on *base similarity* (before boost)
+            logger.info(f"[Threshold Filtering] Starting threshold filtering with {len(sorted_candidates)} candidates using base similarity")
             filtered_candidates = []
             candidates_filtered_out = []
-            
-            threshold_to_use = threshold if threshold is not None else self.threshold_calibrator.current_threshold if self.threshold_calibrator else self.config.get('initial_retrieval_threshold', 0.75)
-            
+
             for c in sorted_candidates:
-                similarity = c.get("similarity", 0.0)
+                base_similarity = c.get("similarity", 0.0) # Use base similarity for threshold
                 mem_id = c.get("id", "unknown")
-                if similarity >= threshold_to_use:
+                if base_similarity >= current_threshold:
                     filtered_candidates.append(c)
-                    logger.debug(f"Memory {mem_id} PASSED threshold with similarity {similarity:.4f} >= {threshold_to_use:.4f}")
+                    logger.debug(f"Memory {mem_id} PASSED threshold with base similarity {base_similarity:.4f} >= {current_threshold:.4f}")
                 else:
-                    candidates_filtered_out.append((mem_id, similarity))
-                    logger.debug(f"Memory {mem_id} FILTERED OUT with similarity {similarity:.4f} < {threshold_to_use:.4f}")
-            
+                    candidates_filtered_out.append((mem_id, base_similarity))
+                    logger.debug(f"Memory {mem_id} FILTERED OUT with base similarity {base_similarity:.4f} < {current_threshold:.4f}")
+
             # Log summary of threshold filtering results
             logger.info(f"[Threshold Filtering] Kept {len(filtered_candidates)} candidates, filtered out {len(candidates_filtered_out)} candidates")
-            
+
             # Log the first few filtered out candidates for debugging
             if candidates_filtered_out:
-                logger.debug(f"First 5 filtered out (ID, similarity): {candidates_filtered_out[:5]}")
+                logger.debug(f"First 5 filtered out (ID, base_similarity): {candidates_filtered_out[:5]}")
 
-            # Step 4: Apply emotional gating if requested
+            # Step 4: Apply emotional gating
             if user_emotion and self.emotional_gating:
-                logger.info(f"[Emotional Gating] Applying with user_emotion: {user_emotion}, candidates: {len(filtered_candidates)}") 
+                logger.info(f"[Emotional Gating] Applying with user_emotion: {user_emotion}, candidates: {len(filtered_candidates)}")
                 try:
                     filtered_candidates = await self.emotional_gating.gate_memories_by_context(
                         filtered_candidates, user_emotion_context=user_emotion
                     )
                     logger.info(f"[Emotional Gating] Result: {len(filtered_candidates)} candidates")
                 except Exception as e:
-                    logger.error(f"Error during emotional gating: {e}")
-                    # Continue with original filtered candidates if gating fails
-            
-            # Step 5: Apply metadata filtering if requested
+                    logger.error(f"Error during emotional gating: {e}", exc_info=True)
+
+            # Step 5: Apply metadata filtering
             if metadata_filter:
-                logger.info(f"[Metadata Filtering] Applying filter: {metadata_filter}") 
+                logger.info(f"[Metadata Filtering] Applying filter: {metadata_filter}")
                 pre_filter_count = len(filtered_candidates)
-                
                 filtered_candidates = self._filter_by_metadata(filtered_candidates, metadata_filter)
-                
-                post_filter_count = len(filtered_candidates)
-                filter_diff = pre_filter_count - post_filter_count
-                logger.info(f"[Metadata Filtering] Result: {post_filter_count} candidates remain ({filter_diff} removed)") 
-                
-                # Log the metadata of the remaining candidates
-                if filtered_candidates:
-                    # Get the first candidate's metadata keys for reference
-                    first_meta_keys = list(filtered_candidates[0].get("metadata", {}).keys())[:5]  # First 5 keys
-                    logger.debug(f"[Post-Metadata Filtering] First candidate metadata keys: {first_meta_keys}")
-            else:
-                logger.debug("[Metadata Filtering] Skipped (no metadata filter provided)")
+                filter_diff = pre_filter_count - len(filtered_candidates)
+                logger.info(f"[Metadata Filtering] Result: {len(filtered_candidates)} candidates remain ({filter_diff} removed)")
 
-            # *** ENHANCED POST-FILTERING LOG ***
-            logger.info(f"[Final Filtering] Total filtered candidates: {len(filtered_candidates)}")
-            if filtered_candidates:
-                final_top_ids = [c.get('id') for c in filtered_candidates[:5]]
-                logger.info(f"[Final Filtering] Top 5 candidate IDs after all filtering: {final_top_ids}")
-            else:
-                logger.warning("[Final Filtering] No candidates remain after all filtering steps")
+            # Re-sort final candidates by relevance_score after all filtering
+            final_sorted_candidates = sorted(filtered_candidates, key=lambda x: x.get("relevance_score", 0.0), reverse=True)
+            logger.info(f"[Final Filtering] Total candidates after all filters: {len(final_sorted_candidates)}")
 
-            # Return top_k results (simplify slicing)
-            if len(filtered_candidates) >= top_k:
-                final_memories = filtered_candidates[:top_k]
-                logger.info(f"[Results] Returning {top_k} memories out of {len(filtered_candidates)} filtered candidates")
-            else:
-                final_memories = filtered_candidates.copy() # Take all if fewer than top_k, and make a copy to be safe
-                logger.info(f"[Results] Returning all {len(final_memories)} filtered candidates (fewer than requested {top_k})")
+            # Select top_k
+            final_memories = final_sorted_candidates[:top_k]
+            logger.info(f"[Results] Returning {len(final_memories)} memories (requested {top_k})")
 
-            # *** ENHANCED FINAL CHECK ***
-            if final_memories:
-                final_ids = [mem.get('id') for mem in final_memories]
-                final_scores = [mem.get('similarity', 0.0) for mem in final_memories]
-                logger.info(f"[Results] Final memory IDs: {final_ids}")
-                logger.info(f"[Results] Final similarity scores: {final_scores}")
-            else:
-                logger.warning("[Results] No memories to return!")
-
+            # Final log
             retrieval_time = (time.time() - start_time) * 1000
-            # Log the length again, just before returning
             logger.info("SynthiansMemoryCore", f"Retrieved {len(final_memories)} memories", {
-                "top_k": top_k, "threshold": current_threshold, "user_emotion": user_emotion, "time_ms": retrieval_time
+                "top_k": top_k, "threshold": current_threshold, "user_emotion": user_emotion, "time_ms": f"{retrieval_time:.2f}"
             })
-            
-            # DIRECT DEBUG: Log full response payload length
             response = {"success": True, "memories": final_memories, "error": None}
             logger.info(f"[Response] Payload stats: success={response['success']}, memories_count={len(response['memories'])}")
-            
             return response
 
         except Exception as e:
-            logger.error("SynthiansMemoryCore", f"Error in retrieve_memories: {str(e)}")
-            logger.error(traceback.format_exc())
+            logger.error("SynthiansMemoryCore", f"Error in retrieve_memories: {str(e)}", exc_info=True)
             return {"success": False, "memories": [], "error": str(e)}
 
     async def _get_candidate_memories(self, query_embedding: Optional[np.ndarray], limit: int) -> Tuple[List[Dict[str, Any]], Dict[str, float]]:
         """Retrieve candidate memories using assembly activation and direct vector search.
-        
+
         Returns:
             Tuple containing:
             - List of candidate memories as dictionaries
@@ -54370,415 +54939,251 @@ class SynthiansMemoryCore:
             logger.warning("SynthiansMemoryCore", "_get_candidate_memories called with no query embedding.")
             return [], {}
 
-        # Log the query embedding stats for debugging
-        if query_embedding is not None:
-            logger.debug(f"[Candidate Gen] Query embedding shape: {query_embedding.shape}, sum: {np.sum(query_embedding):.4f}, mean: {np.mean(query_embedding):.4f}")
-            if np.isnan(query_embedding).any() or np.isinf(query_embedding).any():
-                logger.warning(f"[Candidate Gen] WARNING: Query embedding contains NaN/Inf values!")
+        logger.debug(f"[Candidate Gen] Query embedding shape: {query_embedding.shape}")
 
         assembly_candidates = set()
         direct_candidates = set()
-        
-        # Create a dictionary to track assembly activation scores
-        assembly_activation_scores = {}
+        assembly_activation_scores = {} # Store scores here
 
         # 1. Assembly Activation
         activated_assemblies = await self._activate_assemblies(query_embedding)
-        
-        # Enhanced logging to debug assembly activation
         logger.debug(f"[Candidate Gen] Got {len(activated_assemblies)} activated assemblies from _activate_assemblies")
+
         for assembly, score in activated_assemblies:
-            logger.debug(f"[Candidate Gen] Activated assembly: {assembly.assembly_id if hasattr(assembly, 'assembly_id') else 'unknown'}, score={score:.4f}")
-        
-        # Store activation scores in the dictionary
-        for assembly, activation_score in activated_assemblies:
-            # Use assembly_id attribute instead of id
-            if hasattr(assembly, 'assembly_id'):  # Safety check
-                assembly_activation_scores[assembly.assembly_id] = activation_score
-                logger.debug(f"Stored activation score {activation_score} for assembly {assembly.assembly_id}")
-        
-        # Use top 5 assemblies for candidate generation
-        for assembly, activation_score in activated_assemblies[:5]:
-            if activation_score > 0.01:  # Lower activation threshold to ensure assemblies are used
-                # Enhanced debug to inspect assembly.memories
-                if hasattr(assembly, 'memories'):
-                    logger.debug(f"[Candidate Gen] Assembly {assembly.assembly_id} memories type: {type(assembly.memories)}, content: {assembly.memories}")
-                    
-                    # Ensure memories is a set of memory IDs
-                    if isinstance(assembly.memories, set) and assembly.memories:
-                        assembly_candidates.update(assembly.memories)
-                        logger.debug(f"[Candidate Gen] Added {len(assembly.memories)} memories from assembly {assembly.assembly_id}: {list(assembly.memories)}")
-                    elif isinstance(assembly.memories, list) and assembly.memories:
-                        # Handle case where memories might be a list instead of a set
-                        memory_set = set(assembly.memories)
-                        assembly_candidates.update(memory_set)
-                        logger.debug(f"[Candidate Gen] Added {len(memory_set)} memories from assembly {assembly.assembly_id} (converted from list): {list(memory_set)}")
-                    else:
-                        logger.warning(f"[Candidate Gen] Assembly {assembly.assembly_id} memories attribute exists but is empty or not a valid collection: {assembly.memories}")
-                else:
-                    logger.warning(f"[Candidate Gen] Assembly {assembly.assembly_id if hasattr(assembly, 'assembly_id') else 'unknown'} has no memories attribute")
-        
-        logger.info(f"[Candidate Gen] Found {len(assembly_candidates)} candidates from assembly activation: {list(assembly_candidates)[:10]}")
+            asm_id = assembly.assembly_id
+            assembly_activation_scores[asm_id] = score # Populate the score dict
+            if hasattr(assembly, 'memories') and isinstance(assembly.memories, (set, list)):
+                assembly_candidates.update(assembly.memories)
+                logger.debug(f"[Candidate Gen] Added {len(assembly.memories)} memories from activated assembly {asm_id}")
 
-        # 2. Direct Vector Search using FAISS Index
-        search_threshold = 0.0  # Set to zero to get all candidates regardless of similarity
+        logger.info(f"[Candidate Gen] Found {len(assembly_candidates)} candidates from assembly activation.")
+
+        # 2. Direct Vector Search
         faiss_count = self.vector_index.count()
-        id_mapping_count = len(self.vector_index.id_to_index) if hasattr(self.vector_index, 'id_to_index') else 0
-        
-        logger.info(f"[Candidate Gen] Vector index stats: FAISS count={faiss_count}, ID mapping count={id_mapping_count}")
-        
-        # Check if index is empty
-        if faiss_count == 0:
-            logger.warning(f"[Candidate Gen] FAISS index is empty! Check memory creation and indexing.")
-        
-        search_results = await self.vector_index.search_async(query_embedding, k=min(limit, max(faiss_count, 1)))
-        
-        logger.info(f"[Candidate Gen] FAISS search returned {len(search_results)} results")
-        
-        # Log detailed search results
-        if search_results:
-            top_results = search_results[:5] if len(search_results) > 5 else search_results
-            result_details = [f"({mem_id}, {sim:.4f})" for mem_id, sim in top_results]
-            logger.info(f"[Candidate Gen] Top FAISS results: {', '.join(result_details)}")
+        logger.info(f"[Candidate Gen] Vector index stats: FAISS count={faiss_count}")
+
+        if faiss_count > 0:
+            # Determine K for search, ensuring it's not more than available vectors
+            k_search = min(faiss_count, limit * 2) # Search more initially
+            search_results = await self.vector_index.search_async(query_embedding, k=k_search)
+            logger.info(f"[Candidate Gen] FAISS search (k={k_search}) returned {len(search_results)} results")
+            for memory_id, similarity in search_results:
+                direct_candidates.add(memory_id)
         else:
-            logger.warning(f"[Candidate Gen] FAISS search returned ZERO results! Check indexing.")
-            
-        for memory_id, similarity in search_results:
-            direct_candidates.add(memory_id)
+            logger.warning(f"[Candidate Gen] FAISS index is empty! Skipping direct search.")
 
-        # 3. Get the most recently added memories as fallback
-        # This ensures we always have candidates even if similarity search fails
-        async with self._lock:
-            # Get IDs of memories in our persistence index
-            memory_ids = list(self.persistence.memory_index.keys())
-            logger.info(f"[Candidate Gen] Persistence index has {len(memory_ids)} memories total")
-            
-        # Take the most recent ones if we have any
-        if memory_ids and len(direct_candidates) == 0:
-            # Sort by creation time if available, otherwise just take the last few
-            recent_candidates = set(memory_ids[-min(5, len(memory_ids)):])  # Get the last 5 memories
-            logger.info(f"[Candidate Gen] Added {len(recent_candidates)} recent memories as fallback candidates: {list(recent_candidates)}")
-            direct_candidates.update(recent_candidates)
-        elif len(memory_ids) == 0:
-            logger.warning(f"[Candidate Gen] Persistence index is EMPTY! No memories have been created.")
+        # 3. Fallback Recent Memories (If needed)
+        recent_fallback_count = self.config.get('recent_fallback_count', 5)
+        combined_candidate_count = len(assembly_candidates.union(direct_candidates))
+        if recent_fallback_count > 0 and combined_candidate_count < limit:
+            async with self._lock:
+                memory_ids_from_persistence = list(self.persistence.memory_index.keys())
+            if memory_ids_from_persistence:
+                needed_count = limit - combined_candidate_count
+                recent_candidates_set = set(memory_ids_from_persistence[-min(needed_count + len(assembly_candidates), len(memory_ids_from_persistence)):]) # Get enough recent ones
+                new_fallback_candidates = recent_candidates_set - assembly_candidates - direct_candidates
+                if new_fallback_candidates:
+                    logger.info(f"[Candidate Gen] Added {len(new_fallback_candidates)} recent memories as fallback.")
+                    direct_candidates.update(new_fallback_candidates)
 
-        # Combine candidates
+        # Combine all candidate IDs
         all_candidate_ids = assembly_candidates.union(direct_candidates)
-        logger.info(f"[Candidate Gen] Found {len(all_candidate_ids)} total candidate IDs: {list(all_candidate_ids)[:10]}")
+        logger.info(f"[Candidate Gen] Found {len(all_candidate_ids)} total unique candidate IDs.")
 
-        # Fetch MemoryEntry objects as dictionaries
+        # Fetch MemoryEntry/Assembly objects as dictionaries
         final_candidates = []
-        for mem_id in all_candidate_ids:
-            # Log before attempting to load
-            logger.debug(f"[Candidate Gen] Attempting to load memory with ID: {mem_id}")
-            # Use our new async method to get the memory from disk if not in cache
-            memory = await self.get_memory_by_id_async(mem_id)
-            if memory:
-                # Make sure to convert memory to dict before returning
-                mem_dict = memory.to_dict()
+        for mem_id in list(all_candidate_ids)[:limit*3]: # Limit number loaded initially
+            logger.debug(f"[Candidate Gen] Attempting to load candidate ID: {mem_id}")
+            memory_obj = await self.get_memory_by_id_async(mem_id)
+            if memory_obj:
+                mem_dict = memory_obj.to_dict()
                 final_candidates.append(mem_dict)
-                logger.debug(f"[Candidate Gen] Successfully loaded memory {mem_id}: content_len={len(mem_dict.get('content', ''))}, embedding_shape={memory.embedding.shape if memory.embedding is not None else 'None'}")
             else:
-                logger.warning(f"[Candidate Gen] Failed to load memory {mem_id}! Check persistence storage.")
+                # Also check if it's an assembly ID that wasn't loaded via activation
+                if mem_id.startswith("asm:"):
+                     asm_id_only = mem_id[4:]
+                     assembly_obj = await self._load_assembly(asm_id_only) # Use helper
+                     if assembly_obj:
+                          # We don't usually return assemblies directly, but log that we found it
+                          logger.debug(f"[Candidate Gen] Found assembly {asm_id_only} corresponding to candidate ID {mem_id}, but not adding to final candidates.")
+                     else:
+                         logger.warning(f"[Candidate Gen] Failed to load potential assembly {asm_id_only}!")
+                else:
+                    logger.warning(f"[Candidate Gen] Failed to load memory {mem_id}!")
 
-        # Always ensure we return at least some candidates for scoring/filtering
-        if len(final_candidates) == 0:
-            logger.warning("[Candidate Gen] No candidates found after loading! This will result in empty retrieval results.")
-            # Log vector index statistics to help debug
-            is_consistent, diagnostics = await self.vector_index.verify_index_integrity()
-            logger.warning(f"[Candidate Gen] Vector index diagnostics: consistent={is_consistent}, {diagnostics}")
-            
-            # Check storage files
-            import os
-            if hasattr(self.persistence, 'storage_path'):
-                storage_files = os.listdir(self.persistence.storage_path) if os.path.exists(self.persistence.storage_path) else []
-                logger.warning(f"[Candidate Gen] Storage directory contents: {storage_files[:10]}")
-                
-                # Check for FAISS index file
-                faiss_path = os.path.join(self.persistence.storage_path, 'faiss_index.bin')
-                mapping_path = os.path.join(self.persistence.storage_path, 'id_to_index_mapping.json')
-                logger.warning(f"[Candidate Gen] FAISS index file exists: {os.path.exists(faiss_path)}")
-                logger.warning(f"[Candidate Gen] ID mapping file exists: {os.path.exists(mapping_path)}")
+        logger.info(f"[Candidate Gen] Returning {len(final_candidates)} final candidate dictionaries for scoring/filtering.")
+        return final_candidates, assembly_activation_scores
 
-        logger.info(f"[Candidate Gen] Returning {len(final_candidates)} final candidates for scoring/filtering")
-        # Return both the candidates and activation scores
-        return final_candidates[:limit * 2], assembly_activation_scores
 
     async def _activate_assemblies(self, query_embedding: np.ndarray) -> List[Tuple[MemoryAssembly, float]]:
         """Find and activate assemblies based on query similarity.
-        
+
         Returns:
             List of (assembly, similarity) tuples for activated assemblies.
         """
-        # --- CRITICAL PHASE 5.8 FIX START ---
-        # Flag to determine if we should enforce strict assembly validation
-        # During testing, setting this to False will help ensure assemblies are formed
-        strict_validation = self.config.get('strict_assembly_validation', False)  # Default to lenient mode for testing
-        # --- CRITICAL PHASE 5.8 FIX END ---
-        
         if not self.vector_index:
             logger.warning("Cannot activate assemblies: vector_index is None")
             return []
-        
+
         if query_embedding is None:
             logger.warning("Cannot activate assemblies: query_embedding is None")
             return []
-            
-        # Add detailed debug logging for the query embedding
-        logger.debug(f"[Assembly Debug] Query embedding shape: {query_embedding.shape}, norm: {np.linalg.norm(query_embedding)}")
-        logger.debug(f"[Assembly Debug] Query embedding snippet: {query_embedding[:5]}")
-        
-        # Fix: Use dictionary access instead of attribute access
+
+        logger.debug(f"[Assembly Debug] Query embedding shape: {query_embedding.shape}")
+
         now = datetime.now(timezone.utc)
-        # --- CRITICAL PHASE 5.8 FIX START ---
-        # Use a much higher drift limit during test/emergency mode
-        drift_limit = self.config.get('max_allowed_drift_seconds', 86400)  # Default 24 hours if not specified (much more lenient)
-        assembly_threshold = self.config.get('assembly_threshold', 0.3)  # Use extremely low threshold
-        logger.info(f"[Assembly Debug] Assembly activation threshold: {assembly_threshold}, drift_limit: {drift_limit}s, strict_validation: {strict_validation}")
-        # --- CRITICAL PHASE 5.8 FIX END ---
-            
-        # Search the vector index for assembly vectors
+        drift_limit = self.config.get('max_allowed_drift_seconds', 86400)
+        assembly_threshold = self.config.get('assembly_threshold', 0.85)
+        logger.info(f"[Assembly Debug] Assembly activation threshold: {assembly_threshold}, drift_limit: {drift_limit}s")
+
         prefix = "asm:"
         logger.debug(f"[Assembly Debug] Searching for assemblies with prefix: {prefix}")
-        
+
         try:
-            # Logging the current state of vector index to verify assemblies were added
             stats = self.vector_index.get_stats()
             logger.debug(f"[Assembly Debug] Vector index stats: {stats}")
-            
-            # IMPORTANT: Search all vectors (no id_prefix parameter) and filter results afterward
+
+            faiss_count = self.vector_index.count()
+            if faiss_count == 0:
+                 logger.warning("[Assembly Debug] FAISS index empty, cannot search for assemblies.")
+                 return []
+
             search_results = await self.vector_index.search_async(
-                query_embedding, 
-                k=200  # Larger value to ensure we find all relevant assemblies after filtering
+                query_embedding,
+                k=min(faiss_count, 200) # Search up to 200, avoid error if empty
             )
-            
             logger.info(f"[Assembly Debug] FAISS search returned {len(search_results)} results")
-            
-            # Log detailed search results
-            if search_results:
-                top_results = search_results[:5] if len(search_results) > 5 else search_results
-                result_details = [f"({mem_id}, {sim:.4f})" for mem_id, sim in top_results]
-                logger.info(f"[Assembly Debug] Top FAISS results: {', '.join(result_details)}")
-            else:
-                logger.warning(f"[Assembly Debug] FAISS search returned ZERO results! Check indexing.")
-                
-            # Post-search filtering for assemblies (ids starting with prefix)
+
+            # Filter for assembly IDs
             asm_results = [(memory_id, similarity) for memory_id, similarity in search_results if memory_id.startswith(prefix)]
             logger.debug(f"[Assembly Debug] Found {len(asm_results)} potential assemblies after filtering")
-            
-            # Debug: show available assemblies
-            logger.debug(f"[ACTIVATE_DBG] Available assemblies in dictionary: {list(self.assemblies.keys())}")
 
             activated_assemblies = []
             max_activation_time = now - timedelta(seconds=drift_limit)
 
             for asm_id_with_prefix, similarity in asm_results:
-                logger.debug(f"[ACTIVATE_DBG] Examining result: ID='{asm_id_with_prefix}', Sim={similarity:.4f}") # Log raw result
+                if similarity < assembly_threshold: continue # Skip below threshold
 
-                # Extract the actual assembly ID (remove "asm:" prefix)
-                assembly_id = asm_id_with_prefix[4:] if asm_id_with_prefix.startswith("asm:") else asm_id_with_prefix
-                logger.debug(f"[ACTIVATE_DBG] Extracted assembly_id: '{assembly_id}'") # Log extracted ID
+                assembly_id = asm_id_with_prefix[4:]
+                assembly = await self._load_assembly(assembly_id) # Use helper
 
-                # Check if assembly exists in the core's dictionary
-                assembly_present_in_dict = assembly_id in self.assemblies
-                logger.debug(f"[ACTIVATE_DBG] Assembly '{assembly_id}' present in self.assemblies? {assembly_present_in_dict}") # Log lookup result
-
-                # --- CRITICAL PHASE 5.8 FIX START ---
-                # Skip results below threshold only in strict mode, otherwise use extremely low threshold
-                local_assembly_threshold = assembly_threshold
-                if similarity < local_assembly_threshold:
-                    logger.debug(f"[ACTIVATE_DBG] Skipping '{assembly_id}': similarity {similarity:.6f} below threshold {local_assembly_threshold}")
-                    continue
-                # --- CRITICAL PHASE 5.8 FIX END ---
-
-                # Get assembly from self.assemblies instead of persistence.get_assembly 
-                assembly = self.assemblies.get(assembly_id)
                 if assembly is None:
-                    logger.warning(f"[ACTIVATE_DBG] Assembly '{assembly_id}' lookup returned None. Skipping.")
+                    logger.warning(f"[ACTIVATE_DBG] Assembly '{assembly_id}' not found after lookup. Skipping.")
                     continue
 
-                logger.debug(f"[ACTIVATE_DBG] Found assembly object: Name='{assembly.name}', ID='{assembly.assembly_id}'")
-
-                # --- CRITICAL PHASE 5.8 FIX START ---
-                # Make synchronization checks optional for testing
-                enable_sync = self.config.get('enable_assembly_sync', not strict_validation)  # Default to True if not specified
-                
-                if not enable_sync or not strict_validation:
-                    logger.debug(f"[ACTIVATE_DBG] Sync check disabled for '{assembly_id}' or non-strict validation.")
-                    # Synchronization is disabled or non-strict, treat all assemblies as valid
-                    activated_assemblies.append((assembly, similarity))
-                    logger.debug(f"[ACTIVATE_DBG] Activated '{assembly_id}' (Sync Relaxed for Testing)")
-                    continue
-                # --- CRITICAL PHASE 5.8 FIX END ---
-
-                # Check synchronization status
+                # Check synchronization status and drift
                 updated_at = assembly.vector_index_updated_at
-                logger.debug(f"[ACTIVATE_DBG] Checking sync for '{assembly_id}': updated_at={updated_at}") # Log timestamp
-                # --- CRITICAL PHASE 5.8 FIX START ---
-                # Only skip on missing updated_at in strict mode
-                if strict_validation and assembly.vector_index_updated_at is None:
-                    logger.debug(f"[ACTIVATE_DBG] Skipping '{assembly_id}': updated_at is None.")
+                if updated_at is None:
+                    logger.debug(f"[ACTIVATE_DBG] Skipping '{assembly_id}': Not yet synchronized.")
                     continue
-                # --- CRITICAL PHASE 5.8 FIX END ---
 
-                # Check for embedding drift
-                if updated_at is not None:  # Safeguard against None
-                    drift_seconds = (now - updated_at).total_seconds()
-                    logger.debug(f"[ACTIVATE_DBG] Checking drift for '{assembly_id}': drift={drift_seconds:.2f}s, limit={drift_limit}s") # Log drift
-                    # --- CRITICAL PHASE 5.8 FIX START ---
-                    # Only enforce drift limit in strict mode
-                    if strict_validation and assembly.vector_index_updated_at < max_activation_time:
-                        logger.debug(f"[ACTIVATE_DBG] Skipping '{assembly_id}': Drift limit exceeded.")
-                        continue
-                    # --- CRITICAL PHASE 5.8 FIX END ---
+                drift_seconds = (now - updated_at).total_seconds()
+                if updated_at < max_activation_time:
+                    logger.debug(f"[ACTIVATE_DBG] Skipping '{assembly_id}': Drift limit exceeded ({drift_seconds:.2f}s > {drift_limit}s).")
+                    continue
 
-                # All checks passed, add to activated assemblies
-                logger.info(f"[ACTIVATE_DBG] ACTIVATE SUCCESS for '{assembly_id}'")
+                # All checks passed
+                logger.info(f"[ACTIVATE_DBG] ACTIVATE SUCCESS for '{assembly_id}' with similarity {similarity:.4f}")
                 activated_assemblies.append((assembly, similarity))
-                logger.debug(f"Activated assembly {assembly_id} with similarity {similarity}")
-                
-            # Log final activation count
+                if hasattr(assembly, 'activate'): assembly.activate(similarity)
+                await self._track_assembly_activation(assembly_id)
+
             logger.debug(f"[Assembly Debug] Total activated assemblies: {len(activated_assemblies)}")
-            
-            # Return the list of (assembly, similarity) tuples
             return activated_assemblies
-                
+
         except Exception as e:
             logger.error(f"Error during assembly activation: {str(e)}", exc_info=True)
             return []
 
+
     async def _update_assemblies(self, memory: MemoryEntry):
         """Find or create assemblies for a new memory."""
-        # --- Pre-checks ---
-        if not self.config.get('enable_assemblies', True): # Check global enable flag
-            logger.debug(f"Skipping assembly update for {memory.id}: Assemblies disabled in config.")
-            return
-
-        if memory.embedding is None:
-            logger.debug(f"Skipping assembly update for {memory.id}: No embedding.")
-            return
-
-        validated_mem_emb = self.geometry_manager._validate_vector(memory.embedding, f"Memory {memory.id} Emb")
-        if validated_mem_emb is None:
-            logger.warning(f"Skipping assembly update for {memory.id}: Invalid embedding.")
-            return
-        # --- End Pre-checks ---
+        if not self.config.get('enable_assemblies', True): return
+        if memory.embedding is None: return
+        validated_mem_emb = self.geometry_manager._validate_vector(memory.embedding)
+        if validated_mem_emb is None: return
 
         suitable_assemblies = []
-        best_similarity = 0.0
+        best_similarity = -1.0 # Initialize to allow any positive similarity
         best_assembly_id = None
         assembly_threshold = self.config.get('assembly_threshold', 0.85)
-        
-        # Debug: Log config and thresholds
-        logger.info(f"[CONFIG_DEBUG] Assembly config: enable_assemblies={self.config.get('enable_assemblies', True)}, "
-                   f"threshold={assembly_threshold:.4f}, memory_id={memory.id}")
 
-        async with self._lock: # Access shared self.assemblies
-             for assembly_id, assembly in self.assemblies.items():
-                  similarity = assembly.get_similarity(validated_mem_emb)  # Use validated embedding
-                  
-                  # Debug: Log similarity comparisons
-                  logger.info(f"[SIMILARITY_DEBUG] Memory {memory.id} similarity to assembly {assembly_id}: {similarity:.4f}, threshold={assembly_threshold:.4f}")
-                  
+        logger.info(f"[Assembly Update] Processing memory {memory.id}")
+
+        async with self._lock:
+             assemblies_copy = dict(self.assemblies) # Iterate over a copy
+
+        for assembly_id, assembly in assemblies_copy.items():
+             if assembly.composite_embedding is None: continue # Skip if no embedding
+             try:
+                  similarity = assembly.get_similarity(validated_mem_emb)
+                  logger.debug(f"[Assembly Update] Sim({memory.id} -> {assembly_id}): {similarity:.4f} (Thresh: {assembly_threshold:.4f})")
                   if similarity >= assembly_threshold:
                        suitable_assemblies.append((assembly_id, similarity))
                   if similarity > best_similarity:
                        best_similarity = similarity
                        best_assembly_id = assembly_id
+             except Exception as sim_err:
+                  logger.error(f"Error calculating similarity between {memory.id} and {assembly_id}: {sim_err}", exc_info=True)
 
-        # Sort suitable assemblies by similarity
+
         suitable_assemblies.sort(key=lambda x: x[1], reverse=True)
-
-        # Add memory to best matching assemblies (up to max limit)
         added_count = 0
-        max_assemblies = self.config.get('max_assemblies_per_memory', 3)
-        
-        # Debug: Log assembly matching outcome
-        logger.info(f"[ASSEMBLY_DEBUG] Memory {memory.id}: found {len(suitable_assemblies)} suitable assemblies, "
-                   f"best_similarity={best_similarity:.4f}, best_id={best_assembly_id}")
-        
-        # --- Process existing suitable assemblies ---
-        for assembly_id, similarity in suitable_assemblies[:max_assemblies]:
-            async with self._lock: # Lock needed for assembly modification
+        max_assemblies_per = self.config.get('max_assemblies_per_memory', 3)
+
+        # Add to existing assemblies
+        for assembly_id, similarity in suitable_assemblies[:max_assemblies_per]:
+            async with self._lock:
                 if assembly_id in self.assemblies:
                     assembly = self.assemblies[assembly_id]
-                    logger.debug(f"Attempting add memory {memory.id} to EXISTING assembly {assembly_id} (Sim: {similarity:.4f})")
-                    # --- Log add_memory result ---
-                    add_success = assembly.add_memory(memory, validated_mem_emb)
-                    logger.info(f"Result of assembly.add_memory for {assembly_id}: {add_success}")
-                    # --- End Log ---
-                    if add_success:
+                    if assembly.add_memory(memory, validated_mem_emb):
                         added_count += 1
                         self._dirty_memories.add(assembly.assembly_id)
-                        if memory.id not in self.memory_to_assemblies: 
-                            self.memory_to_assemblies[memory.id] = set()
-                        self.memory_to_assemblies[memory.id].add(assembly_id)
-
-                        # --- SAVE & INDEX ASSEMBLY (EXISTING) ---
-                        logger.info(f"[PERSIST_CHECK][Existing Assembly] Saving assembly {assembly_id}")
-                        save_ok = await self.persistence.save_assembly(assembly)
-                        if save_ok:
-                            logger.info(f"[PERSIST_CHECK][Existing Assembly] Saved assembly {assembly_id} successfully.")
-                            # Try to index immediately after save
-                            await self._index_assembly_embedding(assembly) # <<< CALL HELPER HERE
-                        else:
-                            logger.error(f"[PERSIST_CHECK][Existing Assembly] FAILED to save assembly {assembly_id}.")
+                        self.memory_to_assemblies.setdefault(memory.id, set()).add(assembly_id)
+                        logger.info(f"[Assembly Update] Added {memory.id} to EXISTING assembly {assembly_id} (Sim: {similarity:.4f})")
+                        # Schedule save/index outside loop
                     else:
-                        logger.warning(f"Failed to add memory {memory.id} to assembly {assembly_id} (add_memory returned False).")
-                else:
-                    logger.warning(f"Assembly {assembly_id} disappeared before update lock.")
+                        logger.warning(f"Failed add_memory {memory.id} to {assembly_id}")
+                else: logger.warning(f"Assembly {assembly_id} disappeared before lock")
 
-        # --- Create new assembly if needed ---
+        # Create new assembly if needed
         create_threshold = assembly_threshold * 0.5
-        logger.debug(f"Checking new assembly condition: added_count={added_count}, best_sim={best_similarity:.4f}, create_thresh={create_threshold:.4f}")
-        if added_count == 0 and (len(self.assemblies) == 0 or best_similarity > create_threshold):
-            async with self._lock: # Lock for creating/modifying shared state
-                 # Log the state *before* the lock and creation check
-                 logger.info(f"[ASSEMBLY_DEBUG] State before create check: added_count={added_count}, len(self.assemblies)={len(self.assemblies)}, best_sim={best_similarity:.4f}")
-                 
-                 assembly_exists = any(asm_id in self.assemblies for asm_id in self.memory_to_assemblies.get(memory.id, set()))
-                 if not assembly_exists:
-                     logger.info(f"[ASSEMBLY_DEBUG] Creating NEW assembly seeded by memory {memory.id}")
+        if added_count == 0 and (best_similarity < create_threshold or len(assemblies_copy) == 0):
+            async with self._lock:
+                 if not any(asm_id in self.assemblies for asm_id in self.memory_to_assemblies.get(memory.id, set())): # Double check under lock
+                     logger.info(f"[Assembly Update] Creating NEW assembly for memory {memory.id} (Best sim: {best_similarity:.4f})")
                      new_assembly = MemoryAssembly(geometry_manager=self.geometry_manager, name=f"Assembly around {memory.id[:8]}")
-                     add_success = new_assembly.add_memory(memory, validated_mem_emb)
-                     logger.info(f"Result of new_assembly.add_memory: {add_success}")
-                     if add_success:
-                          # Check composite embedding was actually created
-                          if new_assembly.composite_embedding is None:
-                              logger.error(f"New assembly {new_assembly.assembly_id} failed to create composite embedding!")
-                              # Don't proceed with this failed assembly
-                          else:
+                     if new_assembly.add_memory(memory, validated_mem_emb):
+                          if new_assembly.composite_embedding is not None:
                               self.assemblies[new_assembly.assembly_id] = new_assembly
-                              # Debug: Log current assemblies state
-                              logger.info(f"[ASSEMBLY_DEBUG] Added NEW assembly {new_assembly.assembly_id} to self.assemblies (Current count: {len(self.assemblies)})")
-                              
                               self._dirty_memories.add(new_assembly.assembly_id)
-                              if memory.id not in self.memory_to_assemblies: 
-                                  self.memory_to_assemblies[memory.id] = set()
-                              self.memory_to_assemblies[memory.id].add(new_assembly.assembly_id)
+                              self.memory_to_assemblies.setdefault(memory.id, set()).add(new_assembly.assembly_id)
                               added_count += 1
+                              logger.info(f"[Assembly Update] Created and added {memory.id} to NEW assembly {new_assembly.assembly_id}")
+                              # Schedule save/index outside loop
+                          else: logger.error(f"New assembly {new_assembly.assembly_id} missing composite embedding!")
+                     else: logger.error(f"Failed to add seeding memory {memory.id} to new assembly")
 
-                              # --- SAVE & INDEX ASSEMBLY (NEW) ---
-                              logger.info(f"[PERSIST_CHECK][New Assembly] Saving assembly {new_assembly.assembly_id}")
-                              save_ok = await self.persistence.save_assembly(new_assembly)
-                              if save_ok:
-                                  logger.info(f"[PERSIST_CHECK][New Assembly] Saved assembly {new_assembly.assembly_id} successfully.")
-                                  await self._index_assembly_embedding(new_assembly) # <<< CALL HELPER HERE
-                              else:
-                                  logger.error(f"[PERSIST_CHECK][New Assembly] FAILED to save assembly {new_assembly.assembly_id}.")
-                                  # Clean up failed creation
-                                  self.assemblies.pop(new_assembly.assembly_id, None)
-                                  self._dirty_memories.discard(new_assembly.assembly_id)
-                                  if memory.id in self.memory_to_assemblies:
-                                      self.memory_to_assemblies[memory.id].discard(new_assembly.assembly_id)
-                                  added_count -= 1
-                     else:
-                         logger.error(f"Failed to add seeding memory {memory.id} to new assembly (add_memory failed).")
+        # Save and index updated/new assemblies outside the main loops
+        assemblies_to_process = set()
+        if memory.id in self.memory_to_assemblies:
+             async with self._lock: # Get associated assembly IDs safely
+                  assemblies_to_process.update(self.memory_to_assemblies.get(memory.id, set()))
 
-        if added_count > 0:
-             logger.info(f"Memory {memory.id} was added to {added_count} assembly/assemblies.")
-        else:
-             logger.info(f"Memory {memory.id} was not added to any assembly (similarity/creation thresholds not met or add_memory failed).")
+        for assembly_id in assemblies_to_process:
+             async with self._lock: # Lock to get assembly object
+                  assembly_obj = self.assemblies.get(assembly_id)
+             if assembly_obj and assembly_id in self._dirty_memories: # Check if still dirty
+                  logger.info(f"[Assembly Update] Saving & Indexing updated assembly {assembly_id}")
+                  save_ok = await self.persistence.save_assembly(assembly_obj)
+                  if save_ok:
+                      await self._index_assembly_embedding(assembly_obj)
+                  else:
+                      logger.error(f"[Assembly Update] FAILED to save assembly {assembly_id}.")
+
+
+        logger.info(f"[Assembly Update] Memory {memory.id} processed. Added to {added_count} assemblies.")
+
 
     async def detect_contradictions(self, threshold: float = 0.75) -> List[Dict[str, Any]]:
         """Detect potential causal contradictions using embeddings."""
@@ -54788,7 +55193,7 @@ class SynthiansMemoryCore:
 
         # Basic Keyword Filtering for Causal Statements (Can be improved with NLP)
         causal_keywords = ["causes", "caused", "leads to", "results in", "effect of", "affects"]
-        causal_memories = [m for m in memories_list if m.embedding is not None and any(k in m.content.lower() for k in causal_keywords)]
+        causal_memories = [m for m in memories_list if m.embedding is not None and hasattr(m, 'content') and any(k in m.content.lower() for k in causal_keywords)]
 
         if len(causal_memories) < 2: return []
 
@@ -54839,20 +55244,19 @@ class SynthiansMemoryCore:
     # --- Background Tasks ---
 
     async def _persistence_loop(self):
-        """Periodically persist changed memories."""
-        logger.info("SynthiansMemoryCore","Persistence loop started.")
+        """Periodically persist changed memories and assemblies."""
+        logger.info("SynthiansMemoryCore", "Persistence loop started.")
         persist_interval = self.config.get('persistence_interval', 60.0)
         try:
             while not self._shutdown_signal.is_set():
                 # Wait for the configured interval OR the shutdown signal
                 try:
-                    # Wait for the configured interval OR the shutdown signal
                     await asyncio.wait_for(
                         self._shutdown_signal.wait(),
                         timeout=persist_interval
                     )
                     # If wait() finished without timeout, it means signal was set
-                    logger.info("SynthiansMemoryCore","Persistence loop: Shutdown signal received during wait.")
+                    logger.info("SynthiansMemoryCore", "Persistence loop: Shutdown signal received during wait.")
                     break # Exit loop if shutdown signal is set
                 except asyncio.TimeoutError:
                     # Timeout occurred, time to persist
@@ -54866,77 +55270,78 @@ class SynthiansMemoryCore:
                             logger.debug("SynthiansMemoryCore", "Attempting periodic vector index save...")
                             try:
                                 # Add a timeout for safety
-                                save_success = await self.vector_index.save_async()
+                                save_success = await asyncio.wait_for(self.vector_index.save_async(), timeout=10.0)
                                 if save_success:
                                     logger.debug("SynthiansMemoryCore", "Periodic vector index save successful.")
                                 else:
                                     logger.warning("SynthiansMemoryCore", "Periodic vector index save failed.")
+                            except asyncio.TimeoutError:
+                                 logger.warning("SynthiansMemoryCore", "Timeout during periodic vector index save.")
                             except Exception as e:
-                                logger.error("SynthiansMemoryCore: Error during periodic vector index save: {e}", exc_info=True)
+                                logger.error(f"SynthiansMemoryCore: Error during periodic vector index save: {e}", exc_info=True)
                         # --- END PHASE 5.8.A ---
                 except asyncio.CancelledError:
-                    logger.info("SynthiansMemoryCore","Persistence loop cancelled during wait.")
+                    logger.info("SynthiansMemoryCore", "Persistence loop cancelled during wait.")
                     break # Exit loop if cancelled
         except asyncio.CancelledError:
-            logger.info("SynthiansMemoryCore","Persistence loop received cancel signal.")
+            logger.info("SynthiansMemoryCore", "Persistence loop received cancel signal.")
         except Exception as e:
-            logger.error("SynthiansMemoryCore","Persistence loop error", {"error": str(e)}, exc_info=True)
+            logger.error("SynthiansMemoryCore", "Persistence loop error", {"error": str(e)}, exc_info=True)
         finally:
-            # Remove final save attempt to avoid 'no running event loop' errors
-            # The main shutdown method should handle any critical final saves
-            logger.info("SynthiansMemoryCore","Persistence loop stopped.")
+            logger.info("SynthiansMemoryCore", "Persistence loop stopped.")
+
 
     async def _decay_and_pruning_loop(self):
         """Periodically decay memory scores and prune/merge assemblies."""
         logger.info("SynthiansMemoryCore","Decay/Pruning/Merging loop started.") # Updated log
         decay_interval = self.config.get('decay_interval', 3600.0)
         prune_interval = self.config.get('prune_check_interval', 10.0)
-        # --- ADD Merge Interval Check (Use same as prune for now) ---
         merge_interval = self.config.get('merge_check_interval', prune_interval) # Reuse prune interval
         check_interval = min(decay_interval, prune_interval, merge_interval, 5.0) # Check frequently
-        # ---
         last_decay_time = time.monotonic()
         last_prune_time = time.monotonic()
-        # --- ADD Last Merge Time ---
         last_merge_time = time.monotonic()
-        # ---
+
         try:
             while not self._shutdown_signal.is_set():
                 # Wait for the configured interval
                 try:
-                    # Wait for the configured interval OR the shutdown signal
                     await asyncio.wait_for(
                         self._shutdown_signal.wait(),
                         timeout=check_interval
                     )
-                    # If wait() finished without timeout, it means signal was set
-                    break
+                    break # Shutdown signal received
                 except asyncio.TimeoutError:
                     now = time.monotonic()
-                    if not self._shutdown_signal.is_set():
-                        # Decay Check
-                        if now - last_decay_time >= decay_interval:
-                           # ... (existing decay logic) ...
-                           last_decay_time = now
+                    if self._shutdown_signal.is_set(): break # Check again after timeout
 
-                        # Pruning Check
-                        if self.config.get('enable_assembly_pruning', True) and (now - last_prune_time >= prune_interval):
-                            logger.info("SynthiansMemoryCore","Running assembly pruning check.")
-                            try:
-                                await self._prune_if_needed() 
-                                last_prune_time = now
-                            except Exception as prune_e:
-                                logger.error("SynthiansMemoryCore","Error during pruning", {"error": str(prune_e)})
+                    # Decay Check
+                    if now - last_decay_time >= decay_interval:
+                       logger.debug("Running memory decay check...")
+                       # --- TODO: Add actual decay logic here ---
+                       # Iterate self._memories.values() (under lock?)
+                       # Decrease quickrecal_score based on time_since_last_access/update
+                       # Potentially remove memories below min_quickrecal_for_ltm
+                       # Remember to remove from vector index and mark dirty/delete persistence
+                       last_decay_time = now
 
-                        # --- ADD MERGE CHECK ---
-                        if self.config.get('enable_assembly_merging', True) and (now - last_merge_time >= merge_interval):
-                             logger.info("SynthiansMemoryCore", "Running assembly merging check.")
-                             try:
-                                 await self._merge_similar_assemblies()
-                                 last_merge_time = now
-                             except Exception as merge_e:
-                                 logger.error("SynthiansMemoryCore", "Error during merging", {"error": str(merge_e)})
-                        # --- END MERGE CHECK ---
+                    # Pruning Check
+                    if self.config.get('enable_assembly_pruning', True) and (now - last_prune_time >= prune_interval):
+                        logger.info("SynthiansMemoryCore","Running assembly pruning check.")
+                        try:
+                            await self._prune_if_needed()
+                            last_prune_time = now
+                        except Exception as prune_e:
+                            logger.error("SynthiansMemoryCore","Error during pruning", {"error": str(prune_e)}, exc_info=True)
+
+                    # Merge Check
+                    if self.config.get('enable_assembly_merging', True) and (now - last_merge_time >= merge_interval):
+                         logger.info("SynthiansMemoryCore", "Running assembly merging check.")
+                         try:
+                             await self._merge_similar_assemblies() # Ensure this exists and is awaited
+                             last_merge_time = now
+                         except Exception as merge_e:
+                             logger.error("SynthiansMemoryCore", "Error during merging", {"error": str(merge_e)}, exc_info=True)
 
                 except asyncio.CancelledError:
                     logger.info("SynthiansMemoryCore","Decay/Pruning/Merging loop cancelled.")
@@ -54952,40 +55357,67 @@ class SynthiansMemoryCore:
         """
         # Check if assembly pruning is enabled
         enable_assembly_pruning = self.config.get("enable_assembly_pruning", False)
-        
+
         if not enable_assembly_pruning:
             logger.debug("[PRUNE] Assembly pruning is disabled")
             return
-            
+
         try:
             # Get pruning parameters from config
-            max_assemblies = self.config.get("max_assemblies", 1000)
-            prune_threshold = self.config.get("assembly_prune_threshold", 0.8)
-            
+            max_assemblies = self.config.get("max_assemblies", self.config.get("max_memory_entries", 50000) // 10) # Example: 1/10th of memory entries
+            prune_threshold_percent = self.config.get("assembly_prune_threshold_percent", 0.8) # Use percentage
+
             # Check if we're above threshold for pruning
-            current_count = len(self.assemblies)
-            prune_trigger_count = int(max_assemblies * prune_threshold)
-            
+            async with self._lock: # Lock needed to access self.assemblies safely
+                current_count = len(self.assemblies)
+
+            prune_trigger_count = int(max_assemblies * prune_threshold_percent)
+
             if current_count < prune_trigger_count:
                 logger.debug(f"[PRUNE] No pruning needed. Current: {current_count}, Trigger: {prune_trigger_count}")
                 return
-                
+
             logger.info(f"[PRUNE] Assembly count {current_count} exceeds threshold {prune_trigger_count}, pruning needed")
-            
+
             # Find least-recently activated assemblies to prune
-            assemblies_to_prune = sorted(
-                self.assemblies.values(),
-                key=lambda a: a.last_activated_at or datetime.min
-            )[:current_count - int(max_assemblies * 0.7)]  # Prune down to 70% of max
-            
-            logger.info(f"[PRUNE] Pruning {len(assemblies_to_prune)} assemblies")
-            
-            # Remove the assemblies
-            for assembly in assemblies_to_prune:
-                await self._remove_assembly(assembly.assembly_id)
-                
-            logger.info(f"[PRUNE] Pruning complete. New assembly count: {len(self.assemblies)}")
-            
+            assemblies_with_activation = []
+            async with self._lock:
+                for asm_id, asm in self.assemblies.items():
+                    # Use datetime.min as fallback for sorting if last_activation is None
+                    last_act = asm.last_activation if asm.last_activation else datetime.min.replace(tzinfo=timezone.utc)
+                    assemblies_with_activation.append((asm_id, last_act))
+
+            # Sort by activation time (oldest first)
+            assemblies_to_prune_ids = [
+                asm_id for asm_id, _ in sorted(
+                    assemblies_with_activation,
+                    key=lambda item: item[1] # Sort by datetime object
+                )
+            ]
+
+            # Determine how many to prune (e.g., prune down to 70% of max)
+            prune_down_percent = self.config.get('assembly_prune_down_percent', 0.7)
+            num_to_prune = current_count - int(max_assemblies * prune_down_percent)
+
+            if num_to_prune <= 0:
+                 logger.info(f"[PRUNE] Calculated 0 assemblies to prune.")
+                 return
+
+            logger.info(f"[PRUNE] Pruning {num_to_prune} assemblies (oldest first)")
+
+            # Remove the assemblies (call _remove_assembly which handles locking internally)
+            pruned_count = 0
+            for assembly_id in assemblies_to_prune_ids[:num_to_prune]:
+                remove_success = await self._remove_assembly(assembly_id)
+                if remove_success:
+                    pruned_count += 1
+
+            logger.info(f"[PRUNE] Pruning complete. Successfully removed: {pruned_count}.")
+            # Log new count after pruning
+            async with self._lock:
+                 logger.info(f"[PRUNE] New assembly count: {len(self.assemblies)}")
+
+
         except Exception as e:
             logger.error(f"[PRUNE] Error during assembly pruning: {e}", exc_info=True)
 
@@ -55067,7 +55499,8 @@ class SynthiansMemoryCore:
                  response_data = await self.retrieve_memories(query=query, top_k=top_k)
                  # Return simplified dicts for LLM
                  if response_data["success"]:
-                      return {"memories": [{"id": m.get("id"), "content": m.get("content"), "score": m.get("final_score", m.get("relevance_score", m.get("similarity"))) } for m in response_data["memories"]]}
+                      # Use relevance_score which includes boost
+                      return {"memories": [{"id": m.get("id"), "content": m.get("content"), "score": m.get("relevance_score", m.get("similarity")) } for m in response_data["memories"]]}
                  else:
                       return {"success": False, "error": response_data.get("error", "Retrieval failed")}
 
@@ -55083,8 +55516,10 @@ class SynthiansMemoryCore:
                  similarity_score = args.get("similarity_score")
                  was_relevant = args.get("was_relevant")
                  if self.threshold_calibrator:
-                      await self.provide_feedback(memory_id, similarity_score, was_relevant)
-                      return {"success": True, "message": "Feedback recorded."}
+                      # Need provide_feedback method if using calibrator
+                      # await self.provide_feedback(memory_id, similarity_score, was_relevant)
+                      logger.warning("provide_retrieval_feedback_tool called but provide_feedback method not fully implemented.")
+                      return {"success": True, "message": "Feedback noted (implementation pending)."}
                  else:
                       return {"success": False, "error": "Adaptive thresholding not enabled."}
 
@@ -55098,12 +55533,12 @@ class SynthiansMemoryCore:
                  return {"success": False, "error": f"Unknown tool: {tool_name}"}
 
         except Exception as e:
-            logger.error("SynthiansMemoryCore", f"Error handling tool call {tool_name}", {"error": str(e)})
+            logger.error("SynthiansMemoryCore", f"Error handling tool call {tool_name}", {"error": str(e)}, exc_info=True)
             return {"success": False, "error": str(e)}
 
     # --- Helper & Placeholder Methods ---
 
-    def get_memory_by_id(self, memory_id: str) -> Optional[MemoryEntry]:
+    def _get_memory_by_id(self, memory_id: str) -> Optional[MemoryEntry]:
         """Retrieve a specific memory entry by its ID from the cache.
            NOTE: This is synchronous and operates on the current in-memory cache.
            It does NOT acquire the async lock. Caller must manage concurrency.
@@ -55124,14 +55559,14 @@ class SynthiansMemoryCore:
 
     async def get_memory_by_id_async(self, memory_id: str) -> Optional[MemoryEntry]:
         """Asynchronously retrieve a specific memory entry by its ID, loading from disk if needed.
-        
+
         Unlike the synchronous get_memory_by_id which only checks the cache, this method
         will attempt to load the memory from disk if it's not found in the cache but exists
         in the index.
-        
+
         Args:
             memory_id: The unique identifier of the memory to retrieve
-            
+
         Returns:
             The MemoryEntry if found in cache or successfully loaded, None otherwise
         """
@@ -55140,10 +55575,11 @@ class SynthiansMemoryCore:
             memory = self._memories.get(memory_id)
             if memory:
                 logger.debug("SynthiansMemoryCore", f"Retrieved memory {memory_id} from cache.")
-                memory.access_count += 1
-                memory.last_access_time = datetime.now(timezone.utc) # Convert to datetime
+                # Update access stats if MemoryEntry supports them
+                if hasattr(memory, 'access_count'): memory.access_count += 1
+                if hasattr(memory, 'last_access_time'): memory.last_access_time = datetime.now(timezone.utc)
                 return memory
-                
+
             # Not in cache, check if it's in the index and try to load it
             if memory_id in self.persistence.memory_index:
                 logger.debug("SynthiansMemoryCore", f"Memory {memory_id} not in cache, loading from persistence...")
@@ -55151,15 +55587,25 @@ class SynthiansMemoryCore:
                 if memory:
                     # Add to cache
                     self._memories[memory_id] = memory
-                    memory.access_count += 1
-                    memory.last_access_time = datetime.now(timezone.utc) # Convert to datetime
-                    
+                    # Update access stats if MemoryEntry supports them
+                    if hasattr(memory, 'access_count'): memory.access_count += 1
+                    if hasattr(memory, 'last_access_time'): memory.last_access_time = datetime.now(timezone.utc)
+
                     # If this is our first time seeing this memory and we have a vector index,
                     # add it to the index if it has a valid embedding
+                    # Note: This might be redundant if rebuild handles everything, but acts as a fallback
                     if memory.embedding is not None and self.vector_index is not None:
-                        await self.vector_index.add_async(memory_id, memory.embedding)
-                        logger.debug("SynthiansMemoryCore", f"Added memory {memory_id} to vector index on first load.")
-                    
+                        if memory_id not in self.vector_index.id_to_index:
+                            add_ok = await self.vector_index.add_async(memory_id, memory.embedding)
+                            if add_ok:
+                                logger.debug("SynthiansMemoryCore", f"Added memory {memory_id} to vector index on first load.")
+                            else:
+                                logger.error(f"SynthiansMemoryCore", f"Failed to add memory {memory_id} to vector index on first load. Queuing.")
+                                await self._pending_vector_updates.put({
+                                    "operation": "add", "id": memory_id, "embedding": memory.embedding.tolist(),
+                                    "is_assembly": False, "timestamp": datetime.now(timezone.utc).isoformat(), "retry_count": 0
+                                })
+
                     logger.debug("SynthiansMemoryCore", f"Successfully loaded memory {memory_id} from persistence.")
                     return memory
                 else:
@@ -55171,31 +55617,32 @@ class SynthiansMemoryCore:
 
     async def update_memory(self, memory_id: str, updates: Dict[str, Any]) -> bool:
         """Update a memory entry with provided updates.
-        
+
         Args:
             memory_id: ID of the memory to update
             updates: Dictionary of field updates
-            
+
         Returns:
             bool: Whether the update was successful
         """
         if not self._initialized: await self.initialize()
-        
+
         try:
             # Use the main lock to avoid race conditions during updates
             async with self._lock:
-                # Look up the memory first
-                memory = self._get_memory_by_id(memory_id)
+                # Look up the memory first (use async version to load if needed)
+                memory = await self.get_memory_by_id_async(memory_id)
                 if memory is None:
                     logger.warning(f"Cannot update non-existent memory {memory_id}")
                     return False
-                
+
                 # Extract metadata updates if present
                 metadata_to_update = updates.pop('metadata', None)
-                
-                # Track if quickrecal score is updated for timestamp update
+
+                # Track if key fields are updated
                 score_updated = False
-                
+                embedding_updated = False
+
                 # Apply direct field updates
                 for key, value in updates.items():
                     # Special handling for quickrecal_score
@@ -55209,10 +55656,22 @@ class SynthiansMemoryCore:
                         except (ValueError, TypeError):
                             logger.warning("SynthiansMemoryCore", f"Invalid quickrecal_score value: {value}")
                             continue
+                    elif key == "embedding":
+                        # Validate and normalize new embedding
+                        validated_emb = self.geometry_manager._validate_vector(value, f"Update Emb {memory_id}")
+                        if validated_emb is not None:
+                            aligned_emb, _ = self.geometry_manager._align_vectors(validated_emb, np.zeros_like(validated_emb))
+                            normalized_emb = self.geometry_manager._normalize(aligned_emb)
+                            # Check if it actually changed
+                            if memory.embedding is None or not np.allclose(memory.embedding, normalized_emb):
+                                memory.embedding = normalized_emb
+                                embedding_updated = True
+                        else:
+                            logger.warning(f"Invalid embedding provided in update for {memory_id}, skipping embedding update.")
                     elif hasattr(memory, key):
                          setattr(memory, key, value) # Update other direct attributes
                     else:
-                        logger.warning(f"Unknown/invalid field '{key}' in memory update")
+                        logger.warning(f"Unknown/invalid field '{key}' in memory update for {memory_id}")
 
                 # Apply metadata updates after other fields have been processed
                 if metadata_to_update:
@@ -55221,52 +55680,48 @@ class SynthiansMemoryCore:
                     # Use deep update to properly handle nested dictionaries
                     deep_update(memory.metadata, metadata_to_update)
 
-                # Update quickrecal timestamp ONLY if the score actually changed in THIS update call
+                # Update quickrecal timestamp ONLY if the score actually changed
                 if score_updated:
                     if memory.metadata is None: memory.metadata = {}
                     memory.metadata['quickrecal_updated_at'] = datetime.now(timezone.utc).isoformat()
                     logger.debug(f"quickrecal_updated_at set for memory {memory_id}")
 
-                # Update the vector index with the memory's embedding
-                vector_update_success = True  # Assume success initially
-                if memory.embedding is not None and self.vector_index is not None:
-                    logger.debug(f"Updating vector index for memory {memory_id}")
-                    try:
-                        # Validate embedding before sending to vector index
-                        validated_embedding = self.geometry_manager._validate_vector(memory.embedding, f"Memory {memory_id}")
-                        if validated_embedding is not None:
-                            if memory_id in self.vector_index.id_to_index:
-                                logger.debug(f"Calling update_entry_async for existing memory {memory_id}")
-                                vector_update_success = await self.vector_index.update_entry_async(memory_id, validated_embedding)
-                            else:
-                                logger.debug(f"Calling add_async for new memory {memory_id}")
-                                vector_update_success = await self.vector_index.add_async(memory_id, validated_embedding)
+                # Update the vector index ONLY if the embedding changed
+                vector_update_success = True # Assume success unless embedding update fails
+                if embedding_updated:
+                    if memory.embedding is not None and self.vector_index is not None:
+                        logger.debug(f"Updating vector index for memory {memory_id} due to embedding change")
+                        try:
+                            # Call update_entry_async which handles add/update logic
+                            vector_update_success = await self.vector_index.update_entry_async(memory_id, memory.embedding)
 
                             if vector_update_success:
-                                # Set timestamp ONLY on success
-                                logger.info(f"Successfully updated/added vector index for memory {memory_id}.")
-                                # Mark dirty again to save timestamp if update was successful
-                                self._dirty_memories.add(memory_id)
+                                logger.info(f"Successfully updated vector index for memory {memory_id}.")
                             else:
-                                logger.error(f"Failed vector index update/add for memory {memory_id}.")
-                        else:
-                            logger.error(f"Memory {memory_id} embedding was invalid, skipping index update.")
-                    except Exception as index_update_err:
-                        logger.error(f"EXCEPTION during vector index op for assembly {memory_id}: {index_update_err}", exc_info=True)
-                        vector_update_success = False  # Ensure failure on exception
-                else:
-                    logger.warning(f"Memory {memory_id} has no embedding or vector index is not available, skipping index update.")
+                                logger.error(f"Failed vector index update for memory {memory_id}. Will be queued by update_entry_async.")
+                                # update_entry_async should queue internally on failure
 
-                # Mark as dirty for persistence
+                        except Exception as index_update_err:
+                            logger.error(f"EXCEPTION during vector index update for memory {memory_id}: {index_update_err}", exc_info=True)
+                            vector_update_success = False # Ensure failure on exception
+                            # Queue manually if exception wasn't handled by update_entry_async
+                            await self._pending_vector_updates.put({
+                                "operation": "update", "id": memory_id, "embedding": memory.embedding.tolist(),
+                                "is_assembly": False, "timestamp": datetime.now(timezone.utc).isoformat(), "retry_count": 0
+                            })
+                    else:
+                        logger.warning(f"Memory {memory_id} embedding changed, but vector index not available. Skipping index update.")
+
+                # Mark as dirty for persistence regardless of index success (metadata/score might have changed)
                 self._dirty_memories.add(memory_id)
                 logger.debug(f"Memory {memory_id} updated in memory (marked dirty)")
-                
-                # Return success based on vector index update
-                if not vector_update_success:
-                    logger.warning(f"Update for memory {memory_id} returning False due to vector index update failure.")
+
+                # Return overall success (mainly based on vector update if it happened)
+                if embedding_updated and not vector_update_success:
+                    logger.warning(f"Update for memory {memory_id} returning False due to vector index update failure (queued for retry).")
                     return False
 
-                logger.info(f"Updated memory {memory_id} with {len(updates)} fields (marked dirty for persistence)")
+                logger.info(f"Updated memory {memory_id} with {len(updates)} fields")
                 return True
         except Exception as e:
             logger.error("SynthiansMemoryCore", f"Error updating memory {memory_id}: {str(e)}", exc_info=True)
@@ -55275,55 +55730,50 @@ class SynthiansMemoryCore:
     def _filter_by_metadata(self, candidates: List[Dict], metadata_filter: Dict) -> List[Dict]:
         """
         Filter candidates based on metadata key-value pairs.
-        
+
         Args:
             candidates: List of candidate memory dictionaries to filter
             metadata_filter: Dictionary of key-value pairs that must be present in memory metadata
-            
+
         Returns:
             Filtered list of candidates that match all metadata criteria
         """
         if not metadata_filter:
             return candidates
-            
+
         logger.debug(f"[_filter_by_metadata] Filtering {len(candidates)} candidates with filter: {metadata_filter}")
         filtered_results = []
-        
+
         for candidate in candidates:
             metadata = candidate.get("metadata", {})
             # Skip if candidate has no metadata
             if not metadata:
                 logger.debug(f"Skipping candidate {candidate.get('id')} - no metadata")
                 continue
-                
+
             # Check each filter criterion
             matches_all = True
             for key, value in metadata_filter.items():
                 # Support for nested paths with dots (e.g., 'details.source')
-                if '.' in key:
-                    path_parts = key.split('.')
-                    current_obj = metadata
-                    # Navigate through the nested structure
-                    for part in path_parts[:-1]:
-                        if part not in current_obj or not isinstance(current_obj[part], dict):
-                            matches_all = False
-                            break
-                        current_obj = current_obj[part]
-                    
-                    # Check the final value
-                    if matches_all and (path_parts[-1] not in current_obj or current_obj[path_parts[-1]] != value):
-                        matches_all = False
-                # Simple direct key match        
-                elif key not in metadata or metadata[key] != value:
+                current_val = metadata
+                try:
+                    for part in key.split('.'):
+                        current_val = current_val[part]
+                except (KeyError, TypeError):
+                    matches_all = False
+                    break # Path doesn't exist or not traversable
+
+                # Check the final value
+                if current_val != value:
                     matches_all = False
                     break
-                    
+
             if matches_all:
                 filtered_results.append(candidate)
                 logger.debug(f"Candidate {candidate.get('id')} matched all metadata criteria")
             else:
-                logger.debug(f"Candidate {candidate.get('id')} failed metadata criteria")
-                
+                logger.debug(f"Candidate {candidate.get('id')} failed metadata criteria {metadata_filter}") # Log filter
+
         logger.debug(f"[_filter_by_metadata] Found {len(filtered_results)} candidates matching metadata criteria")
         return filtered_results
 
@@ -55335,9 +55785,15 @@ class SynthiansMemoryCore:
             # Use the same model name as server.py
             import os
             model_name = os.environ.get("EMBEDDING_MODEL", "all-mpnet-base-v2")
-            model = SentenceTransformer(model_name)
+            # Consider caching the model instance if performance is critical
+            # Check if model is already cached in the class instance
+            if not hasattr(self, '_embedding_model') or self._embedding_model_name != model_name:
+                 logger.info(f"Loading embedding model: {model_name}")
+                 self._embedding_model = SentenceTransformer(model_name)
+                 self._embedding_model_name = model_name
+            model = self._embedding_model
 
-            logger.info("SynthiansMemoryCore", f"Using embedding model {model_name}")
+
             # Run encode in executor to avoid blocking event loop
             loop = asyncio.get_running_loop()
             embedding_list = await loop.run_in_executor(None, lambda: model.encode([text], convert_to_tensor=False))
@@ -55347,7 +55803,7 @@ class SynthiansMemoryCore:
             embedding = embedding_list[0]
             return self.geometry_manager._normalize(np.array(embedding, dtype=np.float32))
         except Exception as e:
-            logger.error("SynthiansMemoryCore", f"Error generating embedding: {str(e)}")
+            logger.error("SynthiansMemoryCore", f"Error generating embedding: {str(e)}", exc_info=True)
 
             # Fallback to a deterministic embedding based on text hash
             import hashlib
@@ -55364,829 +55820,700 @@ class SynthiansMemoryCore:
             logger.warning("SynthiansMemoryCore", "Using deterministic hash-based embedding generation")
             return self.geometry_manager._normalize(embedding)
 
-    def get_stats(self) -> Dict[str, Any]:
-        """Get current statistics."""
-        # Run get_stats synchronously as it doesn't involve async operations directly
-        persistence_stats = self.persistence.get_stats()
-        quick_recal_stats = self.quick_recal.get_stats()
-        threshold_stats = self.threshold_calibrator.get_statistics() if self.threshold_calibrator else {}
-        vector_index_stats = self.vector_index.get_stats() if hasattr(self.vector_index, 'get_stats') else {"count": self.vector_index.count(), "id_mappings": len(self.vector_index.id_to_index)}
-        
-        # Debug: Log vector index details for assembly tracking
-        assembly_ids_in_vector = 0
-        if self.vector_index and hasattr(self.vector_index, 'id_to_index'):
-            # Count how many assemblies are in the vector index (with asm: prefix)
-            assembly_ids_in_vector = sum(1 for id in self.vector_index.id_to_index.keys() if isinstance(id, str) and id.startswith('asm:'))
-            logger.info(f"Vector index contains {assembly_ids_in_vector} assembly IDs (with 'asm:' prefix)")
-            
-            # List first few assembly IDs for debugging
-            asm_ids = [id for id in self.vector_index.id_to_index.keys() if isinstance(id, str) and id.startswith('asm:')][:5]
-            if asm_ids:
-                logger.info(f"Sample assembly IDs in vector index: {asm_ids}")
+    async def get_stats(self) -> Dict[str, Any]:
+        """Get comprehensive statistics about the memory core.
 
-        # --- PHASE 5.8: Add detailed assembly statistics ---
-        # Calculate assembly size distribution
-        assembly_sizes = [len(asm.memories) if hasattr(asm, 'memories') else 0 for asm in self.assemblies.values()]
-        avg_size = sum(assembly_sizes) / max(len(assembly_sizes), 1)
-        
-        # Count how many assemblies have been activated
-        activated_count = sum(1 for asm in self.assemblies.values() 
-                         if hasattr(asm, 'activation_count') and asm.activation_count > 0)
-        
-        # Count assemblies that are indexed in the vector store
-        indexed_count = sum(1 for asm in self.assemblies.values() 
-                       if hasattr(asm, 'vector_index_updated_at') and asm.vector_index_updated_at is not None)
-        
-        # Debug: Log detailed assembly info
-        logger.info(f"Assembly stats: total={len(self.assemblies)}, indexed={indexed_count}, in_vector_index={assembly_ids_in_vector}")
-        logger.info(f"Assembly feature flags: enable_assemblies={self.config.get('enable_assemblies', True)}, " 
-                   f"enable_pruning={self.config.get('enable_assembly_pruning', True)}, "
-                   f"enable_merging={self.config.get('enable_assembly_merging', True)}")
-        
-        # Debug: Log sample assembly IDs
-        sample_ids = list(self.assemblies.keys())[:5]
-        if sample_ids:
-            logger.info(f"Sample assembly IDs in memory: {sample_ids}")
-            
-            # Check vector timestamps for a few assemblies
-            for asm_id in sample_ids:
-                asm = self.assemblies.get(asm_id)
-                if asm:
-                    logger.info(f"Assembly {asm_id}: vector_index_updated_at={asm.vector_index_updated_at}, "
-                               f"has_composite={asm.composite_embedding is not None}")
-        
-        assembly_stats = {
-            "total_count": len(self.assemblies),
-            "activated_count": activated_count,
-            "indexed_count": indexed_count,
-            "vector_indexed_count": assembly_ids_in_vector,  # NEW: Count of assemblies in vector index
-            "average_size": round(avg_size, 2),
-            "size_distribution": {
-                "small": sum(1 for size in assembly_sizes if size <= 3),
-                "medium": sum(1 for size in assembly_sizes if 3 < size <= 10),
-                "large": sum(1 for size in assembly_sizes if size > 10)
-            },
-            "enabled": self.config.get('enable_assemblies', True),
-            "pruning_enabled": self.config.get('enable_assembly_pruning', True),
-            "merging_enabled": self.config.get('enable_assembly_merging', True),
-            "activation_threshold": self.config.get('assembly_threshold', 0.75)
-        }
+        Returns detailed stats about memories, assemblies, vector index health,
+        and most importantly for Phase 5.8, stats about assembly synchronization
+        status and pending vector updates.
 
-        return {
-            "core_stats": {
-                "total_memories": len(self._memories),
-                "total_assemblies": len(self.assemblies),
-                "dirty_memories": len(self._dirty_memories),
-                "initialized": self._initialized,
-            },
-            "persistence_stats": persistence_stats,
-            "quick_recal_stats": quick_recal_stats,
-            "threshold_stats": threshold_stats,
-            "vector_index_stats": vector_index_stats,
-            "assemblies": assembly_stats  # CRITICAL: Add assemblies key for test compatibility
-        }
+        Returns:
+            Dict[str, Any]: A dictionary of stats and metrics
+        """
+        try:
+            # Basic counts from memory
+            async with self._lock:
+                memory_count_cache = len(self._memories)
+                assembly_count_cache = len(self.assemblies)
+                dirty_memory_count = len(self._dirty_memories)
 
-    async def check_index_integrity(self) -> Dict[str, Any]:
+            # Persistence counts (can be different from cache)
+            memory_count_persist = 0
+            assembly_count_persist = 0 # Initialize
+            if hasattr(self, 'persistence') and hasattr(self.persistence, 'memory_index'):
+                memory_count_persist = len(self.persistence.memory_index)
+                # Attempt to count assemblies from persistence index if structured similarly
+                assembly_count_persist = sum(1 for path_data in self.persistence.memory_index.values() if path_data.get("type") == "assembly")
+
+
+            # Pending updates count
+            pending_updates_count = self._pending_vector_updates.qsize() if hasattr(self, '_pending_vector_updates') else 0
+
+            # Check index integrity
+            index_status = {}
+            index_consistent = False
+            if self.vector_index:
+                # FIX: Await the async call
+                try:
+                     is_consistent, diagnostics = await self.vector_index.check_index_integrity()
+                     index_status = diagnostics # Use the diagnostics dict directly
+                     index_consistent = is_consistent
+                except Exception as check_err:
+                     logger.error(f"Error calling vector_index.check_index_integrity: {check_err}", exc_info=True)
+                     index_status = {"error": str(check_err)}
+
+
+            # Get assembly synchronization status
+            sync_status = {"synchronized": 0, "pending": 0, "never_synced": 0}
+            assembly_sync_details = []
+            if hasattr(self, 'assemblies'):
+                 async with self._lock: # Lock to access assemblies and dirty set
+                    for assembly_id, assembly in self.assemblies.items():
+                        sync_state = "never_synced"
+                        last_sync_ts = None
+                        if hasattr(assembly, 'vector_index_updated_at') and assembly.vector_index_updated_at:
+                            sync_state = "synchronized"
+                            last_sync_ts = assembly.vector_index_updated_at.isoformat()
+                        # Check if pending in queue (more accurate than just dirty)
+                        # Note: Checking queue requires iterating, which is slow. Use dirty set approximation.
+                        elif assembly_id in self._dirty_memories:
+                             sync_state = "pending"
+
+                        sync_status[sync_state] += 1
+
+                        # Add to detailed list (limit to 20 for performance)
+                        if len(assembly_sync_details) < 20:
+                            assembly_sync_details.append({
+                                "assembly_id": assembly_id,
+                                "name": getattr(assembly, 'name', 'Unknown'),
+                                "memory_count": len(getattr(assembly, 'memories', [])),
+                                "status": sync_state,
+                                "last_synced": last_sync_ts
+                            })
+
+            # Calculate uptime
+            uptime_seconds = 0
+            if hasattr(self, 'start_time'):
+                uptime_seconds = int(time.time() - self.start_time)
+
+            # Assemble response
+            return {
+                "success": True,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "core_stats": {
+                    "memory_count_cache": memory_count_cache,
+                    "memory_count_persistence": memory_count_persist,
+                    "assembly_count_cache": assembly_count_cache,
+                    "assembly_count_persistence": assembly_count_persist,
+                    "dirty_items": dirty_memory_count,
+                    "pending_vector_updates": pending_updates_count,
+                    "initialized": self._initialized,
+                    "vector_index_state": self.vector_index.state if self.vector_index else "N/A",
+                    "uptime_seconds": uptime_seconds
+                },
+                "vector_index_stats": {
+                    "faiss_count": index_status.get("faiss_count", 0),
+                    "mapping_count": index_status.get("mapping_count", 0),
+                    "persistence_count": index_status.get("persistence_count", 0), # If provided by check_index_integrity
+                    "embedding_dimension": self.config.get("embedding_dim", 0),
+                    "is_consistent": index_consistent,
+                    "details": index_status # Include all diagnostics
+                },
+                "assembly_stats": {
+                    "total_count": assembly_count_cache, # Use cache count
+                    "sync_status": sync_status,
+                    "sync_details": assembly_sync_details,
+                },
+                "performance_stats": {
+                     # Add performance stats if tracked (e.g., avg latencies)
+                },
+                "feature_flags": {
+                    "explainability_enabled": self.config.get("ENABLE_EXPLAINABILITY", False),
+                    "assembly_pruning_enabled": self.config.get("enable_assembly_pruning", False), # Correct key
+                    "assembly_merging_enabled": self.config.get("enable_assembly_merging", False), # Correct key
+                }
+            }
+        except Exception as e:
+            logger.error(f"Error generating stats: {str(e)}", exc_info=True)
+            return {
+                "success": False,
+                "error": f"Error generating memory core statistics: {str(e)}"
+            }
+
+    async def check_core_index_integrity(self) -> Dict[str, Any]:
         """Check the integrity of the vector index and return diagnostic information.
-        
+
         This method checks if the FAISS index and ID-to-index mapping are consistent.
-        
+
         Returns:
             Dict with diagnostic information about the index integrity
         """
         if not self._initialized: await self.initialize()
-        
-        async with self._lock: # We need the lock to ensure thread safety
-            is_consistent, diagnostics = self.vector_index.verify_index_integrity()  # Remove 'await' here
-            
+
+        if not self.vector_index:
+             return {"success": False, "error": "Vector index not initialized"}
+
+        try:
+            # FIX: Await the async call
+            is_consistent, diagnostics = await self.vector_index.check_index_integrity()
+
             return {
                 "success": True,
                 "is_consistent": is_consistent,
                 "diagnostics": diagnostics,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
-    
+        except Exception as e:
+             logger.error(f"Error in check_core_index_integrity: {e}", exc_info=True)
+             return {"success": False, "error": str(e)}
+
     async def repair_index(self, repair_type: str = "auto") -> Dict[str, Any]:
         """Attempt to repair integrity issues with the vector index.
-        
+
         Args:
             repair_type: The type of repair to perform.
                 - "auto": Automatically determine the best repair strategy
                 - "recreate_mapping": Recreate the ID-to-index mapping from scratch
-                - "rebuild": Completely rebuild the index (not fully implemented)
-                
+                - "rebuild_from_persistence": Rebuild index from persistence files (preferred)
+
         Returns:
             Dict with repair status and diagnostics
         """
         if not self._initialized: await self.initialize()
-        
-        async with self._lock:
-            logger.info("SynthiansMemoryCore", f"Starting index repair of type: {repair_type}")
-            
-            # Check initial integrity state
-            is_consistent_before, diagnostics_before = self.vector_index.verify_index_integrity()  # Remove 'await' here
-            
-            # If already consistent and not a forced rebuild, we can consider this a success
-            if is_consistent_before and repair_type != "rebuild":
-                logger.info("SynthiansMemoryCore", "Index is already consistent, no repair needed.")
-                return {
-                    "success": True,
-                    "message": "Index is already consistent, no repair needed.",
-                    "diagnostics_before": diagnostics_before,
-                    "diagnostics_after": diagnostics_before,
-                    "is_consistent": True
-                }
-            
-            # Check current implementation and migrate if needed
-            is_index_id_map = hasattr(self.vector_index.index, 'id_map')
-            if not is_index_id_map:
-                logger.info("Migrating vector index to use IndexIDMap for improved ID management")
-                success = self.vector_index.migrate_to_idmap()
-                if success:
-                    logger.info("Successfully migrated vector index to IndexIDMap")
-                else:
-                    logger.warning("Failed to migrate vector index to IndexIDMap. Some features may not work correctly.")
+
+        if not self.vector_index:
+             return {"success": False, "error": "Vector index not initialized"}
+
+        logger.info("SynthiansMemoryCore", f"Starting index repair of type: {repair_type}")
+        repair_stats = {}
+        try:
+            # Call the vector index's repair method
+            # This method handles locking internally
+            repair_stats = await self.vector_index.repair_index_async(
+                 persistence=self.persistence,
+                 geometry_manager=self.geometry_manager,
+                 repair_mode=repair_type
+            )
+
+            if repair_stats.get("success", False):
+                logger.info("SynthiansMemoryCore", f"Index repair completed successfully. Mode: {repair_stats.get('mode_used', 'N/A')}. Consistency: {repair_stats.get('consistency_after', 'N/A')}")
             else:
-                logger.info("Vector index is already using IndexIDMap")
-            
-            # Determine repair strategy
-            if repair_type == "auto":
-                # Choose the best repair strategy based on diagnostics
-                faiss_count = self.vector_index.count()
-                id_mapping_count = len(self.vector_index.id_to_index)
-                
-                if id_mapping_count == 0 and faiss_count > 0:
-                    repair_type = "recreate_mapping"
-                    logger.info("SynthiansMemoryCore", "Auto-selected 'recreate_mapping' repair strategy")
-                elif id_mapping_count > faiss_count:
-                    # Prune excess mappings
-                    repair_type = "recreate_mapping"
-                    logger.info("SynthiansMemoryCore", "Auto-selected 'recreate_mapping' to handle excess mappings")
-                else:
-                    # In other cases, we don't have a good automated solution yet
-                    repair_type = "recreate_mapping"  # Default to recreate_mapping for now
-                    logger.warning("SynthiansMemoryCore", "No optimal repair strategy determined, defaulting to 'recreate_mapping'")
-            
-            # Execute repair
-            if repair_type == "recreate_mapping":
-                success = self.vector_index.recreate_mapping()
-            elif repair_type == "rebuild":
-                logger.warning("SynthiansMemoryCore", "Full rebuild requires original embeddings which aren't stored. Falling back to recreate_mapping.")
-                success = self.vector_index.recreate_mapping()
-            else:
-                logger.error("SynthiansMemoryCore", f"Unsupported repair_type: {repair_type}")
-                success = False
-            
-            # Check integrity after repair
-            is_consistent_after, diagnostics_after = self.vector_index.verify_index_integrity()  # Remove 'await' here
-            
-            # Determine overall success: either repair succeeded or the index is now consistent
-            overall_success = success or is_consistent_after
-            
-            if overall_success:
-                logger.info("SynthiansMemoryCore", f"Index repair of type '{repair_type}' completed successfully. Consistency: {is_consistent_after}")
-            else:
-                logger.error("SynthiansMemoryCore", f"Index repair of type '{repair_type}' failed. Consistency: {is_consistent_after}")
-                
-            return {
-                "success": overall_success,
-                "repair_type": repair_type,
-                "diagnostics_before": diagnostics_before,
-                "diagnostics_after": diagnostics_after,
-                "is_consistent": is_consistent_after
-            }
+                logger.error("SynthiansMemoryCore", f"Index repair failed. Mode: {repair_stats.get('mode_used', 'N/A')}. Error: {repair_stats.get('error', 'Unknown')}")
+
+            return repair_stats
+
+        except Exception as e:
+            logger.error("SynthiansMemoryCore", f"Unexpected error during repair_index call: {e}", exc_info=True)
+            return {"success": False, "error": f"Unexpected exception: {str(e)}", "details": repair_stats}
+
+    # --- DETECT/REPAIR METHODS ---
 
     async def detect_and_repair_index_drift(self, auto_repair: bool = False) -> Dict[str, Any]:
         """
         Detect drift between vector index and memory persistence and optionally repair it.
-        
+
         Args:
             auto_repair: If True, automatically repair detected inconsistencies
-            
+
         Returns:
             Dictionary with drift detection and repair statistics
         """
         if not self._initialized:
             logger.error("SynthiansMemoryCore", "Cannot detect/repair drift: not initialized")
             return {"error": "Core not initialized", "success": False}
-            
-        logger.info("SynthiansMemoryCore", "Checking for vector index drift...")
+
+        logger.info("SynthiansMemoryCore", f"Checking for vector index drift (Auto-Repair: {auto_repair})...")
         result = {"success": False}
-        
+
         try:
-            async with self._lock:
-                # Get integrity status
-                is_consistent, diagnostics = self.vector_index.verify_index_integrity()  # Remove 'await' here
-                
-                result["is_consistent"] = is_consistent
-                result["diagnostics"] = diagnostics
-                
-                if is_consistent:
-                    logger.info("SynthiansMemoryCore", "No vector index drift detected")
-                    result["success"] = True
-                    return result
-                    
-                # We detected drift
-                faiss_count = diagnostics.get("faiss_count", 0) 
-                id_mapping_count = diagnostics.get("id_mapping_count", 0)
-                drift_amount = abs(faiss_count - id_mapping_count)
-                
-                logger.warning(
-                    "SynthiansMemoryCore", 
-                    f"Vector index drift detected: FAISS={faiss_count}, ID Mappings={id_mapping_count}",
-                    {"drift_amount": drift_amount}
-                )
-                
-                result["drift_amount"] = drift_amount
-                
-                # Repair if needed and requested
-                if auto_repair:
-                    logger.info("SynthiansMemoryCore", "Initiating auto-repair for vector index")
-                    try:
-                        repair_stats = await self.vector_index.repair_index(persistence=self.persistence, geometry_manager=self.geometry_manager)
-                        result["repair_stats"] = repair_stats
-                        
-                        if repair_stats.get("success", False):
-                            # If the index was reset/rebuilt, we need to re-index all memories from persistence
-                            if repair_stats.get("rebuilt", False):
-                                logger.info("SynthiansMemoryCore", "Vector index was reset. Reindexing memories from persistence...") 
-                                
-                                # This is critical - after resetting the index, we need to repopulate it from persisted memories
-                                reindex_result = await self._reindex_memories_from_persistence()
-                                repair_stats["reindex_result"] = reindex_result
-                                
-                                if not reindex_result.get("success", False):
-                                    logger.error(
-                                        "SynthiansMemoryCore", 
-                                        "Failed to reindex memories after vector index reset",
-                                        {"error": reindex_result.get("error", "Unknown error")}
-                                    )
-                            
-                            # Save repaired vector index to disk
-                            await self.vector_index.save_async()
-                            logger.info("SynthiansMemoryCore", "Vector index auto-repair successful and saved")
-                            result["success"] = True
-                        else:
-                            logger.error(
-                                "SynthiansMemoryCore", 
-                                "Vector index auto-repair failed",
-                                {"reason": repair_stats.get("error", "Unknown error")}
-                            )
-                    except AttributeError as ae:
-                        logger.error(f"SynthiansMemoryCore", f"Attribute error during repair: {str(ae)}", exc_info=True)
-                        # Fallback repair attempt - uses the async version which should be available
-                        try:
-                            logger.info("SynthiansMemoryCore", "Attempting fallback repair via _repair_index_async")
-                            repair_success = await self.vector_index._repair_index_async()
-                            if repair_success:
-                                await self.vector_index.save_async()
-                                logger.info("SynthiansMemoryCore", "Fallback vector index repair successful")
-                                result["success"] = True
-                                result["repair_stats"] = {"success": True, "method": "fallback_async"}
-                            else:
-                                logger.error("SynthiansMemoryCore", "Fallback vector index repair failed")
-                                result["repair_stats"] = {"success": False, "method": "fallback_async"}
-                        except Exception as fallback_e:
-                            logger.error("SynthiansMemoryCore", f"Fallback repair also failed: {str(fallback_e)}", exc_info=True)
-                            result["repair_stats"] = {"success": False, "method": "all_failed", "error": str(fallback_e)}
-                else:
-                    logger.warning("SynthiansMemoryCore", "Vector index drift detected but auto-repair not enabled")
-                    result["needs_repair"] = True
-                    
+            if not self.vector_index:
+                 raise ValueError("Vector index is not initialized.")
+
+            # Get integrity status using the correct method
+            # FIX: Await async call
+            is_consistent, diagnostics = await self.vector_index.check_index_integrity(persistence=self.persistence)
+
+            # --- Add check for empty index vs non-empty persistence ---
+            persistence_count = diagnostics.get("persistence_count", -1)
+            faiss_count = diagnostics.get("faiss_count", -1)
+            mapping_count = diagnostics.get("mapping_count", -1)
+
+            if is_consistent and persistence_count > 0 and faiss_count == 0:
+                logger.warning("SynthiansMemoryCore", "Inconsistency detected: Persistence has items but vector index is empty.")
+                is_consistent = False
+                diagnostics["is_consistent"] = False
+                diagnostics["issue"] = "persistence_mismatch_empty_faiss"
+            elif is_consistent and faiss_count != mapping_count:
+                 logger.warning(f"SynthiansMemoryCore: Inconsistency detected: FAISS count ({faiss_count}) != Mapping count ({mapping_count}).")
+                 is_consistent = False
+                 diagnostics["is_consistent"] = False
+                 diagnostics["issue"] = "faiss_mapping_count_mismatch"
+            # --- End check ---
+
+            result["is_consistent"] = is_consistent
+            result["diagnostics"] = diagnostics
+
+            if is_consistent:
+                logger.info("SynthiansMemoryCore", "No vector index drift detected")
+                result["success"] = True
                 return result
-                
+
+            # We detected drift
+            issue = diagnostics.get("issue", "unknown")
+            logger.warning(
+                "SynthiansMemoryCore",
+                f"Vector index inconsistency detected. Issue: {issue}. Counts: [FAISS={faiss_count}, Mapping={mapping_count}, Persistence={persistence_count}]",
+                {"issue": issue, "faiss_count": faiss_count, "mapping_count": mapping_count, "persistence_count": persistence_count}
+            )
+
+            # Repair if needed and requested
+            if auto_repair:
+                logger.info("SynthiansMemoryCore", "Initiating auto-repair for vector index")
+                try:
+                    # Call the vector index's repair method (handles locking)
+                    repair_stats = await self.vector_index.repair_index_async(
+                        persistence=self.persistence,
+                        geometry_manager=self.geometry_manager,
+                        repair_mode="auto" # Use auto mode
+                    )
+                    result["repair_stats"] = repair_stats
+                    result["success"] = repair_stats.get("success", False)
+                    # Update consistency status after repair attempt
+                    result["is_consistent"] = repair_stats.get("consistency_after", False)
+
+                    if result["success"]:
+                        logger.info("SynthiansMemoryCore", f"Vector index auto-repair successful (Mode: {repair_stats.get('mode_used', 'N/A')}). Consistency achieved: {result['is_consistent']}")
+                    else:
+                        logger.error(
+                            "SynthiansMemoryCore",
+                            "Vector index auto-repair failed.",
+                            {"reason": repair_stats.get("error", "Unknown error"), "mode_used": repair_stats.get('mode_used', 'N/A')}
+                        )
+                except Exception as repair_e:
+                     logger.error("SynthiansMemoryCore", f"Unexpected error during repair process: {str(repair_e)}", exc_info=True)
+                     result["repair_stats"] = {"success": False, "error": f"Unexpected exception: {str(repair_e)}"}
+                     result["success"] = False
+            else:
+                logger.warning("SynthiansMemoryCore", "Vector index drift detected but auto-repair not enabled")
+                result["needs_repair"] = True
+
+            return result
+
         except Exception as e:
             logger.error(
-                "SynthiansMemoryCore", 
+                "SynthiansMemoryCore",
                 f"Error during drift detection/repair: {e}",
                 exc_info=True
             )
             result["error"] = str(e)
             return result
 
-    async def _reindex_memories_from_persistence(self) -> Dict[str, Any]:
-        """Re-index memories from persistence after a vector index reset."""
-        logger.info("SynthiansMemoryCore", "Reindexing memories from persistence...")
-        result = {"success": False}
-        
-        try:
-            # Get all memory IDs from persistence
-            memory_ids = list(self.persistence.memory_index.keys())
-            logger.info("SynthiansMemoryCore", f"Found {len(memory_ids)} memories in persistence")
-            
-            # Re-index each memory
-            reindex_count = 0
-            for mem_id in memory_ids:
-                memory = await self.persistence.load_memory(mem_id)
-                if memory:
-                    # Add to vector index
-                    await self.vector_index.add_async(mem_id, memory.embedding)
-                    reindex_count += 1
-                else:
-                    logger.warning(f"Failed to load memory {mem_id} from persistence during reindexing")
-            
-            logger.info("SynthiansMemoryCore", f"Reindexed {reindex_count} memories from persistence")
-            result["success"] = True
-            result["reindexed_count"] = reindex_count
-        except Exception as e:
-            logger.error("SynthiansMemoryCore", f"Error reindexing memories from persistence: {str(e)}", exc_info=True)
-            result["error"] = str(e)
-        
-        return result
-
     async def _auto_repair_drift_loop(self):
         """
         Periodically check for and repair vector index drift.
-        
+
         This background task runs at configurable intervals and ensures
         that the FAISS index and ID mappings remain synchronized, preventing
         silent failures in retrieval and assembly operations.
         """
         logger.info("SynthiansMemoryCore", "Started auto-repair drift background loop")
         index_check_interval = self.config.get('index_check_interval', 3600)  # Default: hourly checks
-        
+
         try:
             while not self._shutdown_signal.is_set():
-                # Wait for the configured interval
+                # Wait for the configured interval OR the shutdown signal
                 try:
-                    # Wait for the configured interval OR the shutdown signal
                     await asyncio.wait_for(
                         self._shutdown_signal.wait(),
                         timeout=index_check_interval
                     )
                     # If wait() finished without timeout, it means signal was set
+                    logger.info("SynthiansMemoryCore","Auto-repair loop: Shutdown signal received during wait.")
                     break
                 except asyncio.TimeoutError:
                     # Normal timeout, continue with drift check
                     pass
-                
+                except asyncio.CancelledError:
+                    logger.info("SynthiansMemoryCore","Auto-repair loop cancelled during wait.")
+                    break
+
                 # Check and repair drift
                 if not self._initialized:
+                    logger.debug("SynthiansMemoryCore","Auto-repair loop: Core not initialized, skipping check.")
                     continue
-                    
+
                 try:
                     logger.info("SynthiansMemoryCore", "Running scheduled vector index drift check")
+                    # Call the main drift detection method with auto_repair=True
                     result = await self.detect_and_repair_index_drift(auto_repair=True)
-                    
-                    if result.get("success", False):
-                        if result.get("is_consistent", True):
-                            logger.info("SynthiansMemoryCore", "Scheduled drift check: no issues found")
-                        else:
-                            logger.info(
-                                "SynthiansMemoryCore", 
-                                "Scheduled drift check: repaired index successfully",
-                                {"drift_amount": result.get("drift_amount", 0)}
-                            )
-                    else:
-                        logger.error(
-                            "SynthiansMemoryCore", 
-                            "Scheduled drift check: failed to repair index",
-                            {"error": result.get("error", "Unknown error")}
-                        )
+
+                    # Logging is handled within detect_and_repair_index_drift
+
+                except asyncio.CancelledError:
+                    logger.info("SynthiansMemoryCore","Auto-repair drift check cancelled.")
+                    break # Exit loop if cancelled during check/repair
                 except Exception as e:
                     logger.error(
-                        "SynthiansMemoryCore", 
+                        "SynthiansMemoryCore",
                         "Error in scheduled vector index drift check",
-                        {"error": str(e)}
+                        {"error": str(e)}, exc_info=True
                     )
+                    # Add a small delay after an error to prevent tight loops
+                    await asyncio.sleep(10)
+
+        except asyncio.CancelledError:
+             logger.info("SynthiansMemoryCore","Auto-repair drift background loop received cancel signal.")
         except Exception as e:
             logger.error(
-                "SynthiansMemoryCore", 
+                "SynthiansMemoryCore",
                 "Auto-repair drift background loop terminated with error",
-                {"error": str(e)}
+                {"error": str(e)}, exc_info=True
             )
-        
+        finally:
+             logger.info("SynthiansMemoryCore","Auto-repair drift background loop stopped.")
+
+
     async def _persist_dirty_items(self):
         """Persist any dirty items (memories, assemblies) to disk."""
         if not self._initialized:
             logger.warning("Cannot persist items: Memory Core not initialized")
             return
-            
+
+        # Get a snapshot of dirty items to process
+        async with self._lock: # Lock needed to safely copy the set
+            dirty_items_snapshot = set(self._dirty_memories)
+
+        total_dirty = len(dirty_items_snapshot)
+
+        if not dirty_items_snapshot:
+            logger.debug(f"No dirty items to persist")
+            return
+
+        logger.info(f"Persisting {total_dirty} dirty items")
+
+        # Process in batches
+        batch_size = self.config.get('persistence_batch_size', 100)
+        dirty_list = list(dirty_items_snapshot)
+        processed = 0
+        failed = 0
+        items_successfully_persisted = set()
+
+        for i in range(0, len(dirty_list), batch_size):
+             # Check for shutdown signal periodically during long loops
+            if self._shutdown_signal.is_set():
+                logger.warning("Shutdown signal received during persistence, aborting.")
+                break
+
+            batch_ids = dirty_list[i:i+batch_size]
+            batch_tasks = []
+
+            # Create tasks for saving items in the batch
+            async with self._lock: # Lock needed to access _memories and assemblies
+                for item_id in batch_ids:
+                    item_to_save = None
+                    save_coro = None
+                    is_assembly = False
+                    # Determine if memory or assembly
+                    # Use self.assemblies which should be more reliable under lock
+                    if item_id in self.assemblies:
+                        item_to_save = self.assemblies[item_id]
+                        save_coro = self.persistence.save_assembly(item_to_save)
+                        is_assembly = True
+                    elif item_id in self._memories:
+                        item_to_save = self._memories[item_id]
+                        save_coro = self.persistence.save_memory(item_to_save)
+                    else:
+                        # Check if ID looks like an assembly ID just in case
+                        if item_id.startswith("asm:"):
+                             actual_asm_id = item_id[4:]
+                             if actual_asm_id in self.assemblies:
+                                 item_to_save = self.assemblies[actual_asm_id]
+                                 save_coro = self.persistence.save_assembly(item_to_save)
+                                 is_assembly = True
+
+                    if save_coro:
+                        # Wrap save operation with ID tracking
+                        async def save_wrapper(id_to_save, coro):
+                            try:
+                                success = await coro
+                                return id_to_save, success
+                            except Exception as e:
+                                logger.error(f"Error persisting item {id_to_save}: {e}", exc_info=True)
+                                return id_to_save, False
+                        batch_tasks.append(save_wrapper(item_id, save_coro))
+                    elif item_id in dirty_items_snapshot: # Check original snapshot
+                         # Item was marked dirty but no longer exists in memory cache
+                         logger.warning(f"Item {item_id} marked dirty but not found in memory cache, removing from dirty set.")
+                         items_successfully_persisted.add(item_id) # Treat as 'processed'
+                         processed += 1
+
+
+            # Run batch save tasks concurrently
+            if batch_tasks:
+                results = await asyncio.gather(*batch_tasks)
+                for item_id, success in results:
+                    if success:
+                        items_successfully_persisted.add(item_id)
+                        processed += 1
+                    else:
+                        logger.error(f"Failed to persist item {item_id}")
+                        failed += 1
+
+        # Update the main dirty set *after* processing all batches
         async with self._lock:
-            # Get a snapshot of dirty items to process
-            dirty_memories = set(self._dirty_memories)
-            total_dirty = len(dirty_memories)
-            
-            if not dirty_memories:
-                logger.debug(f"No dirty items to persist")
-                return
-                
-            logger.info(f"Persisting {total_dirty} dirty items")
-            
-            # Process in batches to avoid long lock times
-            batch_size = self.config.get('persistence_batch_size', 100)
-            dirty_list = list(dirty_memories)
-            processed = 0
-            failed = 0
-            
-            for i in range(0, len(dirty_list), batch_size):
-                batch = dirty_list[i:i+batch_size]
-                
-                for memory_id in batch:
-                    # Check if it's an assembly (starts with "asm:")
-                    if memory_id.startswith("asm:") or (isinstance(memory_id, str) and 
-                                                    (memory_id.startswith("assembly_") or memory_id in self.assemblies)):
-                        # It's an assembly
-                        assembly = self.assemblies.get(memory_id)
-                        if assembly:
-                            success = await self.persistence.save_assembly(assembly)
-                            if success:
-                                self._dirty_memories.discard(memory_id)
-                                processed += 1
-                            else:
-                                logger.error(f"Failed to persist assembly {memory_id}")
-                                failed += 1
-                    else:
-                        # Regular memory entry
-                        memory = self._memories.get(memory_id)
-                        if memory:
-                            success = await self.persistence.save_memory(memory)
-                            if success:
-                                self._dirty_memories.discard(memory_id)
-                                processed += 1
-                            else:
-                                logger.error(f"Failed to persist memory {memory_id}")
-                                failed += 1
-                        else:
-                            # Memory no longer exists, just remove from dirty set
-                            self._dirty_memories.discard(memory_id)
-                            processed += 1
-            
-            logger.info(f"Persistence complete: {processed} succeeded, {failed} failed")
-    
-    async def _index_assembly_embedding(self, assembly: MemoryAssembly):
-        """Helper to validate and index/update an assembly's composite embedding."""
-        if not assembly or not hasattr(assembly, 'assembly_id'):
-            logger.error("Invalid assembly object passed to _index_assembly_embedding")
-            return
+            self._dirty_memories.difference_update(items_successfully_persisted)
+            remaining_dirty = len(self._dirty_memories)
 
-        # CRITICAL FIX: Ensure we add the asm: prefix if not already present
-        asm_id_for_index = assembly.assembly_id
-        if not asm_id_for_index.startswith("asm:"):
-            asm_id_for_index = f"asm:{asm_id_for_index}"
-            logger.info(f"Adding asm: prefix for vector index ID: {asm_id_for_index}")
+        logger.info(f"Persistence complete: {processed} succeeded, {failed} failed. {remaining_dirty} items remain dirty.")
 
-        # Log check for composite embedding presence
-        if assembly.composite_embedding is None:
-            logger.warning(f"Skipping index for assembly {asm_id_for_index}: No composite embedding.")
-            return
-
-        logger.info(f"---> PREPARING to index assembly: {asm_id_for_index}")
-
-        # Validate composite embedding before sending to vector index
-        validated_composite = self.geometry_manager._validate_vector(
-            assembly.composite_embedding, f"Composite Emb for {asm_id_for_index}"
-        )
-
-        if validated_composite is not None:
-            index_call_made = False
-            update_success = False
-            try:
-                # Debug: Check vector index state
-                if self.vector_index is None:
-                    logger.error(f"CRITICAL: Vector index is None when trying to index assembly {asm_id_for_index}")
-                    return
-                
-                logger.info(f"Vector index has {len(self.vector_index.id_to_index)} mappings")
-                
-                if asm_id_for_index in self.vector_index.id_to_index:
-                    logger.debug(f"Calling update_entry_async for existing assembly {asm_id_for_index}")
-                    index_call_made = True
-                    update_success = await self.vector_index.update_entry_async(asm_id_for_index, validated_composite)
-                    logger.info(f"<--- COMPLETED update_entry_async for {asm_id_for_index}, success={update_success}")
-                else:
-                    logger.debug(f"Calling add_async for new assembly {asm_id_for_index}")
-                    index_call_made = True
-                    update_success = await self.vector_index.add_async(asm_id_for_index, validated_composite)
-                    logger.info(f"<--- COMPLETED add_async for {asm_id_for_index}, success={update_success}")
-                    
-                    # Debug: Verify id mapping was created
-                    if update_success:
-                        logger.info(f"After add, id {asm_id_for_index} in vector index: {asm_id_for_index in self.vector_index.id_to_index}")
-                        logger.info(f"Vector index now has {len(self.vector_index.id_to_index)} mappings")
-
-                if update_success:
-                    logger.info(f"Successfully indexed assembly {asm_id_for_index}.")
-                    # Set timestamp ONLY on success
-                    if assembly.assembly_id in self.assemblies:
-                        self.assemblies[assembly.assembly_id].vector_index_updated_at = datetime.now(timezone.utc)
-                        self._dirty_memories.add(assembly.assembly_id) # Mark dirty again for timestamp
-                        # Save again immediately to persist timestamp change
-                        logger.info(f"[PERSIST_CHECK][Timestamp Update] Saving assembly {assembly.assembly_id}")
-                        save_ts_ok = await self.persistence.save_assembly(self.assemblies[assembly.assembly_id])
-                        if not save_ts_ok:
-                            logger.error(f"[PERSIST_CHECK][Timestamp Update] FAILED to save assembly {assembly.assembly_id} after timestamp update.")
-                    else:
-                        logger.warning(f"Assembly {assembly.assembly_id} disappeared before timestamp update could be applied.")
-                else:
-                    logger.error(f"FAILED vector index operation for assembly {asm_id_for_index}.")
-                    # TODO: Add to pending queue logic here in a future phase
-
-            except Exception as index_update_err:
-                logger.error(f"EXCEPTION during vector index op for assembly {asm_id_for_index}: {index_update_err}", exc_info=True)
-                # Re-raise to make the API call fail, providing debug info
-                raise RuntimeError(f"Internal vector index error for assembly {assembly.assembly_id}") from index_update_err
-            finally:
-                if not index_call_made:
-                    logger.error(f"!!! LOGIC ERROR: Vector index call was SKIPPED for {asm_id_for_index} !!!")
-        else:
-            logger.error(f"Composite embedding for assembly {asm_id_for_index} was invalid AFTER ADD/CREATE, skipping index update.")
-
-    async def _update_assemblies(self, memory: MemoryEntry):
-        """Find or create assemblies for a new memory."""
-        # --- Pre-checks ---
-        if not self.config.get('enable_assemblies', True): # Check global enable flag
-            logger.debug(f"Skipping assembly update for {memory.id}: Assemblies disabled in config.")
-            return
-
-        if memory.embedding is None:
-            logger.debug(f"Skipping assembly update for {memory.id}: No embedding.")
-            return
-
-        validated_mem_emb = self.geometry_manager._validate_vector(memory.embedding, f"Memory {memory.id} Emb")
-        if validated_mem_emb is None:
-            logger.warning(f"Skipping assembly update for {memory.id}: Invalid embedding.")
-            return
-        # --- End Pre-checks ---
-
-        suitable_assemblies = []
-        best_similarity = 0.0
-        best_assembly_id = None
-        assembly_threshold = self.config.get('assembly_threshold', 0.85)
-        
-        # Debug: Log config and thresholds
-        logger.info(f"[CONFIG_DEBUG] Assembly config: enable_assemblies={self.config.get('enable_assemblies', True)}, "
-                   f"threshold={assembly_threshold:.4f}, memory_id={memory.id}")
-
-        async with self._lock: # Access shared self.assemblies
-             for assembly_id, assembly in self.assemblies.items():
-                  similarity = assembly.get_similarity(validated_mem_emb)  # Use validated embedding
-                  
-                  # Debug: Log similarity comparisons
-                  logger.info(f"[SIMILARITY_DEBUG] Memory {memory.id} similarity to assembly {assembly_id}: {similarity:.4f}, threshold={assembly_threshold:.4f}")
-                  
-                  if similarity >= assembly_threshold:
-                       suitable_assemblies.append((assembly_id, similarity))
-                  if similarity > best_similarity:
-                       best_similarity = similarity
-                       best_assembly_id = assembly_id
-
-        # Sort suitable assemblies by similarity
-        suitable_assemblies.sort(key=lambda x: x[1], reverse=True)
-
-        # Add memory to best matching assemblies (up to max limit)
-        added_count = 0
-        max_assemblies = self.config.get('max_assemblies_per_memory', 3)
-        
-        # Debug: Log assembly matching outcome
-        logger.info(f"[ASSEMBLY_DEBUG] Memory {memory.id}: found {len(suitable_assemblies)} suitable assemblies, "
-                   f"best_similarity={best_similarity:.4f}, best_id={best_assembly_id}")
-        
-        # --- Process existing suitable assemblies ---
-        for assembly_id, similarity in suitable_assemblies[:max_assemblies]:
-            async with self._lock: # Lock needed for assembly modification
-                if assembly_id in self.assemblies:
-                    assembly = self.assemblies[assembly_id]
-                    logger.debug(f"Attempting add memory {memory.id} to EXISTING assembly {assembly_id} (Sim: {similarity:.4f})")
-                    # --- Log add_memory result ---
-                    add_success = assembly.add_memory(memory, validated_mem_emb)
-                    logger.info(f"Result of assembly.add_memory for {assembly_id}: {add_success}")
-                    # --- End Log ---
-                    if add_success:
-                        added_count += 1
-                        self._dirty_memories.add(assembly.assembly_id)
-                        if memory.id not in self.memory_to_assemblies: 
-                            self.memory_to_assemblies[memory.id] = set()
-                        self.memory_to_assemblies[memory.id].add(assembly_id)
-
-                        # --- SAVE & INDEX ASSEMBLY (EXISTING) ---
-                        logger.info(f"[PERSIST_CHECK][Existing Assembly] Saving assembly {assembly_id}")
-                        save_ok = await self.persistence.save_assembly(assembly)
-                        if save_ok:
-                            logger.info(f"[PERSIST_CHECK][Existing Assembly] Saved assembly {assembly_id} successfully.")
-                            # Try to index immediately after save
-                            await self._index_assembly_embedding(assembly) # <<< CALL HELPER HERE
-                        else:
-                            logger.error(f"[PERSIST_CHECK][Existing Assembly] FAILED to save assembly {assembly_id}.")
-                    else:
-                        logger.warning(f"Failed to add memory {memory.id} to assembly {assembly_id} (add_memory returned False).")
-                else:
-                    logger.warning(f"Assembly {assembly_id} disappeared before update lock.")
-
-        # --- Create new assembly if needed ---
-        create_threshold = assembly_threshold * 0.5
-        logger.debug(f"Checking new assembly condition: added_count={added_count}, best_sim={best_similarity:.4f}, create_thresh={create_threshold:.4f}")
-        if added_count == 0 and (len(self.assemblies) == 0 or best_similarity > create_threshold):
-            async with self._lock: # Lock for creating/modifying shared state
-                 # Log the state *before* the lock and creation check
-                 logger.info(f"[ASSEMBLY_DEBUG] State before create check: added_count={added_count}, len(self.assemblies)={len(self.assemblies)}, best_sim={best_similarity:.4f}")
-                 
-                 assembly_exists = any(asm_id in self.assemblies for asm_id in self.memory_to_assemblies.get(memory.id, set()))
-                 if not assembly_exists:
-                     logger.info(f"[ASSEMBLY_DEBUG] Creating NEW assembly seeded by memory {memory.id}")
-                     new_assembly = MemoryAssembly(geometry_manager=self.geometry_manager, name=f"Assembly around {memory.id[:8]}")
-                     add_success = new_assembly.add_memory(memory, validated_mem_emb)
-                     logger.info(f"Result of new_assembly.add_memory: {add_success}")
-                     if add_success:
-                          # Check composite embedding was actually created
-                          if new_assembly.composite_embedding is None:
-                              logger.error(f"New assembly {new_assembly.assembly_id} failed to create composite embedding!")
-                              # Don't proceed with this failed assembly
-                          else:
-                              self.assemblies[new_assembly.assembly_id] = new_assembly
-                              # Debug: Log current assemblies state
-                              logger.info(f"[ASSEMBLY_DEBUG] Added NEW assembly {new_assembly.assembly_id} to self.assemblies (Current count: {len(self.assemblies)})")
-                              
-                              self._dirty_memories.add(new_assembly.assembly_id)
-                              if memory.id not in self.memory_to_assemblies: 
-                                  self.memory_to_assemblies[memory.id] = set()
-                              self.memory_to_assemblies[memory.id].add(new_assembly.assembly_id)
-                              added_count += 1
-
-                              # --- SAVE & INDEX ASSEMBLY (NEW) ---
-                              logger.info(f"[PERSIST_CHECK][New Assembly] Saving assembly {new_assembly.assembly_id}")
-                              save_ok = await self.persistence.save_assembly(new_assembly)
-                              if save_ok:
-                                  logger.info(f"[PERSIST_CHECK][New Assembly] Saved assembly {new_assembly.assembly_id} successfully.")
-                                  await self._index_assembly_embedding(new_assembly) # <<< CALL HELPER HERE
-                              else:
-                                  logger.error(f"[PERSIST_CHECK][New Assembly] FAILED to save assembly {new_assembly.assembly_id}.")
-                                  # Clean up failed creation
-                                  self.assemblies.pop(new_assembly.assembly_id, None)
-                                  self._dirty_memories.discard(new_assembly.assembly_id)
-                                  if memory.id in self.memory_to_assemblies:
-                                      self.memory_to_assemblies[memory.id].discard(new_assembly.assembly_id)
-                                  added_count -= 1
-                     else:
-                         logger.error(f"Failed to add seeding memory {memory.id} to new assembly (add_memory failed).")
-
-        if added_count > 0:
-             logger.info(f"Memory {memory.id} was added to {added_count} assembly/assemblies.")
-        else:
-             logger.info(f"Memory {memory.id} was not added to any assembly (similarity/creation thresholds not met or add_memory failed).")
 
     async def _load_activation_stats(self):
         """Load assembly activation statistics from disk."""
+        stats_file_path = None # Initialize
         try:
             stats_dir = os.path.join(self.config['storage_path'], "stats")
-            stats_file = os.path.join(stats_dir, 'assembly_activation_stats.json')
+            stats_file_path = os.path.join(stats_dir, 'assembly_activation_stats.json')
 
             # Create stats directory if it doesn't exist
             os.makedirs(stats_dir, exist_ok=True)
 
-            if os.path.exists(stats_file):
-                async with aiofiles.open(stats_file, "r") as f:
-                    content = await f.read()
-                    self._assembly_activation_counts = json.loads(content)
-                logger.info("SynthiansMemoryCore", "Loaded assembly activation statistics", 
+            if os.path.exists(stats_file_path):
+                if aiofiles: # Check if aiofiles is available
+                    async with aiofiles.open(stats_file_path, "r") as f:
+                        content = await f.read()
+                        self._assembly_activation_counts = json.loads(content)
+                else: # Fallback to synchronous read
+                    # Run sync I/O in executor to avoid blocking
+                    loop = asyncio.get_running_loop()
+                    def read_sync():
+                         with open(stats_file_path, "r") as f:
+                             return json.load(f)
+                    self._assembly_activation_counts = await loop.run_in_executor(None, read_sync)
+
+
+                logger.info("SynthiansMemoryCore", "Loaded assembly activation statistics",
                             {"count": len(self._assembly_activation_counts)})
             else:
                 self._assembly_activation_counts = {}
                 logger.info("SynthiansMemoryCore", "No existing activation statistics found, starting fresh")
+        except FileNotFoundError:
+             self._assembly_activation_counts = {}
+             logger.info("SynthiansMemoryCore", f"Activation statistics file not found at {stats_file_path}, starting fresh")
+        except json.JSONDecodeError as json_err:
+            logger.error("SynthiansMemoryCore", f"Error decoding assembly activation statistics JSON from {stats_file_path}: {json_err}",
+                        exc_info=True)
+            self._assembly_activation_counts = {} # Reset on decode error
         except Exception as e:
-            logger.error("SynthiansMemoryCore", "Error loading assembly activation statistics", 
+            logger.error("SynthiansMemoryCore", "Error loading assembly activation statistics",
                         {"error": str(e)}, exc_info=True)
-            self._assembly_activation_counts = {}
-    
+            self._assembly_activation_counts = {} # Reset on other errors
+
+
     async def _persist_activation_stats(self, force: bool = False):
         """Persist assembly activation statistics to disk."""
+        stats_file_path = None # Initialize
         try:
             current_time = time.time()
             persist_interval = self.config.get('assembly_metrics_persist_interval', 600.0)
-            
+
             # Only persist if forced or interval has elapsed
             if not force and (current_time - self._last_activation_persist_time < persist_interval):
                 return
-            
+
             stats_dir = os.path.join(self.config['storage_path'], "stats")
-            stats_file = os.path.join(stats_dir, 'assembly_activation_stats.json')
-            
+            stats_file_path = os.path.join(stats_dir, 'assembly_activation_stats.json')
+
             # Create stats directory if it doesn't exist
             os.makedirs(stats_dir, exist_ok=True)
-            
-            # Write stats to file
-            async with aiofiles.open(stats_file, "w") as f:
-                await f.write(json.dumps(self._assembly_activation_counts))
-            
+
+            # Write stats to file using atomic write
+            temp_file_path = stats_file_path + ".tmp." + str(uuid.uuid4())[:8] # Unique temp file
+            stats_json = json.dumps(self._assembly_activation_counts, indent=2)
+
+            # Define sync write helper
+            def write_sync():
+                 with open(temp_file_path, "w") as f:
+                     f.write(stats_json)
+                 os.replace(temp_file_path, stats_file_path) # Atomic replace
+
+            if aiofiles: # Check if aiofiles is available
+                async with aiofiles.open(temp_file_path, "w") as f:
+                    await f.write(stats_json)
+                # Use async os replace if available, otherwise executor
+                if hasattr(aiofiles.os, "replace"):
+                     await aiofiles.os.replace(temp_file_path, stats_file_path)
+                else:
+                     loop = asyncio.get_running_loop()
+                     await loop.run_in_executor(None, lambda: os.replace(temp_file_path, stats_file_path))
+            else: # Fallback to sync write in executor
+                 loop = asyncio.get_running_loop()
+                 await loop.run_in_executor(None, write_sync)
+
+
             self._last_activation_persist_time = current_time
-            logger.info("SynthiansMemoryCore", "Persisted assembly activation statistics", 
+            logger.info("SynthiansMemoryCore", "Persisted assembly activation statistics",
                         {"count": len(self._assembly_activation_counts)})
         except Exception as e:
-            logger.error("SynthiansMemoryCore", "Error persisting assembly activation statistics", 
-                        {"error": str(e)}, exc_info=True)
-    
+            logger.error("SynthiansMemoryCore", "Error persisting assembly activation statistics",
+                        {"error": str(e), "path": stats_file_path}, exc_info=True)
+            # Attempt to remove potentially corrupted temp file
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                except OSError:
+                    pass
+
+
     async def _track_assembly_activation(self, assembly_id: str):
         """Track assembly activation for diagnostics."""
         if not assembly_id:
             return
-            
-        # Increment activation count
+
+        # Increment activation count (Needs lock if accessed concurrently, but usually called from locked sections)
+        # Assuming for now it's called safely or occasional race condition is acceptable for stats
         if assembly_id in self._assembly_activation_counts:
             self._assembly_activation_counts[assembly_id] += 1
         else:
             self._assembly_activation_counts[assembly_id] = 1
-        
-        # Check if we should persist activation stats
-        await self._persist_activation_stats()
-    
-    async def execute_merge(self, source_assembly_ids: List[str], target_assembly_id: str, similarity_score: float = 0.0, merge_event_id: Optional[str] = None):
-        """Execute a merge operation with proper tracking for explainability.
-        
+
+        # Check if we should persist activation stats (non-blocking check)
+        await self._persist_activation_stats() # persist checks interval internally
+
+
+    async def _index_assembly_embedding(self, assembly: MemoryAssembly) -> bool:
+        """Index or update the assembly embedding in the vector index.
+
+        This is a critical method for assembly index integrity. It ensures:
+        1. Assembly vectors are correctly indexed in FAISS
+        2. Failed operations are queued for retry
+        3. Assembly timestamps are updated only on successful indexing
+        4. Clear logging for diagnostics
+
         Args:
-            source_assembly_ids: List of source assembly IDs to merge
-            target_assembly_id: Target assembly ID (may be a new assembly or one of the sources)
-            similarity_score: Similarity score that triggered the merge (if applicable)
-            merge_event_id: Optional ID from MergeTracker for tracking cleanup status
-            
+            assembly: The assembly to index
+
         Returns:
-            bool: Whether the merge was successful
+            bool: True if successful, False otherwise
         """
-        if not self.merge_tracker:
-            logger.warning("SynthiansMemoryCore", "Cannot execute merge: MergeTracker not initialized")
-            return False
-            
         try:
-            # Get merge threshold from config
-            merge_threshold = self.config.get('assembly_merge_threshold', 0.80)
-            
-            # Log the merge creation event
-            if merge_event_id is None:
-                merge_event_id = await self.merge_tracker.log_merge_creation_event(
-                    source_assembly_ids=source_assembly_ids,
-                    target_assembly_id=target_assembly_id,
-                    similarity_at_merge=similarity_score,
-                    merge_threshold=merge_threshold
-                )
-            
-            # Perform the actual merge of assemblies
-            if target_assembly_id not in self.assemblies:
-                # Create a new assembly as the merge target
-                # This would be implemented in the actual merge logic
-                logger.info("SynthiansMemoryCore", "Creating new assembly as merge target", 
-                           {"target_id": target_assembly_id})
-                
-                # In reality, this would create the new assembly and populate it
-                # For now, we'll assume this happens in the actual implementation
-                pass
-            
-            # Update the merged_from field to record lineage
-            if target_assembly_id in self.assemblies:
-                target_assembly = self.assemblies[target_assembly_id]
-                
-                # Add source assemblies to merged_from if not already there
-                for source_id in source_assembly_ids:
-                    if source_id != target_assembly_id and source_id not in target_assembly.merged_from:
-                        target_assembly.merged_from.append(source_id)
-                
-                # Mark the assembly as dirty for persistence
-                if hasattr(self, '_dirty_assemblies'):
-                    self._dirty_assemblies.add(target_assembly_id)
-            
-            # Record cleanup status (would actually happen after async cleanup)
-            # For demonstration, we'll mark it as completed immediately
-            await self.merge_tracker.log_cleanup_status_event(
-                merge_event_id=merge_event_id,
-                new_status="completed"
-            )
-            
-            return True
+            if not self.vector_index or self.vector_index.state != "READY":
+                logger.error(f"Vector index not ready when trying to index assembly {assembly.assembly_id}")
+                # Queue for retry
+                await self._queue_assembly_for_retry(assembly, 'add')
+                return False
+
+            # Use composite_embedding for indexing assemblies
+            if not hasattr(assembly, 'composite_embedding') or assembly.composite_embedding is None:
+                logger.error(f"Assembly {assembly.assembly_id} has no composite embedding to index")
+                return False
+
+            # Prepare for vector index
+            asm_id_for_index = f"asm:{assembly.assembly_id}"
+            # Validate the composite embedding
+            validated = self.geometry_manager._validate_vector(assembly.composite_embedding, f"Composite Emb {asm_id_for_index}")
+
+            if validated is None:
+                logger.error(f"Invalid composite embedding for assembly {assembly.assembly_id}, cannot index")
+                return False
+
+            if self.vector_index is None: # Double check after potential await
+                logger.error(f"CRITICAL: Vector index became None when trying to index assembly {asm_id_for_index}")
+                await self._queue_assembly_for_retry(assembly, 'add')
+                return False
+
+            logger.debug(f"Attempting index operation for assembly {asm_id_for_index}. Mapping size: {len(self.vector_index.id_to_index)}")
+
+            success = False # Initialize success before try block
+            operation = 'unknown' # Initialize operation before try block
+            try:
+                if asm_id_for_index in self.vector_index.id_to_index:
+                    logger.debug(f"Calling update_entry_async for existing assembly {asm_id_for_index}")
+                    success = await self.vector_index.update_entry_async(asm_id_for_index, validated)
+                    operation = 'update'
+                else:
+                    logger.debug(f"Calling add_async for new assembly {asm_id_for_index}")
+                    success = await self.vector_index.add_async(asm_id_for_index, validated)
+                    operation = 'add'
+            except Exception as index_update_err:
+                logger.error(f"EXCEPTION during vector index op for assembly {asm_id_for_index}: {index_update_err}", exc_info=True)
+                success = False # Ensure success is False on exception
+                # Determine operation type again if possible, default to 'add' for queueing
+                operation = "update" if asm_id_for_index in self.vector_index.id_to_index else "add"
+
+
+            if success:
+                # Set timestamp ONLY on success
+                async with self._lock: # Lock to modify assembly object
+                     if assembly.assembly_id in self.assemblies: # Check if still exists
+                        self.assemblies[assembly.assembly_id].vector_index_updated_at = datetime.now(timezone.utc)
+                        self._dirty_memories.add(assembly.assembly_id) # Mark assembly dirty for persistence
+                        logger.debug(f"Updated timestamp for successfully indexed assembly {assembly.assembly_id}")
+                     else:
+                         logger.warning(f"Assembly {assembly.assembly_id} disappeared before timestamp update after index success.")
+            else:
+                logger.error(f"FAILED vector index operation '{operation}' for assembly {asm_id_for_index}. Queuing for retry.")
+                # Queue the failed operation using the determined operation type
+                await self._queue_assembly_for_retry(assembly, operation)
+
+
+            return success
         except Exception as e:
-            logger.error("SynthiansMemoryCore", "Error executing merge", 
-                        {"error": str(e)}, exc_info=True)
+            logger.error(f"Exception during assembly indexing for {assembly.assembly_id}: {e}", exc_info=True)
+            # Queue for retry on unexpected exception
+            await self._queue_assembly_for_retry(assembly, 'add') # Default to add on exception
             return False
 
-    async def _activate_assemblies(self, query_embedding: np.ndarray) -> List[Tuple[MemoryAssembly, float]]:
-        """Find and activate assemblies based on query similarity.
-        
-        Returns:
-            List of (assembly, similarity) tuples for activated assemblies.
+    async def _queue_assembly_for_retry(self, assembly: MemoryAssembly, operation: str) -> None:
+        """Queue a failed assembly vector operation for retry.
+
+        Args:
+            assembly: The assembly to queue
+            operation: The operation type ('add', 'update', 'remove')
         """
-        activated = []
-        assembly_threshold = self.config.get('assembly_threshold', 0.85)
-        
-        for assembly_id, assembly in self.assemblies.items():
-            if assembly.composite_embedding is not None:
-                # Compute similarity between query and assembly using appropriate GeometryManager method
-                similarity = self.geometry_manager.compute_similarity(query_embedding, assembly.composite_embedding)
-                
-                # If similarity exceeds threshold, activate assembly
-                if similarity >= assembly_threshold:
-                    # Activate the assembly with the similarity level as activation
-                    assembly.activate(similarity)  # This method exists on MemoryAssembly
-                    activated.append((assembly, similarity))
-                    
-                    # Track activation for Phase 5.9 diagnostics
-                    await self._track_assembly_activation(assembly_id)
-        
-        return activated
+        if not hasattr(self, '_pending_vector_updates') or self._pending_vector_updates is None:
+            logger.error(f"Cannot queue assembly {assembly.assembly_id} for retry: queue not initialized")
+            return
+
+        try:
+            # Prepare the update item
+            asm_id_for_index = f"asm:{assembly.assembly_id}"
+            embedding_list = None
+
+            # Convert numpy embedding to list for serialization if operation needs it
+            # Use composite_embedding
+            if operation in ['add', 'update'] and hasattr(assembly, 'composite_embedding') and assembly.composite_embedding is not None:
+                embedding_list = assembly.composite_embedding.tolist()
+            elif operation in ['add', 'update']:
+                 logger.warning(f"Cannot queue {operation} for assembly {assembly.assembly_id}: composite embedding is missing.")
+                 return # Don't queue if embedding isn't available for add/update
+
+
+            # Create update item
+            update_item = {
+                'operation': operation,
+                'id': asm_id_for_index,
+                'embedding': embedding_list, # Will be None for 'remove' or if missing
+                'is_assembly': True,
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'retry_count': 0 # Initialize retry count
+            }
+
+            # Add to queue
+            await self._pending_vector_updates.put(update_item)
+            logger.info(f"Queued assembly {assembly.assembly_id} for {operation} retry")
+
+        except Exception as e:
+            logger.error(f"Failed to queue assembly {assembly.assembly_id} for retry: {e}", exc_info=True)
+
 
     async def _merge_similar_assemblies(self):
         """Merge assemblies that are highly similar."""
         if not self.config.get('enable_assembly_merging', True):
+            logger.debug("[MERGE] Assembly merging disabled by config.")
             return
 
         logger.info("[MERGE] Starting assembly merge check...")
-        merge_threshold = self.config.get('assembly_merge_threshold', 0.70)  # Lower default for test reliability
+        merge_threshold = self.config.get('assembly_merge_threshold', 0.70)
         max_merges = self.config.get('assembly_max_merges_per_run', 10)
         merges_done = 0
 
@@ -56195,17 +56522,23 @@ class SynthiansMemoryCore:
         async with self._lock: # Need lock to iterate and modify self.assemblies
             assembly_ids = list(self.assemblies.keys())
             checked_pairs = set()
+            merged_this_run = set() # Track IDs merged in this run to avoid merging them again
 
             for i in range(len(assembly_ids)):
-                if merges_done >= max_merges: break
+                if merges_done >= max_merges:
+                    logger.info(f"[MERGE] Reached max merges ({max_merges}) for this run.")
+                    break
                 asm_id_a = assembly_ids[i]
-                if asm_id_a not in self.assemblies: continue # Assembly might have been merged already
+                # Ensure asm_id_a exists and wasn't merged in this run
+                if asm_id_a not in self.assemblies or asm_id_a in merged_this_run: continue
+
                 asm_a = self.assemblies[asm_id_a]
 
                 for j in range(i + 1, len(assembly_ids)):
                     if merges_done >= max_merges: break
                     asm_id_b = assembly_ids[j]
-                    if asm_id_b not in self.assemblies: continue # Assembly might have been merged already
+                     # Ensure asm_id_b exists and wasn't merged in this run
+                    if asm_id_b not in self.assemblies or asm_id_b in merged_this_run: continue
 
                     # Avoid re-checking pairs
                     pair = tuple(sorted((asm_id_a, asm_id_b)))
@@ -56219,46 +56552,64 @@ class SynthiansMemoryCore:
 
                     if composite_a is not None and composite_b is not None:
                         try:
-                            aligned_a, aligned_b = self.geometry_manager.align_vectors(composite_a, composite_b)
+                            aligned_a, aligned_b = self.geometry_manager._align_vectors(composite_a, composite_b)
                             if aligned_a is not None and aligned_b is not None:
                                 similarity = self.geometry_manager.calculate_similarity(aligned_a, aligned_b)
-                                logger.info(f"[MERGE_DEBUG] Comparing {asm_id_a} and {asm_id_b}: Similarity={similarity:.4f}, Threshold={merge_threshold:.4f}") # Ensure log exists
+                                # logger.debug(f"[MERGE_DEBUG] Comparing {asm_id_a} and {asm_id_b}: Similarity={similarity:.4f}")
 
                                 if similarity >= merge_threshold:
-                                    logger.info(f"[MERGE_TRIGGER] Threshold met for merging {asm_id_a} and {asm_id_b}")
+                                    logger.info(f"[MERGE_TRIGGER] Threshold met ({similarity:.4f} >= {merge_threshold:.4f}) for merging {asm_id_a} and {asm_id_b}")
+                                    # Determine which assembly to keep (e.g., the one with more memories or older one?)
+                                    # Simple strategy: Keep B, merge A into B.
+                                    keep_id, remove_id = asm_id_b, asm_id_a
+
+                                    # --- Log Merge Event ---
+                                    merge_event_id_val = None
+                                    if hasattr(self, 'merge_tracker') and self.merge_tracker:
+                                         try:
+                                             merge_event_id_val = await self.merge_tracker.log_merge_event(
+                                                 assembly_id_a=remove_id, # Source
+                                                 assembly_id_b=keep_id, # Target
+                                                 similarity_score=similarity
+                                             )
+                                         except Exception as log_err:
+                                              logger.error(f"[MERGE] Failed to log merge event: {log_err}")
+
                                     # --- Execute Merge ---
-                                    merge_success = await self._execute_merge(asm_id_a, asm_id_b, merge_event_id=None)
+                                    # Pass IDs directly to _execute_merge
+                                    merge_success = await self._execute_merge(remove_id, keep_id, merge_event_id=merge_event_id_val)
                                     if merge_success:
                                         merges_done += 1
-                                        # Break inner loop and restart outer check as state changed
-                                        # NOTE: This is inefficient but safer. A better approach
-                                        # would track merged IDs and skip them.
-                                        logger.info(f"[MERGE] Merge successful, restarting scan. Merges done: {merges_done}")
-                                        # Need to break outer loop too, restart scan from beginning
-                                        # For simplicity now, just break inner loop
+                                        merged_this_run.add(remove_id) # Mark the removed ID as merged
+                                        logger.info(f"[MERGE] Merge successful ({remove_id} -> {keep_id}). Merges done: {merges_done}")
+                                        # Break inner loop as asm_a (remove_id) no longer exists
+                                        # Need to restart scan or handle modified list carefully.
+                                        # For simplicity, breaking inner and continuing outer might miss some merges but is safer.
                                         break
                                     else:
-                                        logger.error(f"[MERGE] Merge execution failed between {asm_id_a} and {asm_id_b}")
+                                        logger.error(f"[MERGE] Merge execution failed between {remove_id} and {keep_id}")
+                                        # Log failed merge execution status if tracker ID available
+                                        if merge_event_id_val and hasattr(self, 'merge_tracker') and self.merge_tracker:
+                                            await self.merge_tracker.log_cleanup_status_event(merge_event_id_val, "failed", "Merge execution failed")
                             else:
-                                 # Optional: log when threshold *not* met
-                                 # logger.debug(f"[MERGE_DEBUG] Similarity {similarity:.4f} below threshold for {asm_id_a}/{asm_id_b}")
-                                 pass
+                                 logger.debug(f"[MERGE_DEBUG] Alignment failed for {asm_id_a}/{asm_id_b}")
                         except Exception as e_sim:
-                             logger.error(f"[MERGE_DEBUG] Error calculating similarity between {asm_id_a} and {asm_id_b}: {e_sim}")
+                             logger.error(f"[MERGE_DEBUG] Error calculating similarity between {asm_id_a} and {asm_id_b}: {e_sim}", exc_info=True)
                     else:
                          logger.warning(f"[MERGE_DEBUG] Skipping comparison: Composite embedding missing for {asm_id_a} or {asm_id_b}")
                 # End inner loop (j)
             # End outer loop (i)
         logger.info(f"[MERGE] Merge check completed. Merges performed in this run: {merges_done}")
 
+
     async def _execute_merge(self, asm_id_a: str, asm_id_b: str, merge_event_id: Optional[str] = None) -> bool:
         """Performs the actual merge operation (internal helper). Assumes lock is held.
-        
+
         Args:
             asm_id_a: ID of the source assembly to merge from (will be removed)
-            asm_id_b: ID of the target assembly to merge into (will be preserved)
+            asm_id_b: Target assembly ID (may be a new assembly or one of the sources)
             merge_event_id: Optional ID from MergeTracker for tracking cleanup status
-            
+
         Returns:
             bool: Whether the merge was successful
         """
@@ -56277,11 +56628,13 @@ class SynthiansMemoryCore:
             logger.info(f"[MERGE_EXECUTE] Adding {len(members_to_add)} members from {asm_id_a} to {asm_id_b}")
             add_failures = 0
             for mem_id in members_to_add:
-                memory = self._memories.get(mem_id) # Use cache directly under lock
+                # Load memory if not in cache (use async helper which handles lock internally)
+                memory = await self.get_memory_by_id_async(mem_id)
                 if memory and memory.embedding is not None:
                      # Validate embedding before adding
                      validated_emb = self.geometry_manager._validate_vector(memory.embedding, f"Merge Member {mem_id}")
                      if validated_emb is not None:
+                         # add_memory should recalculate composite embedding
                          if not asm_b.add_memory(memory, validated_emb):
                               add_failures += 1
                               logger.warning(f"[MERGE_EXECUTE] Failed to add memory {mem_id} during merge.")
@@ -56290,7 +56643,7 @@ class SynthiansMemoryCore:
                          logger.warning(f"[MERGE_EXECUTE] Invalid embedding for memory {mem_id}, cannot add during merge.")
                 else:
                     add_failures += 1
-                    logger.warning(f"[MERGE_EXECUTE] Memory {mem_id} not found in cache or has no embedding, cannot add during merge.")
+                    logger.warning(f"[MERGE_EXECUTE] Memory {mem_id} not found or has no embedding, cannot add during merge.")
             if add_failures > 0:
                  logger.warning(f"[MERGE_EXECUTE] {add_failures} members failed to add during merge.")
 
@@ -56298,15 +56651,16 @@ class SynthiansMemoryCore:
             asm_b.name = f"{asm_b.name} (merged {asm_id_a[-8:]})"
             asm_b.keywords.update(asm_a.keywords)
             asm_b.tags.update(asm_a.tags)
-            asm_b.merged_from.append(asm_id_a)
-            asm_b.merged_from.extend(asm_a.merged_from)
+            asm_b.merged_from.append(asm_id_a) # Record lineage
+            asm_b.merged_from.extend(asm_a.merged_from) # Preserve older lineage
+            asm_b.merged_from = list(set(asm_b.merged_from)) # Remove duplicates
             # Keep the newer last_activation time
-            asm_b.last_activation = max(asm_a.last_activation, asm_b.last_activation)
-            # Reset sync timestamp for the merged assembly
+            asm_b.last_activation = max(asm_a.last_activation, asm_b.last_activation) if asm_a.last_activation and asm_b.last_activation else (asm_a.last_activation or asm_b.last_activation)
+            # Reset sync timestamp for the merged assembly as its embedding changed
             asm_b.vector_index_updated_at = None
             logger.info(f"[MERGE_EXECUTE] Merged metadata. New member count for {asm_id_b}: {len(asm_b.memories)}")
 
-            # Mark merged assembly B as dirty
+            # Mark merged assembly B as dirty (needs saving and re-indexing)
             self._dirty_memories.add(asm_id_b)
 
             # Remove assembly A from core structures (under lock)
@@ -56319,9 +56673,9 @@ class SynthiansMemoryCore:
                      self.memory_to_assemblies[mem_id].add(asm_id_b) # Ensure mapping points to B
             logger.info(f"[MERGE_EXECUTE] Removed assembly {asm_id_a} from internal structures.")
 
-            # Schedule cleanup and indexing task
+            # Schedule cleanup and indexing task (runs outside the lock)
             asyncio.create_task(self.cleanup_and_index_after_merge(asm_id_a, asm_id_b, merge_event_id))
-            
+
             logger.info(f"[MERGE_EXECUTE] Successfully merged {asm_id_a} into {asm_id_b}. Scheduled cleanup task.")
             return True
         except Exception as merge_err:
@@ -56334,23 +56688,32 @@ class SynthiansMemoryCore:
         # Variable to track overall success for cleanup status
         cleanup_success = True
         cleanup_error = None
-        
+        assembly_b_obj = None # To store the assembly object
+
         try:
+            # Retrieve assembly B object (needed for saving/indexing)
+            # Use lock briefly to get object reference
+            async with self._lock:
+                assembly_b_obj = self.assemblies.get(asm_id_b)
+
+            if assembly_b_obj is None:
+                raise ValueError(f"Merged assembly {asm_id_b} not found in memory for cleanup.")
+
             # Save the updated assembly B
             try:
-                save_ok = await self.persistence.save_assembly(self.assemblies[asm_id_b])
+                save_ok = await self.persistence.save_assembly(assembly_b_obj)
                 if save_ok:
                      logger.info(f"[MERGE_CLEANUP] Saved merged assembly {asm_id_b}")
-                     # Index the updated assembly B
-                     await self._index_assembly_embedding(self.assemblies[asm_id_b])
+                     # Index the updated assembly B (use the object retrieved earlier)
+                     await self._index_assembly_embedding(assembly_b_obj)
                 else:
                      logger.error(f"[MERGE_CLEANUP] Failed to save merged assembly {asm_id_b}")
                      cleanup_success = False
                      cleanup_error = "Failed to save merged assembly"
             except Exception as save_err:
-                logger.error(f"[MERGE_CLEANUP] Error saving merged assembly {asm_id_b}: {save_err}")
+                logger.error(f"[MERGE_CLEANUP] Error saving/indexing merged assembly {asm_id_b}: {save_err}", exc_info=True)
                 cleanup_success = False
-                cleanup_error = f"Error saving: {str(save_err)}"
+                cleanup_error = f"Error saving/indexing: {str(save_err)}"
 
             # Delete the old assembly A from persistence and index
             try:
@@ -56358,19 +56721,29 @@ class SynthiansMemoryCore:
                 await self.persistence.delete_assembly(asm_id_a)
                 logger.info(f"[MERGE_CLEANUP] Successfully deleted old assembly {asm_id_a} from persistence")
             except Exception as del_err:
-                logger.error(f"[MERGE_CLEANUP] Error deleting old assembly {asm_id_a} from persistence: {del_err}")
-                cleanup_success = False
-                cleanup_error = f"Error deleting from persistence: {str(del_err)}"
+                logger.error(f"[MERGE_CLEANUP] Error deleting old assembly {asm_id_a} from persistence: {del_err}", exc_info=True)
+                cleanup_success = False # Mark as failed but continue other cleanup steps
+                if not cleanup_error: cleanup_error = f"Error deleting from persistence: {str(del_err)}"
 
             try:
                 logger.info(f"[MERGE_CLEANUP] Removing old assembly {asm_id_a} from vector index...")
-                await self.vector_index.remove_vector_async(f"asm:{asm_id_a}")
-                logger.info(f"[MERGE_CLEANUP] Successfully removed old assembly {asm_id_a} from vector index")
+                # Add asm: prefix for index removal
+                removed_from_index = await self.vector_index.remove_vector_async(f"asm:{asm_id_a}")
+                if removed_from_index:
+                    logger.info(f"[MERGE_CLEANUP] Successfully removed old assembly {asm_id_a} from vector index")
+                else:
+                    logger.warning(f"[MERGE_CLEANUP] Old assembly {asm_id_a} (ID: asm:{asm_id_a}) not found in vector index for removal (might be expected if already removed).")
             except Exception as idx_err:
-                logger.error(f"[MERGE_CLEANUP] Error removing old assembly {asm_id_a} from vector index: {idx_err}")
+                logger.error(f"[MERGE_CLEANUP] Error removing old assembly {asm_id_a} from vector index: {idx_err}", exc_info=True)
                 cleanup_success = False
-                cleanup_error = f"Error removing from vector index: {str(idx_err)}"
-            
+                if not cleanup_error: cleanup_error = f"Error removing from vector index: {str(idx_err)}"
+
+        except Exception as e:
+            logger.error(f"[MERGE_CLEANUP] Error during cleanup setup for {asm_id_b}: {e}", exc_info=True)
+            cleanup_success = False
+            cleanup_error = f"Error during cleanup: {str(e)}"
+
+        finally:
             # Log the final cleanup status if we have a merge_event_id
             if merge_event_id and hasattr(self, 'merge_tracker') and self.merge_tracker:
                 try:
@@ -56383,12 +56756,296 @@ class SynthiansMemoryCore:
                 except Exception as log_err:
                     logger.error(f"[MERGE_CLEANUP] Failed to log cleanup status: {log_err}")
 
-        except Exception as e:
-            logger.error(f"[MERGE_CLEANUP] Error during cleanup: {e}", exc_info=True)
-            cleanup_success = False
-            cleanup_error = f"Error during cleanup: {str(e)}"
-
         logger.info(f"[MERGE_CLEANUP] Task completed for merged assembly {asm_id_b}")
+
+    async def force_process_pending_updates(self) -> Dict[str, Any]:
+        """Manually process all items currently in the pending vector update queue."""
+        # Ensure the queue exists and is initialized
+        if not hasattr(self, '_pending_vector_updates') or self._pending_vector_updates is None:
+            logger.warning("Attempted to force process pending updates, but queue is not available.")
+            return {"processed": 0, "failed": 0, "requeued": 0, "error": "Pending update queue not available."}
+
+        processed_count = 0
+        failed_count = 0
+        requeued_count = 0
+        items_to_requeue = []
+        queue_size = self._pending_vector_updates.qsize()
+        logger.info(f"Force processing {queue_size} pending vector updates.")
+
+        # Process each item currently in the queue
+        for _ in range(queue_size):
+            update = None # Initialize update to None in case get() fails
+            try:
+                # Get an item, but don't wait forever
+                update = await asyncio.wait_for(self._pending_vector_updates.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                # Queue became empty while processing
+                logger.info("Pending update queue emptied during force processing.")
+                break
+            except asyncio.QueueEmpty: # More explicit catch
+                logger.info("Pending update queue is empty.")
+                break
+
+            try: # Process the update item
+                if not isinstance(update, dict) or 'operation' not in update or 'id' not in update:
+                    logger.error(f"Invalid update item format in queue: {update}")
+                    self._pending_vector_updates.task_done()
+                    continue
+
+                # Extract operation details
+                operation = update.get('operation')
+                item_id = update.get('id')
+                embedding_data = update.get('embedding') # Can be None or list
+                is_assembly = update.get('is_assembly', False)
+
+                # Log the attempt
+                logger.info(f"Force Processing: Retrying {operation} for {'assembly' if is_assembly else 'memory'} {item_id}")
+
+                # Convert embedding back to numpy array if needed and possible
+                embedding = None
+                if embedding_data:
+                    try:
+                        embedding = np.array(embedding_data, dtype=np.float32)
+                    except Exception as e:
+                        logger.error(f"Failed to convert embedding for {item_id}: {e}. Cannot retry add/update.")
+                        failed_count += 1
+                        items_to_requeue.append(update) # Requeue if conversion failed
+                        self._pending_vector_updates.task_done()
+                        continue
+
+                success = False
+                if operation == 'add':
+                    if embedding is not None:
+                        success = await self.vector_index.add_async(item_id, embedding)
+                    else:
+                        logger.error(f"Cannot retry add operation without embedding for {item_id}")
+                elif operation == 'update':
+                    if embedding is not None:
+                        success = await self.vector_index.update_entry_async(item_id, embedding)
+                    else:
+                        logger.error(f"Cannot retry update operation without embedding for {item_id}")
+                elif operation == 'remove':
+                    success = await self.vector_index.remove_vector_async(item_id)
+                else:
+                    logger.error(f"Unknown operation type '{operation}' for {item_id}")
+
+                # Handle result
+                if success:
+                    logger.info(f"Force Processing: Successfully retried {operation} for {item_id}")
+                    processed_count += 1
+
+                    # For assemblies, update the timestamp on success
+                    if is_assembly:
+                        assembly_id = item_id[4:] if item_id.startswith("asm:") else item_id # Get actual ID
+                        async with self._lock:  # Protect assembly update
+                            if assembly_id in self.assemblies:
+                                self.assemblies[assembly_id].vector_index_updated_at = datetime.now(timezone.utc)
+                                self._dirty_memories.add(assembly_id)  # Mark for persistence
+                                logger.info(f"Force Processing: Updated timestamp for assembly {assembly_id}")
+                            else:
+                                logger.warning(f"Force Processing: Assembly {assembly_id} not found for timestamp update.")
+                else:
+                    logger.warning(f"Force Processing: Failed retry of {operation} for {item_id}, will re-queue")
+                    failed_count += 1
+                    items_to_requeue.append(update)  # Requeue for later retry
+
+                # Mark task as done in the queue
+                self._pending_vector_updates.task_done()
+
+            except asyncio.CancelledError:
+                logger.warning("Force processing task cancelled.")
+                if update: items_to_requeue.append(update) # Requeue if item was retrieved
+                try: self._pending_vector_updates.task_done()
+                except ValueError: pass # Ignore if already done
+                raise # Re-raise cancellation
+
+            except Exception as e:
+                logger.error(f"Error force processing pending update for {update.get('id', 'N/A') if update else 'N/A'}: {e}", exc_info=True)
+                failed_count += 1
+                if update: items_to_requeue.append(update) # Requeue if error occurred after getting item
+                try: self._pending_vector_updates.task_done()
+                except ValueError: pass # Ignore if already done
+
+        # Requeue failed items
+        for item in items_to_requeue:
+            await self._pending_vector_updates.put(item)
+            requeued_count += 1
+
+        if items_to_requeue:
+            logger.warning(f"Force Processing: Requeued {requeued_count} failed updates.")
+
+        return {
+            "processed": processed_count,
+            "failed": failed_count,
+            "requeued": requeued_count
+        }
+
+    async def _vector_update_retry_loop(self) -> None:
+        """Background task to process pending vector index updates from the queue.
+
+        This is a critical stability component that handles retrying vector index operations
+        (add, remove, update) that failed during regular processing. Without this loop,
+        vector index failures would only be addressed during startup/repair.
+
+        The loop runs continuously with configurable intervals, processing items from
+        the _pending_vector_updates queue. Each operation is retried with full logging
+        and error handling.
+        """
+        logger.info("Starting vector update retry background loop")
+        # Use config values with defaults
+        retry_interval = self.config.get('vector_retry_interval_seconds', 60)
+        batch_size = self.config.get('vector_retry_batch_size', 10)
+        max_retry_attempts = self.config.get('max_vector_retry_attempts', 5)
+        trace_id = str(uuid.uuid4())[:8] # Unique ID for this loop instance
+
+        # Use self._shutdown_signal consistently
+        while not self._shutdown_signal.is_set():
+            try:
+                retry_count = 0
+                # Determine max items to process in this batch
+                current_queue_size = self._pending_vector_updates.qsize()
+                max_retries = min(batch_size, current_queue_size)
+
+                if max_retries > 0:
+                    logger.info(f"[VectorRetry][{trace_id}] Processing up to {max_retries} pending vector operations (Queue size: {current_queue_size})")
+
+                # Process a batch of items (up to batch_size) from the queue
+                while retry_count < max_retries and not self._shutdown_signal.is_set():
+                    op_data = None # Initialize in case get fails immediately
+                    try:
+                        # Get an item from the queue (non-blocking)
+                        op_data = self._pending_vector_updates.get_nowait()
+                        retry_count += 1
+
+                        # Extract operation details more safely using .get()
+                        op_type = op_data.get('operation') # Use 'operation' key consistently
+                        memory_id = op_data.get('id')
+                        embedding_data = op_data.get('embedding') # Can be None or list
+                        is_assembly = op_data.get('is_assembly', False)
+                        operation_trace = op_data.get('trace_id', 'unknown') # Original trace ID if available
+                        retry_attempt = op_data.get('retry_count', 0) + 1
+
+                        # Validate extracted data
+                        if not op_type or not memory_id:
+                            logger.error(f"[VectorRetry][{trace_id}] Invalid operation data structure: {op_data}")
+                            self._pending_vector_updates.task_done() # Mark invalid item as done
+                            continue
+
+                        # Log the retry attempt
+                        logger.info(f"[VectorRetry][{trace_id}] Attempt {retry_attempt} for {op_type} operation on {'assembly' if is_assembly else 'memory'} {memory_id} (original trace: {operation_trace})")
+
+                        # Convert embedding back to numpy array if needed
+                        embedding = None
+                        if embedding_data:
+                            try:
+                                embedding = np.array(embedding_data, dtype=np.float32)
+                            except Exception as e:
+                                logger.error(f"[VectorRetry][{trace_id}] Failed to convert embedding for {memory_id}: {e}. Cannot retry add/update.")
+                                # Requeue with increased retry count if possible
+                                if retry_attempt < max_retry_attempts:
+                                    op_data['retry_count'] = retry_attempt
+                                    await self._pending_vector_updates.put(op_data)
+                                else:
+                                    logger.error(f"[VectorRetry][{trace_id}] Permanently failed {op_type} for {memory_id} due to embedding conversion error after {retry_attempt} attempts.")
+                                self._pending_vector_updates.task_done() # Mark task done after requeue/fail
+                                continue # Skip to next item
+
+                        # Execute the appropriate operation based on type
+                        success = False
+                        if op_type == 'add':
+                            if embedding is None:
+                                logger.error(f"[VectorRetry][{trace_id}] Cannot retry add for {memory_id}: Missing embedding")
+                            else:
+                                logger.info(f"[VectorRetry][{trace_id}] Retrying add_async for {memory_id}")
+                                success = await self.vector_index.add_async(memory_id, embedding)
+                        elif op_type == 'remove':
+                            logger.info(f"[VectorRetry][{trace_id}] Retrying remove_vector_async for {memory_id}")
+                            success = await self.vector_index.remove_vector_async(memory_id)
+                        elif op_type == 'update':
+                            if embedding is None:
+                                logger.error(f"[VectorRetry][{trace_id}] Cannot retry update for {memory_id}: Missing embedding")
+                            else:
+                                logger.info(f"[VectorRetry][{trace_id}] Retrying update_entry_async for {memory_id}")
+                                success = await self.vector_index.update_entry_async(memory_id, embedding)
+                        else:
+                            logger.error(f"[VectorRetry][{trace_id}] Unknown operation type: {op_type} for {memory_id}")
+
+                        # Handle the outcome
+                        if success:
+                            logger.info(f"[VectorRetry][{trace_id}] Successfully completed {op_type} operation for {memory_id}")
+
+                            # For vector updates related to assemblies, update the timestamp
+                            if is_assembly and op_type in ['add', 'update']:
+                                try:
+                                    assembly_id = memory_id[4:] if memory_id.startswith('asm:') else memory_id # Get base ID
+                                    async with self._lock: # Lock for assembly update
+                                        if assembly_id in self.assemblies:
+                                            self.assemblies[assembly_id].vector_index_updated_at = datetime.now(timezone.utc) # Use datetime obj
+                                            self._dirty_memories.add(assembly_id) # Mark assembly dirty for persistence
+                                            logger.info(f"[VectorRetry][{trace_id}] Updated vector_index_updated_at for assembly {assembly_id}")
+                                        else:
+                                            logger.warning(f"[VectorRetry][{trace_id}] Assembly {assembly_id} not found in memory for timestamp update.")
+                                except Exception as asm_err:
+                                    logger.error(f"[VectorRetry][{trace_id}] Failed to update timestamp for assembly {memory_id}: {asm_err}", exc_info=True)
+                        else:
+                            # Operation failed again, requeue with increased retry count if below max
+                            if retry_attempt < max_retry_attempts:
+                                logger.warning(f"[VectorRetry][{trace_id}] Failed {op_type} for {memory_id}, requeueing (attempt {retry_attempt}/{max_retry_attempts})")
+                                op_data['retry_count'] = retry_attempt
+                                await self._pending_vector_updates.put(op_data)
+                            else:
+                                logger.error(f"[VectorRetry][{trace_id}] Permanently failed {op_type} for {memory_id} after {retry_attempt} attempts")
+                                # Could add to a dead-letter queue or persistence for manual intervention
+
+                    except asyncio.QueueEmpty: # Catch asyncio specific empty queue exception
+                        # Queue is empty, nothing more to process in this batch
+                        logger.debug(f"[VectorRetry][{trace_id}] Queue empty, finishing batch processing.")
+                        break
+                    except Exception as item_err:
+                        logger.error(f"[VectorRetry][{trace_id}] Error processing vector operation for item {op_data.get('id', 'UNKNOWN') if op_data else 'UNKNOWN'}: {item_err}", exc_info=True)
+                        # Decide whether to requeue on unexpected error
+                        if op_data:
+                             retry_attempt = op_data.get('retry_count', 0) + 1 # Recalculate attempt count
+                             if retry_attempt < max_retry_attempts:
+                                 op_data['retry_count'] = retry_attempt
+                                 await self._pending_vector_updates.put(op_data)
+                                 logger.warning(f"[VectorRetry][{trace_id}] Requeued item {op_data['id']} after unexpected error.")
+                             else:
+                                 logger.error(f"[VectorRetry][{trace_id}] Permanently failed item {op_data['id']} after unexpected error and max retries.")
+
+                    finally:
+                         # Ensure task_done is called even if errors occurred during processing
+                         if op_data:
+                             try:
+                                 self._pending_vector_updates.task_done()
+                             except ValueError:
+                                 # Might happen if task was already marked done due to exception flow
+                                 logger.debug(f"[VectorRetry][{trace_id}] task_done() called on already done task for {op_data.get('id','UNKNOWN')}")
+                                 pass
+
+                if retry_count > 0:
+                    logger.info(f"[VectorRetry][{trace_id}] Completed processing batch of {retry_count} vector operations")
+
+            except Exception as e:
+                logger.error(f"[VectorRetry][{trace_id}] Unhandled error in vector update retry loop: {e}", exc_info=True)
+                # Avoid tight loop on persistent errors
+                await asyncio.sleep(retry_interval)
+
+            # Wait before next processing cycle, checking shutdown signal
+            try:
+                # Use wait_for with the shutdown signal event
+                await asyncio.wait_for(self._shutdown_signal.wait(), timeout=retry_interval)
+                # If wait() returns without timeout, shutdown was signalled
+                logger.info(f"[VectorRetry][{trace_id}] Shutdown signal received, exiting loop.")
+                break
+            except asyncio.TimeoutError:
+                # This is the normal case - timeout reached, continue loop
+                pass
+            except asyncio.CancelledError:
+                 logger.info(f"[VectorRetry][{trace_id}] Loop cancelled.")
+                 break
+
+        logger.info(f"Vector update retry background loop terminated ({trace_id})")
 
 ```
 
@@ -56409,7 +57066,9 @@ import numpy as np
 import aiohttp
 import asyncio
 import json
+import time  # Add time module import
 from fastapi import FastAPI, HTTPException, Body, Request, status, Response
+from fastapi.responses import JSONResponse  # Add JSONResponse import
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Tuple, Literal
 import logging
@@ -56457,6 +57116,7 @@ neural_memory: Optional[NeuralMemoryModule] = None
 surprise_detector: Optional[SurpriseDetector] = None
 geometry_manager: Optional[GeometryManager] = None
 memory_core_url: Optional[str] = None # URL for potential outer loop callbacks
+startup_time: Optional[float] = None # Add startup time tracking
 
 # --- Pydantic Models ---
 
@@ -56968,22 +57628,49 @@ async def health_check():
     """Basic health check."""
     logger.info("Health check requested.")
     try:
-         tf_version = tf.__version__
-         # Perform a minimal TF computation
-         tensor_sum = tf.reduce_sum(tf.constant([1.0, 2.0])).numpy()
-         can_compute = abs(tensor_sum - 3.0) < 1e-6
-         status_msg = "ok" if can_compute else "error_tf_compute"
-    except Exception as e:
-         logger.error(f"TensorFlow health check failed: {e}", exc_info=True)
-         tf_version = "error"
-         status_msg = f"error_tf_init: {str(e)}"
+        tf_version = tf.__version__
+        # Perform a minimal TF computation
+        tensor_sum = tf.reduce_sum(tf.constant([1.0, 2.0])).numpy()
+        can_compute = abs(tensor_sum - 3.0) < 1e-6
+        status_msg = "ok" if can_compute else "error_tf_compute"
 
-    return {
-         "status": status_msg,
-         "tensorflow_version": tf_version,
-         "neural_memory_initialized": neural_memory is not None,
-         "timestamp": datetime.datetime.utcnow().isoformat() 
-     }
+        # Calculate uptime
+        current_uptime_seconds = 0
+        if startup_time:
+            current_uptime_seconds = time.time() - startup_time
+
+        # Construct the data payload
+        health_data = {
+            "status": status_msg,
+            "tensorflow_version": tf_version,
+            "neural_memory_initialized": neural_memory is not None,
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "uptime": str(int(current_uptime_seconds)) + "s", # Format as string to match schema
+            "version": "NM-1.0" # Placeholder version
+        }
+        # Wrap the successful response
+        return {
+            "success": True,
+            "data": health_data
+        }
+    except Exception as e:
+        logger.error(f"Neural Memory health check failed: {e}", exc_info=True)
+        tf_version = "error"
+        status_msg = f"error_tf_init: {str(e)}"
+        # Wrap the error response
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "success": False,
+                "error": f"Health check failed: {str(e)}",
+                "data": { # Minimal data on error
+                    "status": status_msg,
+                    "tensorflow_version": tf_version,
+                    "neural_memory_initialized": neural_memory is not None,
+                    "uptime": "0s" # Include uptime as string even on error
+                }
+            }
+        )
 
 # --- Introspection and Diagnostic Endpoints ---
 
@@ -57183,12 +57870,153 @@ async def get_config(request: Optional[ConfigRequest] = None):
         logger.error(f"Config endpoint failed: {e}\n{traceback.format_exc()}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Config error: {str(e)}")
 
+# --- Developer Diagnostic Endpoints ---
+@app.post("/dev/repair_vector_index")
+async def repair_vector_index():
+    """
+    Developer endpoint to repair vector index inconsistencies.
+    This endpoint is intended for testing and debugging only.
+    
+    Returns:
+        JSON response with repair status and diagnostics
+    """
+    try:
+        nm = get_neural_memory()
+        if not nm:
+            return JSONResponse(
+                status_code=500,
+                content={"error": "Neural Memory not initialized"}
+            )
+        
+        # Perform index consistency check
+        if hasattr(nm, "check_index_integrity"):
+            logger.info("Checking index integrity before repair attempt")
+            integrity_result = nm.check_index_integrity()
+            
+            # Log the integrity check result
+            logger.info(f"Index integrity check result: {integrity_result}")
+            
+            # If there are issues, attempt repair
+            if not integrity_result.get("is_consistent", False):
+                logger.warning("Vector index inconsistency detected, attempting repair")
+                
+                # Attempt to clear orphaned assembly entries
+                if hasattr(nm.vector_index, "id_to_index"):
+                    index_mapping = nm.vector_index.id_to_index
+                    orphaned_assemblies = []
+                    
+                    # Find assembly IDs in the index that don't exist in the tracking
+                    for mem_id in list(index_mapping.keys()):
+                        if mem_id.startswith("asm:") and mem_id not in nm.assemblies:
+                            orphaned_assemblies.append(mem_id)
+                    
+                    # Remove orphaned assemblies from the vector index
+                    for asm_id in orphaned_assemblies:
+                        logger.info(f"Removing orphaned assembly ID from vector index: {asm_id}")
+                        await nm.vector_index.remove_vector_async(asm_id)
+                
+                # Check integrity again after repair
+                new_integrity = nm.check_index_integrity()
+                
+                return {
+                    "success": True,
+                    "message": "Vector index repair completed",
+                    "before_repair": integrity_result,
+                    "after_repair": new_integrity,
+                    "orphaned_assemblies_removed": len(orphaned_assemblies) if 'orphaned_assemblies' in locals() else 0
+                }
+            else:
+                return {
+                    "success": True,
+                    "message": "Vector index is already consistent, no repair needed",
+                    "integrity": integrity_result
+                }
+        else:
+            return {
+                "success": False,
+                "message": "Neural Memory instance does not support index integrity checking"
+            }
+    except Exception as e:
+        logger.error(f"Error during vector index repair: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": f"Repair failed: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+        )
+
+# --- Developer Configuration Endpoint ---
+@app.post("/dev/set_config_value")
+async def set_config_value(request: dict = Body(...)):
+    """
+    Developer endpoint to modify config values at runtime for testing.
+    This endpoint is intended for testing and debugging only.
+    
+    Args:
+        request: A JSON object with 'key' and 'value' fields
+        
+    Returns:
+        JSON response with previous and new values
+    """
+    nm = get_neural_memory()
+    if not nm:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Neural Memory not initialized"}
+        )
+    
+    key = request.get("key")
+    value = request.get("value")
+    
+    if not key:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Missing 'key' field"}
+        )
+    
+    try:
+        # Get the previous value if possible
+        previous_value = None
+        if hasattr(nm.config, key):
+            previous_value = getattr(nm.config, key)
+        elif key in nm.config.__dict__:
+            previous_value = nm.config.__dict__[key]
+            
+        # Set the new value
+        if hasattr(nm.config, key):
+            setattr(nm.config, key, value)
+        else:
+            nm.config.__dict__[key] = value
+            
+        # Log the configuration change
+        logger.info(f"[CONFIG] Changed {key} from {previous_value} to {value}")
+        
+        return {
+            "success": True,
+            "key": key,
+            "previous_value": previous_value,
+            "new_value": value
+        }
+        
+    except Exception as e:
+        logger.error(f"[CONFIG] Failed to set {key} to {value}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": f"Failed to set config value: {str(e)}",
+                "key": key
+            }
+        )
+
 # --- App startup/shutdown ---
 @app.on_event("startup")
 async def startup_event():
+    global startup_time # Access global startup_time
+    startup_time = time.time() # Record startup time
     global neural_memory, memory_core_url, surprise_detector, geometry_manager
     logger.info("Synthians Neural Memory API starting up...")
-
+    
     # --- ADD AUTO-INITIALIZATION LOGIC ---
     try:
         logger.info("Attempting auto-initialization of Neural Memory module...")
@@ -86427,6 +87255,11 @@ import hashlib
 import uuid
 import traceback
 import shutil  # Import shutil for move operation
+from datetime import datetime, timezone # For repair log timestamp
+from .memory_persistence import MemoryPersistence # Assuming relative import works
+from .geometry_manager import GeometryManager
+from .memory_structures import MemoryEntry, MemoryAssembly # Needed for type check
+
 
 # Try importing aiofiles, but don't make it a hard requirement
 try:
@@ -86718,194 +87551,70 @@ class MemoryVectorIndex:
 
     async def update_entry(self, memory_id: str, embedding: np.ndarray) -> bool:
         """Update the embedding for an existing memory ID asynchronously."""
-        # Locks are handled by remove/add methods
-        try:
-            validated_embedding = self._validate_embedding(embedding)
-            if validated_embedding is None:
-                logger.warning(f"Invalid embedding for memory {memory_id}, skipping update")
-                return False
-
-            # Check mapping first (no lock needed for read, but remove/add use lock)
-            if memory_id not in self.id_to_index:
-                 logger.warning(f"Cannot update vector for {memory_id}: ID not found in mapping.")
-                 return False
-
-            # Remove the existing vector first
-            removed = await self.remove_vector(memory_id)
-            if not removed:
-                logger.warning(f"Failed to remove existing vector for {memory_id} during update, attempting to add anyway")
-
-            # Add the updated vector
-            added = await self.add(memory_id, validated_embedding)
-            if not added:
-                logger.error(f"Failed to add updated vector for {memory_id} after removal attempt.")
-                return False
-
-            logger.debug(f"Successfully updated vector for memory ID {memory_id}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Error updating vector for {memory_id}: {e}", exc_info=True)
-            return False
-
-    def search(self, query_embedding: np.ndarray, k: int = 10) -> List[Tuple[str, float]]:
-        """Search the index for similar embeddings. (Synchronous)"""
-        if self.index is None:
-            logger.error("Search failed: Index not initialized.")
-            return []
-        try:
-            validated_query = self._validate_embedding(query_embedding)
-            if validated_query is None: return []
-
-            current_count = self.count()
-            if current_count == 0: return []
-            k = min(k, current_count)
-            if k <= 0: return []
-
-            # Normalize query for cosine/IP if needed
-            if self.index_type.upper() in ['IP', 'COSINE']:
-                 norm = np.linalg.norm(validated_query)
-                 if norm > 1e-6: validated_query = validated_query / norm
-
-            query_vector_faiss = validated_query.reshape(1, -1)
-
-            # Perform search (synchronous FAISS call)
-            distances, numeric_ids = self.index.search(query_vector_faiss, k)
-
-            results = []
-            if len(numeric_ids) > 0 and len(distances) > 0:
-                valid_ids_indices = [(idx, i) for i, idx in enumerate(numeric_ids[0]) if idx >= 0]
-                numeric_to_memory_id = {v: k for k, v in self.id_to_index.items()} # Build reverse map inside
-
-                for numeric_id, index_in_results in valid_ids_indices:
-                    dist = distances[0][index_in_results]
-                    similarity = 0.0
-                    if self.index_type.upper() == 'L2':
-                        similarity = 1.0 / (1.0 + float(dist)) # Simple inverse distance
-                    elif self.index_type.upper() == 'IP':
-                        similarity = float(dist) # Inner product IS similarity (if vectors normalized)
-                    elif self.index_type.upper() == 'COSINE':
-                         # FAISS IP index on normalized vectors gives cosine similarity directly
-                         similarity = float(dist)
-
-                    memory_id = numeric_to_memory_id.get(int(numeric_id))
-                    if memory_id is not None:
-                        results.append((memory_id, similarity))
-                    else:
-                        logger.warning(f"No memory ID found for numeric FAISS ID {numeric_id}")
-
-            results.sort(key=lambda x: x[1], reverse=True)
-            logger.debug(f"FAISS search returning {len(results)} candidates")
-            return results
-        except Exception as e:
-            logger.error(f"Error searching index: {e}", exc_info=True)
-            return []
-
-    async def search_async(self, query_embedding: np.ndarray, k: int = 10, trace_id=None) -> List[Tuple[str, float]]:
-        """Search the index for similar embeddings asynchronously."""
-        if self.index is None:
-            logger.error("Search failed: Index not initialized or in INVALID state.")
-            return []
-            
-        if self.state not in ["READY"]:
-            logger.error(f"Search failed: Index in {self.state} state")
-            return []
-            
+        # State checks already handled by remove/add methods
         try:
             start_time = time.perf_counter()
             
-            # Validate and prepare the query embedding
-            validated_query = self._validate_embedding(query_embedding)
-            if validated_query is None:
-                logger.warning("Search failed: Invalid query embedding (contains NaN/Inf or wrong shape)")
-                return []
-                
-            # Check if index has any vectors
-            current_count = self.count()
-            if current_count == 0:
-                logger.debug("Search returned no results: Index is empty")
-                return []
-                
-            # Adjust k if needed
-            k = min(k, current_count)
-            if k <= 0:
-                logger.warning("Search failed: k <= 0 after adjustment")
-                return []
-                
-            # Normalize query for cosine/IP if needed
-            if self.index_type.upper() in ['IP', 'COSINE']:
-                norm = np.linalg.norm(validated_query)
-                if norm > 1e-6:
-                    validated_query = validated_query / norm
-                    
-            # Prepare query vector for FAISS
-            query_vector_faiss = validated_query.reshape(1, -1)
-            
-            # --- CRITICAL FIX: Acquire the lock BEFORE calling the executor ---
-            async with self._lock: # Acquire lock
-                # --- DEBUG: Call FAISS directly (blocking) ---
-                logger.debug(f"[SYNC_CALL] Calling self.index.search (k={k})")
-                distances, numeric_ids = self.index.search(query_vector_faiss, k)
-                logger.debug(f"[SYNC_CALL] Finished self.index.search, found {len(numeric_ids[0]) if numeric_ids is not None and len(numeric_ids) > 0 else 0} potential results")
-                # --- END DEBUG ---
-            
-            # --- Process results (safer to lock reads of id_to_index too) ---
-            results = []
-            async with self._lock:  # Lock for reading the mapping
-                numeric_to_memory_id = {v: k for k, v in self.id_to_index.items()}
-            
-            if len(numeric_ids) > 0 and len(distances) > 0:
-                valid_ids_indices = [(idx, i) for i, idx in enumerate(numeric_ids[0]) if idx >= 0]
-                
-                for numeric_id, index_in_results in valid_ids_indices:
-                    dist = distances[0][index_in_results]
-                    
-                    # Convert distance to similarity score
-                    similarity = 0.0
-                    if self.index_type.upper() == 'L2':
-                        similarity = 1.0 / (1.0 + float(dist))  # Simple inverse distance
-                    elif self.index_type.upper() in ['IP', 'COSINE']:
-                        similarity = float(dist)  # Inner product/cosine IS similarity
-                        
-                    # Map numeric ID back to memory ID
-                    memory_id = numeric_to_memory_id.get(int(numeric_id))
-                    if memory_id is not None:
-                        results.append((memory_id, similarity))
-                    else:
-                        logger.warning(f"No memory ID found for numeric FAISS ID {numeric_id}")
-                        
-            # Sort by similarity (highest first)
-            results.sort(key=lambda x: x[1], reverse=True)
-            
-            # Track performance metrics
-            search_time = time.perf_counter() - start_time
-            if hasattr(self, '_search_times'):
-                self._search_times.append(search_time)
-                # Keep only last 100 measurements
-                if len(self._search_times) > 100:
-                    self._search_times.pop(0)
+            # Validate embedding
+            validated_embedding = self._validate_embedding(embedding)
+            if validated_embedding is None:
+                logger.warning(f"VECTOR_ERROR: Invalid embedding format for memory {memory_id}, skipping update")
+                logger.warning(f"  - Embedding shape: {embedding.shape if hasattr(embedding, 'shape') else 'unknown'}")
+                logger.warning(f"  - Expected shape: ({self.embedding_dim},)")
+                return False
+
+            # Check mapping first (no lock needed for read)
+            if memory_id not in self.id_to_index:
+                logger.warning(f"VECTOR_ERROR: Cannot update vector for {memory_id}: ID not found in mapping")
+                logger.warning(f"  - Current mapping contains {len(self.id_to_index)} entries")
+                logger.warning(f"  - This may indicate index drift requiring repair")
+                return False
+
+            # Remove the existing vector first
+            removed = await self.remove_vector_async(memory_id)
+            if not removed:
+                logger.warning(f"VECTOR_ERROR: Failed to remove existing vector for {memory_id} during update")
+                logger.warning(f"  - This operation will be queued for retry via _pending_vector_updates")
+                logger.warning(f"  - Attempting to add anyway as a fallback")
+
+            # Add the updated vector
+            added = await self.add_async(memory_id, validated_embedding)
+            if not added:
+                logger.error(f"VECTOR_ERROR: Failed to add updated vector for {memory_id} after removal attempt")
+                logger.error(f"  - Vector index ID mapping consistency may be compromised")
+                logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
+                return False
+
+            # Track performance
+            update_time = time.perf_counter() - start_time
+            if hasattr(self, '_update_times'):
+                self._update_times.append(update_time)
+                if len(self._update_times) > 100:
+                    self._update_times.pop(0)
             else:
-                self._search_times = [search_time]
+                self._update_times = [update_time]
                 
-            logger.debug(f"FAISS search returning {len(results)} candidates (took {search_time*1000:.2f}ms)")
-            return results
-            
+            logger.debug(f"Successfully updated vector for memory ID {memory_id} [took {update_time*1000:.2f}ms]")
+            return True
+
         except Exception as e:
-            logger.error(f"Error searching index: {e}", exc_info=True)
-            return []
+            logger.error(f"VECTOR_ERROR: Exception during update for {memory_id}: {e}", exc_info=True)
+            logger.error(f"  - Stack trace logged for debugging")
+            logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
+            return False
 
     async def add_async(self, memory_id: str, embedding: np.ndarray) -> bool:
         """Add a memory vector to the index asynchronously with performance tracking."""
         if self.index is None:
-            logger.error(f"Cannot add memory {memory_id}: Index not initialized.")
+            logger.error(f"VECTOR_ERROR: Cannot add memory {memory_id}: Index not initialized.")
             return False
             
         if self.state not in ["READY", "INITIALIZING"]:
-            logger.error(f"Cannot add memory {memory_id}: Index in {self.state} state")
+            logger.error(f"VECTOR_ERROR: Cannot add memory {memory_id}: Index in {self.state} state")
             return False
             
         if not hasattr(self.index, 'add_with_ids'):
-            logger.error(f"Cannot add memory {memory_id}: Index does not support 'add_with_ids'. Initialize with use_id_map=True.")
+            logger.error(f"VECTOR_ERROR: Cannot add memory {memory_id}: Index does not support 'add_with_ids'. Initialize with use_id_map=True.")
             return False
 
         start_time = time.perf_counter()
@@ -86915,7 +87624,9 @@ class MemoryVectorIndex:
                 # Validate the embedding
                 embedding_validated = self._validate_embedding(embedding)
                 if embedding_validated is None:
-                    logger.warning(f"Invalid embedding for memory {memory_id}, skipping add")
+                    logger.warning(f"VECTOR_ERROR: Invalid embedding for memory {memory_id}, skipping add")
+                    logger.warning(f"  - Embedding shape: {embedding.shape if hasattr(embedding, 'shape') else 'unknown'}")
+                    logger.warning(f"  - Expected shape: ({self.embedding_dim},)")
                     return False
 
                 # Prepare for FAISS
@@ -86923,22 +87634,30 @@ class MemoryVectorIndex:
                     embedding_validated = embedding_validated.reshape(1, -1)
 
                 # Get numeric ID
-                numeric_id = self._get_numeric_id(memory_id)
+                numeric_id = self._get_numeric_id(memory_id) # Generate numeric ID
                 ids_array = np.array([numeric_id], dtype=np.int64)
 
                 # --- DEBUG: Call FAISS directly (blocking) ---
-                logger.debug(f"[SYNC_CALL] Calling self.index.add_with_ids for {memory_id}")
-                self.index.add_with_ids(embedding_validated, ids_array)
-                logger.debug(f"[SYNC_CALL] Finished self.index.add_with_ids for {memory_id}")
+                logger.debug(f"[add_async LOCK] Adding ID: {memory_id}, Numeric ID: {numeric_id}, Index ntotal before: {self.index.ntotal if hasattr(self.index, 'ntotal') else 'N/A'}, Mapping size before: {len(self.id_to_index)}")
+                try:
+                    self.index.add_with_ids(embedding_validated, ids_array)
+                    logger.debug(f"[add_async LOCK] FAISS add_with_ids successful for {memory_id}. Index ntotal after: {self.index.ntotal if hasattr(self.index, 'ntotal') else 'N/A'}")
+                except Exception as faiss_error:
+                    logger.error(f"VECTOR_ERROR: FAISS add_with_ids failed for {memory_id}: {faiss_error}")
+                    logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
+                    return False
                 # --- END DEBUG ---
 
                 # Update ID mapping
+                logger.debug(f"[add_async LOCK] Updating id_to_index mapping for {memory_id}")
                 self.id_to_index[memory_id] = numeric_id
+                logger.debug(f"[add_async LOCK] Mapping size after update: {len(self.id_to_index)}")
                 
                 # Backup mapping
                 backup_success = await self._backup_id_mapping()
                 if not backup_success:
-                    logger.warning(f"Failed to backup ID mapping after adding {memory_id}")
+                    logger.warning(f"VECTOR_ERROR: Failed to backup ID mapping after adding {memory_id}")
+                    logger.warning(f"  - Vector index and ID mapping may become inconsistent if system crashes")
 
                 # Track performance
                 add_time = time.perf_counter() - start_time
@@ -86957,21 +87676,23 @@ class MemoryVectorIndex:
                 return True
 
             except Exception as e:
-                logger.error(f"Error adding memory {memory_id} to index: {e}", exc_info=True)
+                logger.error(f"VECTOR_ERROR: Exception during add for {memory_id}: {e}", exc_info=True)
+                logger.error(f"  - Stack trace logged for debugging")
+                logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
                 return False
                 
     async def remove_vector_async(self, memory_id: str) -> bool:
         """Remove a vector by its memory ID asynchronously."""
         if self.index is None:
-            logger.error(f"Cannot remove memory {memory_id}: Index not initialized.")
+            logger.error(f"VECTOR_ERROR: Cannot remove memory {memory_id}: Index not initialized.")
             return False
             
         if self.state not in ["READY", "INITIALIZING"]:
-            logger.error(f"Cannot remove memory {memory_id}: Index in {self.state} state")
+            logger.error(f"VECTOR_ERROR: Cannot remove memory {memory_id}: Index in {self.state} state")
             return False
             
         if not hasattr(self.index, 'remove_ids'):
-            logger.error("Remove_vector called, but index does not support remove_ids.")
+            logger.error("VECTOR_ERROR: Remove_vector called, but index does not support remove_ids.")
             return False # Cannot proceed if index doesn't support removal by ID
 
         start_time = time.perf_counter()
@@ -86980,23 +87701,33 @@ class MemoryVectorIndex:
             try:
                 numeric_id = self.id_to_index.get(memory_id)
                 if numeric_id is None:
-                    logger.warning(f"Cannot remove vector for {memory_id}: ID not found in mapping.")
+                    logger.warning(f"VECTOR_ERROR: Cannot remove vector for {memory_id}: ID not found in mapping.")
+                    logger.warning(f"  - Current mapping contains {len(self.id_to_index)} entries")
+                    logger.warning(f"  - This may indicate index drift or mapping inconsistency")
                     return False # ID wasn't mapped, nothing to remove
 
                 ids_to_remove = np.array([numeric_id], dtype=np.int64)
 
                 # --- DEBUG: Call FAISS directly (blocking) ---
-                logger.debug(f"[SYNC_CALL] Calling self.index.remove_ids for {memory_id}")
-                num_removed = self.index.remove_ids(ids_to_remove)
-                logger.debug(f"[SYNC_CALL] Finished self.index.remove_ids for {memory_id}, removed={num_removed}")
+                logger.debug(f"[remove_vector_async LOCK] Removing ID: {memory_id}, Numeric ID: {numeric_id}, Index ntotal before: {self.index.ntotal if hasattr(self.index, 'ntotal') else 'N/A'}, Mapping size before: {len(self.id_to_index)}")
+                try:
+                    num_removed = self.index.remove_ids(ids_to_remove)
+                    logger.debug(f"[remove_vector_async LOCK] FAISS remove_ids finished for {memory_id}, removed={num_removed}. Index ntotal after: {self.index.ntotal if hasattr(self.index, 'ntotal') else 'N/A'}")
+                except Exception as faiss_error:
+                    logger.error(f"VECTOR_ERROR: FAISS remove_ids failed for {memory_id}: {faiss_error}")
+                    logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
+                    return False
                 # --- END DEBUG ---
 
                 if num_removed > 0:
                     # Successfully removed from FAISS
+                    logger.debug(f"[remove_vector_async LOCK] Removing {memory_id} from id_to_index mapping")
                     del self.id_to_index[memory_id]
+                    logger.debug(f"[remove_vector_async LOCK] Mapping size after removal: {len(self.id_to_index)}")
                     backup_success = await self._backup_id_mapping()
                     if not backup_success:
-                         logger.warning(f"Failed to backup ID mapping after removing {memory_id}")
+                         logger.warning(f"VECTOR_ERROR: Failed to backup ID mapping after removing {memory_id}")
+                         logger.warning(f"  - Vector index and ID mapping may become inconsistent if system crashes")
                         
                     # Track performance
                     remove_time = time.perf_counter() - start_time
@@ -87013,17 +87744,192 @@ class MemoryVectorIndex:
                     logger.debug(f"Removed vector for memory ID {memory_id} [took {remove_time*1000:.2f}ms]")
                     return True
                 else:
-                    logger.warning(f"Vector for {memory_id} (numeric ID {numeric_id}) not found in FAISS index for removal, but removing from mapping.")
+                    logger.warning(f"VECTOR_ERROR: Vector for {memory_id} (numeric ID {numeric_id}) not found in FAISS index for removal")
+                    logger.warning(f"  - Removing from mapping to maintain consistency")
                     if memory_id in self.id_to_index:
                          del self.id_to_index[memory_id]
                          await self._backup_id_mapping() # Await the async backup
                     return False # Indicate vector wasn't actually in FAISS index
 
             except Exception as e:
-                logger.error(f"Error removing vector for {memory_id}: {e}", exc_info=True)
+                logger.error(f"VECTOR_ERROR: Exception during remove for {memory_id}: {e}", exc_info=True)
+                logger.error(f"  - Stack trace logged for debugging")
+                logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
+                return False
+
+    async def add_batch_async(self, memory_ids: List[str], embeddings: np.ndarray) -> bool:
+        """Add a batch of memory vectors to the index asynchronously.
+        
+        Args:
+            memory_ids: List of memory IDs as strings
+            embeddings: NumPy ndarray of embeddings with shape (N, embedding_dim)
+            
+        Returns:
+            bool: True if successful
+        """
+        if self.index is None:
+            logger.error("Cannot add batch: Index not initialized.")
+            return False
+            
+        # Validate the embeddings and memory_ids
+        if not isinstance(memory_ids, list) or len(memory_ids) == 0:
+            logger.error(f"Invalid memory_ids: {type(memory_ids)}, must be non-empty list")
+            return False
+            
+        if not isinstance(embeddings, np.ndarray):
+            logger.error(f"Invalid embeddings type: {type(embeddings)}, must be numpy.ndarray")
+            return False
+            
+        # Embeddings shape check
+        if len(embeddings.shape) != 2:
+            logger.error(f"Invalid embeddings shape: {embeddings.shape}, must be 2D array (N, embedding_dim)")
+            return False
+            
+        # Count check
+        if len(memory_ids) != embeddings.shape[0]:
+            logger.error(f"Mismatch between memory_ids ({len(memory_ids)}) and embeddings rows ({embeddings.shape[0]})")
+            return False
+            
+        # Create a trace ID for logging
+        trace_id = uuid.uuid4().hex[:8]
+        logger.info(f"[AddBatch][{trace_id}] Adding {len(memory_ids)} embeddings with shape {embeddings.shape} and dtype {embeddings.dtype}")
+        
+        # Check for NaN/Inf values
+        try:
+            has_nan = np.isnan(embeddings).any()
+            has_inf = np.isinf(embeddings).any()
+            if has_nan or has_inf:
+                nan_count = np.isnan(embeddings).sum() if has_nan else 0
+                inf_count = np.isinf(embeddings).sum() if has_inf else 0
+                logger.warning(f"[AddBatch][{trace_id}] Embeddings contain {nan_count} NaN and {inf_count} Inf values")
+                # Replace NaNs and Infs with zeros
+                embeddings = np.nan_to_num(embeddings, nan=0.0, posinf=0.0, neginf=0.0)
+                logger.info(f"[AddBatch][{trace_id}] Replaced NaN/Inf values with zeros")
+        except Exception as e:
+            logger.error(f"[AddBatch][{trace_id}] Error checking for NaN/Inf: {e}")
+            # Continue anyway, as this is just diagnostic
+        
+        # Validate dimensions
+        if embeddings.shape[1] != self.embedding_dim:
+            logger.warning(f"[AddBatch][{trace_id}] Embedding dimension mismatch: {embeddings.shape[1]} vs expected {self.embedding_dim}")
+            # Try to fix dimensions
+            try:
+                if embeddings.shape[1] < self.embedding_dim:
+                    # Pad with zeros
+                    padding = np.zeros((embeddings.shape[0], self.embedding_dim - embeddings.shape[1]), dtype=embeddings.dtype)
+                    embeddings = np.hstack((embeddings, padding))
+                    logger.info(f"[AddBatch][{trace_id}] Padded embeddings to shape {embeddings.shape}")
+                else:
+                    # Truncate
+                    embeddings = embeddings[:, :self.embedding_dim]
+                    logger.info(f"[AddBatch][{trace_id}] Truncated embeddings to shape {embeddings.shape}")
+            except Exception as e:
+                logger.error(f"[AddBatch][{trace_id}] Error resizing embeddings: {e}")
                 return False
                 
+        # Process asynchronously but ensure we get the lock
+        try:
+            async with self._lock:
+                # Inside lock, convert string IDs to numeric IDs
+                next_id = len(self.id_to_index)
+                numeric_ids = []
+                valid_embeddings = []
+                valid_str_ids = []
+                
+                for i, str_id in enumerate(memory_ids):
+                    # Check if ID already exists
+                    if str_id in self.id_to_index:
+                        logger.warning(f"[AddBatch][{trace_id}] Memory ID '{str_id}' already exists in index, skipping")
+                        continue
+                        
+                    # Add to valid collections
+                    numeric_ids.append(next_id)
+                    valid_embeddings.append(embeddings[i])
+                    valid_str_ids.append(str_id)
+                    
+                    # Update mapping
+                    self.id_to_index[str_id] = next_id
+                    next_id += 1
+                    
+                # If no valid items to add
+                if not valid_embeddings:
+                    logger.warning(f"[AddBatch][{trace_id}] No valid embeddings to add (all already exist)")
+                    return True  # Consider this a success - nothing to do
+                    
+                # Convert to numpy arrays
+                valid_embeddings_array = np.array(valid_embeddings, dtype=np.float32)
+                numeric_ids_array = np.array(numeric_ids, dtype=np.int64)
+                
+                # Detailed debugging info just before FAISS call
+                try:
+                    logger.info(f"[AddBatch][{trace_id}] FAISS input prepared: embeddings={valid_embeddings_array.shape} {valid_embeddings_array.dtype}, ids={numeric_ids_array.shape} {numeric_ids_array.dtype}")
+                    
+                    # Log a sample of the data for debugging
+                    sample_size = min(3, len(valid_str_ids))
+                    for i in range(sample_size):
+                        logger.debug(f"[AddBatch][{trace_id}] Sample {i}: ID={valid_str_ids[i]} (numeric={numeric_ids_array[i]})")
+                        logger.debug(f"[AddBatch][{trace_id}] Sample {i} embedding stats: min={valid_embeddings_array[i].min():.4f} max={valid_embeddings_array[i].max():.4f} mean={valid_embeddings_array[i].mean():.4f} std={valid_embeddings_array[i].std():.4f}")
+                        
+                    # Check memory usage
+                    emb_mb = valid_embeddings_array.nbytes / (1024 * 1024)
+                    ids_mb = numeric_ids_array.nbytes / (1024 * 1024)
+                    logger.info(f"[AddBatch][{trace_id}] Memory usage: embeddings={emb_mb:.2f}MB, ids={ids_mb:.2f}MB")
+                    
+                    # Check if using GPU index
+                    is_gpu_index = "GPU" in type(self.index).__name__
+                    logger.info(f"[AddBatch][{trace_id}] Using GPU index: {is_gpu_index}, Index type: {type(self.index).__name__}")
+                    
+                    # Check if using IDMap
+                    is_id_map = hasattr(self.index, 'id_map')
+                    logger.info(f"[AddBatch][{trace_id}] Using IDMap: {is_id_map}")
+                    
+                except Exception as log_err:
+                    logger.warning(f"[AddBatch][{trace_id}] Error logging debug info: {log_err}")
+                    # Continue anyway, this is just diagnostic
+                
+                # CRITICAL SECTION: Add to FAISS index
+                try:
+                    logger.info(f"[AddBatch][{trace_id}] Calling FAISS add_with_ids with {len(numeric_ids_array)} vectors")
+                    pre_count = self.index.ntotal if hasattr(self.index, 'ntotal') else -1
+                    
+                    # The actual FAISS call that might crash
+                    self.index.add_with_ids(valid_embeddings_array, numeric_ids_array)
+                    
+                    post_count = self.index.ntotal if hasattr(self.index, 'ntotal') else -1
+                    logger.info(f"[AddBatch][{trace_id}] FAISS add_with_ids successful! Pre-count={pre_count}, Post-count={post_count}, Delta={post_count-pre_count}")
+                except Exception as faiss_err:
+                    # Attempt to catch any Python exception from FAISS
+                    logger.error(f"[AddBatch][{trace_id}] FAISS add_with_ids FAILED with exception: {faiss_err}", exc_info=True)
+                    
+                    # Detailed exception analysis
+                    err_type = type(faiss_err).__name__
+                    err_msg = str(faiss_err)
+                    logger.error(f"[AddBatch][{trace_id}] FAISS error type: {err_type}, message: {err_msg}")
+                    
+                    # Rollback ID mapping updates
+                    for str_id in valid_str_ids:
+                        if str_id in self.id_to_index:
+                            del self.id_to_index[str_id]
+                    logger.info(f"[AddBatch][{trace_id}] Rolled back {len(valid_str_ids)} ID mapping entries after FAISS error")
+                    
+                    # Record error stat
+                    self._faiss_error_count = getattr(self, '_faiss_error_count', 0) + 1
+                    return False
+                
+                # If we got here, the FAISS operation succeeded
+                # Backup ID mapping in background task (don't await)
+                asyncio.create_task(self._backup_id_mapping())
+                
+                # Record modified time
+                self._last_modified_time = time.time()
+                
+                return True
+        except Exception as e:
+            logger.error(f"[AddBatch][{trace_id}] Unexpected error in add_batch_async: {e}", exc_info=True)
+            return False
+
     async def update_entry_async(self, memory_id: str, embedding: np.ndarray) -> bool:
+        logger.debug(f"[update_entry_async] Attempting update for ID: {memory_id}")
         """Update the embedding for an existing memory ID asynchronously."""
         # State checks already handled by remove/add methods
         try:
@@ -87032,23 +87938,31 @@ class MemoryVectorIndex:
             # Validate embedding
             validated_embedding = self._validate_embedding(embedding)
             if validated_embedding is None:
-                logger.warning(f"Invalid embedding for memory {memory_id}, skipping update")
+                logger.warning(f"VECTOR_ERROR: Invalid embedding format for memory {memory_id}, skipping update")
+                logger.warning(f"  - Embedding shape: {embedding.shape if hasattr(embedding, 'shape') else 'unknown'}")
+                logger.warning(f"  - Expected shape: ({self.embedding_dim},)")
                 return False
 
             # Check mapping first (no lock needed for read)
             if memory_id not in self.id_to_index:
-                logger.warning(f"Cannot update vector for {memory_id}: ID not found in mapping.")
+                logger.warning(f"VECTOR_ERROR: Cannot update vector for {memory_id}: ID not found in mapping")
+                logger.warning(f"  - Current mapping contains {len(self.id_to_index)} entries")
+                logger.warning(f"  - This may indicate index drift requiring repair")
                 return False
 
             # Remove the existing vector first
             removed = await self.remove_vector_async(memory_id)
             if not removed:
-                logger.warning(f"Failed to remove existing vector for {memory_id} during update, attempting to add anyway")
+                logger.warning(f"VECTOR_ERROR: Failed to remove existing vector for {memory_id} during update")
+                logger.warning(f"  - This operation will be queued for retry via _pending_vector_updates")
+                logger.warning(f"  - Attempting to add anyway as a fallback")
 
             # Add the updated vector
             added = await self.add_async(memory_id, validated_embedding)
             if not added:
-                logger.error(f"Failed to add updated vector for {memory_id} after removal attempt.")
+                logger.error(f"VECTOR_ERROR: Failed to add updated vector for {memory_id} after removal attempt")
+                logger.error(f"  - Vector index ID mapping consistency may be compromised")
+                logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
                 return False
 
             # Track performance
@@ -87060,11 +87974,13 @@ class MemoryVectorIndex:
             else:
                 self._update_times = [update_time]
                 
-            logger.debug(f"Successfully updated vector for memory ID {memory_id} [took {update_time*1000:.2f}ms]")
+            logger.debug(f"[update_entry_async] Successfully updated vector for memory ID {memory_id} [took {update_time*1000:.2f}ms]")
             return True
 
         except Exception as e:
-            logger.error(f"Error updating vector for {memory_id}: {e}", exc_info=True)
+            logger.error(f"VECTOR_ERROR: Exception during update for {memory_id}: {e}", exc_info=True)
+            logger.error(f"  - Stack trace logged for debugging")
+            logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
             return False
 
     def _validate_embedding(self, embedding: Union[np.ndarray, list, tuple]) -> Optional[np.ndarray]:
@@ -87088,8 +88004,10 @@ class MemoryVectorIndex:
             if len(embedding) != self.embedding_dim:
                 logger.warning(f"Aligning embedding dim: expected {self.embedding_dim}, got {len(embedding)}")
                 if len(embedding) < self.embedding_dim:
+                    # Pad with zeros
                     embedding = np.pad(embedding, (0, self.embedding_dim - len(embedding)))
                 else:
+                    # Truncate
                     embedding = embedding[:self.embedding_dim]
 
             # Ensure float32 for FAISS compatibility
@@ -87098,523 +88016,223 @@ class MemoryVectorIndex:
             logger.error(f"Error validating embedding: {e}", exc_info=True)
             return None
 
-    def count(self) -> int:
-        """Get the number of embeddings in the index."""
+    async def _rebuild_index_from_persistence(
+        self,
+        persistence: MemoryPersistence,
+        geometry_manager: GeometryManager,
+        trace_id: str
+    ) -> Dict[str, Any]:
+        """Loads all memories/assemblies and adds their embeddings to the current (empty) index."""
+        rebuild_stats = {"success": False, "items_reindexed": 0, "items_failed": 0, "error": None}
+        logger.info(f"[REBUILD][{trace_id}] Starting index rebuild from persistence...")
+
         try:
-            index_count = self.index.ntotal if self.index and hasattr(self.index, 'ntotal') else 0
-            mapping_count = len(self.id_to_index)
+            # Ensure persistence is initialized
+            # Assuming persistence has an `is_initialized` property or similar check
+            if hasattr(persistence, '_initialized') and not persistence._initialized:
+                 logger.info(f"[REBUILD][{trace_id}] Initializing persistence before loading...")
+                 await persistence.initialize()
+            elif not hasattr(persistence, '_initialized'):
+                 logger.warning(f"[REBUILD][{trace_id}] Persistence object does not have an '_initialized' attribute. Assuming it's ready.")
 
-            # Only log warning if counts mismatch AND we are using IndexIDMap (where they should match)
-            if index_count != mapping_count and hasattr(self.index, 'id_map'):
-                logger.warning(f"Vector index potential inconsistency! FAISS count: {index_count}, Mapping count: {mapping_count}")
+            # Load ALL items (could be memory intensive for very large datasets)
+            # Ensure load_all exists and accepts geometry_manager
+            if not hasattr(persistence, 'load_all'):
+                 raise NotImplementedError("Persistence object must have a 'load_all' method for rebuild.")
 
-            return index_count
-        except Exception as e:
-            logger.error(f"Error getting index count: {e}")
-            return 0
+            logger.info(f"[REBUILD][{trace_id}] Calling persistence.load_all...")
+            all_items = await persistence.load_all(geometry_manager) # Pass GM for validation during load
+            logger.info(f"[REBUILD][{trace_id}] Loaded {len(all_items)} items from persistence.")
 
-    async def reset_async(self) -> bool:
-        """Reset the index asynchronously, removing all embeddings.
-        Assumes the caller holds the necessary lock.
-        """
-        logger.info("[ResetAsync] Initiating asynchronous index reset (caller holds lock).")
-        try:
-            # Determine if current index uses IDMap before resetting
-            use_id_map = hasattr(self.index, 'id_map') if self.index else True
-            logger.info(f"[ResetAsync] Will use IDMap: {use_id_map}")
+            # Debug log the item types
+            item_types = {}
+            for item in all_items:
+                item_type = type(item).__name__
+                item_types[item_type] = item_types.get(item_type, 0) + 1
+            logger.info(f"[REBUILD][{trace_id}] Item types loaded: {item_types}")
+
+            items_to_index = []
+            for item in all_items:
+                item_id = None
+                embedding = None
+                # Check types using isinstance
+                if isinstance(item, MemoryEntry):
+                    item_id = item.id
+                    embedding = item.embedding
+                elif isinstance(item, MemoryAssembly):
+                    # Use the 'asm:' prefix convention
+                    item_id = f"asm:{item.assembly_id}"
+                    embedding = item.composite_embedding
+                else:
+                    logger.warning(f"[REBUILD][{trace_id}] Encountered unknown item type during load: {type(item)}")
+                    continue # Skip unknown types
+
+                if item_id and embedding is not None:
+                    # Log embedding details before validation
+                    try:
+                        emb_shape = getattr(embedding, 'shape', 'unknown')
+                        emb_type = type(embedding).__name__
+                        emb_dtype = getattr(embedding, 'dtype', 'unknown')
+                        logger.debug(f"[REBUILD][{trace_id}] Pre-validation: Item {item_id} embedding shape={emb_shape}, type={emb_type}, dtype={emb_dtype}")
+                    except Exception as shape_err:
+                        logger.debug(f"[REBUILD][{trace_id}] Error getting embedding details for {item_id}: {shape_err}")
+
+                    # Validate embedding before adding
+                    # Ensure geometry_manager has _validate_vector
+                    if not hasattr(geometry_manager, '_validate_vector'):
+                         raise NotImplementedError("GeometryManager must have a '_validate_vector' method.")
+
+                    try:
+                        validated_emb = geometry_manager._validate_vector(embedding, f"Rebuild Emb {item_id}")
+                        if validated_emb is not None:
+                            # Log successful validation details
+                            val_shape = getattr(validated_emb, 'shape', 'unknown')
+                            val_dtype = getattr(validated_emb, 'dtype', 'unknown')
+                            logger.debug(f"[REBUILD][{trace_id}] Post-validation: Item {item_id} validated embedding shape={val_shape}, dtype={val_dtype}")
+                            items_to_index.append({"id": item_id, "embedding": validated_emb})
+                        else:
+                            logger.warning(f"[REBUILD][{trace_id}] Invalid embedding for {item_id}, skipping.")
+                            rebuild_stats["items_failed"] += 1
+                    except Exception as val_err:
+                        logger.error(f"[REBUILD][{trace_id}] Error during embedding validation for {item_id}: {val_err}", exc_info=True)
+                        rebuild_stats["items_failed"] += 1
+                elif item_id:
+                    logger.warning(f"[REBUILD][{trace_id}] Item {item_id} missing embedding, skipping.")
+                    rebuild_stats["items_failed"] += 1
+                # No else needed, already handled unknown type
+
+            # Log validation summary
+            logger.info(f"[REBUILD][{trace_id}] After validation: {len(items_to_index)} valid items, {rebuild_stats['items_failed']} failed items")
+
+            # Check if we have any valid items to index
+            if not items_to_index:
+                logger.warning(f"[REBUILD][{trace_id}] No valid items to index after validation!")
+                rebuild_stats["success"] = True  # Still mark as success since there's nothing to do
+                return rebuild_stats
+
+            # Batch add to index
+            batch_size = 500 # Configurable?
+            logger.info(f"[REBUILD][{trace_id}] Indexing {len(items_to_index)} valid items in batches of {batch_size}...")
             
-            # Re-initialize
-            logger.info("[ResetAsync] Calling _initialize_index...")
-            success = self._initialize_index(use_id_map=use_id_map)
-            logger.info(f"[ResetAsync] _initialize_index result: {success}")
-            if not success:
-                self.state = "INVALID"
-                logger.error("[ResetAsync] Failed during _initialize_index.")
-                return False
+            # Check a sample of the first embedding to log its properties
+            if items_to_index:
+                sample_item = items_to_index[0]
+                sample_emb = sample_item["embedding"]
+                try:
+                    logger.info(f"[REBUILD][{trace_id}] Sample embedding: id={sample_item['id']}, shape={sample_emb.shape}, dtype={sample_emb.dtype}")
+                    
+                    # Check for NaN/Inf values
+                    has_nan = np.isnan(sample_emb).any() if hasattr(sample_emb, 'dtype') else False
+                    has_inf = np.isinf(sample_emb).any() if hasattr(sample_emb, 'dtype') else False
+                    if has_nan or has_inf:
+                        logger.warning(f"[REBUILD][{trace_id}] Sample embedding contains {'NaN' if has_nan else ''} {'Inf' if has_inf else ''}")
+                except Exception as sample_err:
+                    logger.error(f"[REBUILD][{trace_id}] Error examining sample embedding: {sample_err}")
+
+            # Process in batches
+            for i in range(0, len(items_to_index), batch_size):
+                batch = items_to_index[i:i+batch_size]
+                batch_start = i
+                batch_end = min(i+batch_size, len(items_to_index))
+                logger.info(f"[REBUILD][{trace_id}] Processing batch {i//batch_size + 1}: items {batch_start}-{batch_end-1}")
                 
-            logger.info("[ResetAsync] Clearing id_to_index mapping...")
-            self.id_to_index = {}
-            logger.info("[ResetAsync] Mapping cleared.")
-            
-            # Save empty ID mapping
-            logger.info("[ResetAsync] Saving empty mapping file...")
+                ids = [item['id'] for item in batch]
+                # Extract embeddings correctly
+                embeddings_list = [item['embedding'] for item in batch]
+
+                if not ids:
+                    logger.warning(f"[REBUILD][{trace_id}] Empty batch at index {i}, skipping.")
+                    continue
+
+                # Convert list of numpy arrays to a single 2D numpy array
+                try:
+                    # Log details about the embeddings list
+                    logger.info(f"[REBUILD][{trace_id}] Embeddings list contains {len(embeddings_list)} items")
+                    if embeddings_list:
+                        first_emb = embeddings_list[0]
+                        logger.info(f"[REBUILD][{trace_id}] First embedding in list: shape={getattr(first_emb, 'shape', 'unknown')}, dtype={getattr(first_emb, 'dtype', 'unknown')}")
+
+                    # Try to convert to numpy array    
+                    embeddings_array = np.array(embeddings_list, dtype=np.float32)
+                    logger.info(f"[REBUILD][{trace_id}] Created embeddings array with shape={embeddings_array.shape}, dtype={embeddings_array.dtype}")
+                    
+                    # Ensure it's 2D
+                    if len(embeddings_array.shape) == 1:
+                         if embeddings_array.shape[0] == self.embedding_dim and len(ids) == 1:
+                              embeddings_array = embeddings_array.reshape(1, -1)
+                              logger.info(f"[REBUILD][{trace_id}] Reshaped 1D array to {embeddings_array.shape}")
+                         else:
+                              error_msg = f"Unexpected shape after converting batch embeddings: {embeddings_array.shape}"
+                              logger.error(f"[REBUILD][{trace_id}] {error_msg}")
+                              raise ValueError(error_msg)
+                    elif len(embeddings_array.shape) != 2:
+                         error_msg = f"Unexpected dimensions after converting batch embeddings: {embeddings_array.shape}"
+                         logger.error(f"[REBUILD][{trace_id}] {error_msg}")
+                         raise ValueError(error_msg)
+
+                    # Debug: Check memory usage
+                    try:
+                        mem_mb = embeddings_array.nbytes / (1024 * 1024)
+                        logger.info(f"[REBUILD][{trace_id}] Embeddings array memory usage: {mem_mb:.2f} MB")
+                    except Exception as mem_err:
+                        logger.warning(f"[REBUILD][{trace_id}] Could not calculate memory usage: {mem_err}")
+
+                except Exception as arr_ex:
+                    logger.error(f"[REBUILD][{trace_id}] Error converting embeddings batch to NumPy array: {arr_ex}", exc_info=True)
+                    rebuild_stats["items_failed"] += len(batch)
+                    continue # Skip this batch
+
+                # --- This needs to use the lock internally --- (add_batch_async handles the lock)
+                logger.info(f"[REBUILD][{trace_id}] Calling add_batch_async for batch of {len(ids)} items...")
+                batch_success = await self.add_batch_async(ids, embeddings_array)
+                if batch_success:
+                    logger.info(f"[REBUILD][{trace_id}] Successfully added batch {i//batch_size + 1}")
+                    rebuild_stats["items_reindexed"] += len(batch)
+                else:
+                    rebuild_stats["items_failed"] += len(batch)
+                    logger.error(f"[REBUILD][{trace_id}] Failed to add batch starting at index {i} (add_batch_async returned False).")
+                    # Decide if we should abort or continue on batch failure
+                    # For now, continue to try subsequent batches
+
+            rebuild_stats["success"] = rebuild_stats["items_failed"] == 0
+            logger.info(f"[REBUILD][{trace_id}] Rebuild finished. Indexed: {rebuild_stats['items_reindexed']}, Failed: {rebuild_stats['items_failed']}")
+            return rebuild_stats
+
+        except NotImplementedError as nie:
+             logger.error(f"[REBUILD][{trace_id}] Missing required method: {nie}")
+             rebuild_stats["error"] = str(nie)
+             return rebuild_stats
+        except Exception as e:
+            logger.error(f"[REBUILD][{trace_id}] Error during rebuild: {e}", exc_info=True)
+            rebuild_stats["error"] = str(e)
+            return rebuild_stats
+
+    async def _write_repair_log(self, repair_stats: Dict[str, Any]):
+        """Write repair statistics to a JSON log file."""
+        log_dir = os.path.join(self.storage_path, "logs") # Use logs subdirectory
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            log_file = os.path.join(log_dir, f"repair_log_{timestamp}_{uuid.uuid4().hex[:8]}.json")
+
+            log_data = {
+                "repair_timestamp": datetime.now(timezone.utc).isoformat(),
+                **repair_stats
+            }
+
+            # Use aiofiles if available, otherwise sync write
             if AIOFILES_AVAILABLE:
-                mapping_path = os.path.join(self.storage_path, 'faiss_index.bin.mapping.json')
-                logger.debug(f"[ResetAsync] Using aiofiles to write empty mapping to {mapping_path}")
-                async with aiofiles.open(mapping_path, 'w') as f:
-                    await f.write('{}')
-                logger.info("[ResetAsync] Saved empty mapping via aiofiles.")
+                async with aiofiles.open(log_file, 'w') as f:
+                    await f.write(json.dumps(log_data, indent=2, default=str)) # Use default=str for non-serializable
             else:
-                logger.debug("[ResetAsync] Using executor to write empty mapping (aiofiles not available).")
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, self._backup_id_mapping_sync)
-                logger.info("[ResetAsync] Saved empty mapping via executor.")
-                
-            self.state = "READY"
-            logger.info("[ResetAsync] Reset completed successfully.")
-            return True
+                with open(log_file, 'w') as f:
+                    json.dump(log_data, f, indent=2, default=str)
+
+            logger.info(f"Wrote repair log to: {log_file}")
         except Exception as e:
-            logger.error(f"[ResetAsync] Error resetting index: {e}", exc_info=True)
-            self.state = "ERROR"
-            return False
-
-    def save(self, filepath: Optional[str] = None) -> bool:
-        """Save the index to disk. (Synchronous)"""
-        if self.index is None:
-            logger.error("Cannot save: Index not initialized.")
-            return False
-        try:
-            os.makedirs(self.storage_path, exist_ok=True)
-            if filepath is None:
-                filepath = os.path.join(self.storage_path, 'faiss_index.bin')
-
-            index_to_save = self.index
-            if self.is_using_gpu:
-                try:
-                    index_to_save = faiss.index_gpu_to_cpu(self.index)
-                except Exception as e:
-                    logger.warning(f"Could not extract CPU index from GPU: {e}")
-
-            faiss.write_index(index_to_save, filepath)
-            save_map_ok = self._backup_id_mapping_sync()
-
-            if not save_map_ok:
-                 logger.warning(f"Index saved to {filepath}, but failed to save mapping file.")
-
-            logger.info(f"Saved index to {filepath} with {self.count()} vectors")
-            return True
-        except Exception as e:
-            logger.error(f"Error saving index: {e}", exc_info=True)
-            return False
-
-    def load(self, filepath: Optional[str] = None) -> bool:
-        """Load the index from disk. (Synchronous)"""
-        try:
-            if filepath is None:
-                filepath = os.path.join(self.storage_path, 'faiss_index.bin')
-            mapping_path = filepath + '.mapping.json'
-
-            if not os.path.exists(filepath):
-                logger.warning(f"Index file not found: {filepath}. Initializing empty index.")
-                # Initialize empty index, respecting IDMap setting
-                return self._initialize_index(use_id_map=self.config.get('migrate_to_idmap', True))
-
-            logger.info(f"Loading FAISS index from {filepath}")
-            loaded_cpu_index = faiss.read_index(filepath)
-            is_index_id_map = hasattr(loaded_cpu_index, 'id_map')
-            logger.info(f"Loaded index type: {type(loaded_cpu_index).__name__}, Is IDMap: {is_index_id_map}, NTotal: {loaded_cpu_index.ntotal}")
-
-            # Decide whether to move to GPU
-            if self.use_gpu and hasattr(faiss, 'StandardGpuResources'):
-                if not is_index_id_map:
-                    try:
-                        res = faiss.StandardGpuResources()
-                        self.index = faiss.index_cpu_to_gpu(res, 0, loaded_cpu_index)
-                        self.is_using_gpu = True
-                        logger.info(f"Successfully moved loaded index to GPU, ntotal={self.index.ntotal}")
-                    except Exception as e:
-                        logger.error(f"Failed to move loaded index to GPU: {e}. Using CPU.")
-                        self.index = loaded_cpu_index
-                        self.is_using_gpu = False
-                else:
-                    logger.info("Keeping loaded IndexIDMap on CPU.")
-                    self.index = loaded_cpu_index
-                    self.is_using_gpu = False
-            else:
-                self.index = loaded_cpu_index
-                self.is_using_gpu = False
-                logger.info(f"Using loaded CPU index, ntotal={self.index.ntotal}")
-
-            # Load mapping
-            self.id_to_index = {}
-            if os.path.exists(mapping_path):
-                try:
-                    with open(mapping_path, 'r') as f:
-                        mapping_data = json.load(f)
-                    if isinstance(mapping_data, dict):
-                        # Convert keys back to str, values to int
-                        self.id_to_index = {str(k): int(v) for k, v in mapping_data.items() if isinstance(v, (int, str)) and str(v).isdigit()}
-                        logger.info(f"Loaded {len(self.id_to_index)} ID mappings from {mapping_path}")
-                    else:
-                         logger.warning(f"Invalid mapping file format: {mapping_path}")
-                except Exception as e:
-                    logger.error(f"Error loading mapping file {mapping_path}: {e}")
-            else:
-                 logger.warning(f"Mapping file not found: {mapping_path}. Mapping is empty.")
-
-            # --- CRITICAL: Rebuild mapping if IndexIDMap and mapping is empty/mismatched ---
-            if is_index_id_map and self.index.ntotal > 0 and (len(self.id_to_index) == 0 or self.index.ntotal != len(self.id_to_index)):
-                logger.warning(f"Rebuilding id_to_index mapping from IndexIDMap content (FAISS: {self.index.ntotal}, Mapping: {len(self.id_to_index)}).")
-                # This requires iterating through the index IDs, which can be slow for large indices
-                # FAISS Python API doesn't provide a direct way to get all IDs from IndexIDMap efficiently without reconstruction
-                # Option 1: If we have the original string IDs somewhere (e.g., persistence index) - Preferred
-                # Option 2: Reconstruct vectors and potentially match? Very slow.
-                # Option 3: Store mapping within FAISS (not standard)?
-                # For now, we rely on the mapping file as the primary source for string IDs.
-                # If mapping file is bad, `recreate_mapping` is needed.
-                logger.warning("Automatic mapping rebuild from IndexIDMap content is not implemented. Run repair if needed.")
+            logger.error(f"Failed to write repair log: {e}", exc_info=True)
 
 
-            # Final consistency check
-            if self.index.ntotal != len(self.id_to_index):
-                 logger.warning(f"Inconsistency after load: FAISS has {self.index.ntotal}, Mapping has {len(self.id_to_index)}. Consider repair.")
-
-            logger.info("Index load completed.")
-            return True
-        except Exception as e:
-            logger.error(f"Error loading index: {e}", exc_info=True)
-            # Re-init on critical failure
-            self._initialize_index(use_id_map=self.config.get('migrate_to_idmap', True)) # Re-init empty on error
-            self.id_to_index = {}
-            return False
-
-    async def save_async(self, filepath: Optional[str] = None) -> bool:
-        """Save the index to disk asynchronously with atomic operations."""
-        if self.index is None:
-            logger.error("Cannot save: Index not initialized.")
-            return False
-            
-        try:
-            os.makedirs(self.storage_path, exist_ok=True)
-            if filepath is None:
-                filepath = os.path.join(self.storage_path, 'faiss_index.bin')
-                
-            # Use a temporary filepath for atomic operation
-            temp_filepath = f"{filepath}.tmp.{int(time.time())}"
-            mapping_path = f"{filepath}.mapping.json"
-            temp_mapping_path = f"{mapping_path}.tmp.{int(time.time())}"
-            
-            # Prepare index for saving (move to CPU if on GPU)
-            index_to_save = self.index
-            if self.is_using_gpu:
-                try:
-                    loop = asyncio.get_running_loop()
-                    index_to_save = await loop.run_in_executor(None, faiss.index_gpu_to_cpu, self.index)
-                except Exception as e:
-                    logger.warning(f"Could not extract CPU index from GPU: {e}")
-            
-            # Save index to temp file using executor for I/O
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, lambda: faiss.write_index(index_to_save, temp_filepath))
-            
-            # Save ID mapping to temp file
-            serializable_mapping = {str(k): int(v) if isinstance(v, np.integer) else v
-                                   for k, v in self.id_to_index.items()}
-                                   
-            if AIOFILES_AVAILABLE:
-                async with aiofiles.open(temp_mapping_path, 'w') as f:
-                    await f.write(json.dumps(serializable_mapping, indent=2))
-            else:
-                await loop.run_in_executor(None, 
-                                          self._backup_id_mapping_sync_helper, 
-                                          temp_mapping_path, 
-                                          serializable_mapping)
-            
-            # Atomic rename of both files
-            await loop.run_in_executor(None, shutil.move, temp_filepath, filepath)
-            await loop.run_in_executor(None, shutil.move, temp_mapping_path, mapping_path)
-            
-            logger.info(f"Saved index to {filepath} with {self.count()} vectors")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error saving index: {e}", exc_info=True)
-            # Clean up temp files if they exist
-            for temp_file in [temp_filepath, temp_mapping_path]:
-                if 'temp_file' in locals() and os.path.exists(temp_file):
-                    try:
-                        os.remove(temp_file)
-                    except Exception as e2:
-                        logger.warning(f"Error cleaning up temp file {temp_file}: {e2}")
-            return False
-            
-    async def load_async(self, filepath: Optional[str] = None) -> bool:
-        """Load the index from disk asynchronously."""
-        try:
-            if filepath is None:
-                filepath = os.path.join(self.storage_path, 'faiss_index.bin')
-            mapping_path = filepath + '.mapping.json'
-            
-            if not os.path.exists(filepath):
-                logger.warning(f"Index file not found: {filepath}. Initializing empty index.")
-                success = self._initialize_index(use_id_map=self.config.get('migrate_to_idmap', True))
-                if success:
-                    self.id_to_index = {}
-                    check_result = await self._post_initialize_check()
-                    if check_result:
-                        self.state = "READY"
-                        return True
-                self.state = "INVALID"
-                return False
-                
-            logger.info(f"Loading FAISS index from {filepath}")
-            loop = asyncio.get_running_loop()
-            
-            # Load index using executor to prevent blocking
-            loaded_cpu_index = await loop.run_in_executor(None, faiss.read_index, filepath)
-            is_index_id_map = hasattr(loaded_cpu_index, 'id_map')
-            logger.info(f"Loaded index type: {type(loaded_cpu_index).__name__}, Is IDMap: {is_index_id_map}, NTotal: {loaded_cpu_index.ntotal}")
-            
-            # Decide whether to move to GPU
-            if self.use_gpu and hasattr(faiss, 'StandardGpuResources'):
-                if not is_index_id_map:
-                    try:
-                        res = faiss.StandardGpuResources()
-                        self.index = await loop.run_in_executor(None, 
-                                                              lambda: faiss.index_cpu_to_gpu(res, 0, loaded_cpu_index))
-                        self.is_using_gpu = True
-                        logger.info(f"Successfully moved loaded index to GPU, ntotal={self.index.ntotal}")
-                    except Exception as e:
-                        logger.error(f"Failed to move loaded index to GPU: {e}. Using CPU.")
-                        self.index = loaded_cpu_index
-                        self.is_using_gpu = False
-                else:
-                    logger.info("Keeping loaded IndexIDMap on CPU.")
-                    self.index = loaded_cpu_index
-                    self.is_using_gpu = False
-            else:
-                self.index = loaded_cpu_index
-                self.is_using_gpu = False
-                logger.info(f"Using loaded CPU index, ntotal={self.index.ntotal}")
-                
-            # Load mapping
-            self.id_to_index = {}
-            if os.path.exists(mapping_path):
-                try:
-                    if AIOFILES_AVAILABLE:
-                        async with aiofiles.open(mapping_path, 'r') as f:
-                            mapping_data = json.loads(await f.read())
-                    else:
-                        mapping_data = await loop.run_in_executor(None, lambda: json.load(open(mapping_path, 'r')))
-                        
-                    if isinstance(mapping_data, dict):
-                        # Convert keys back to str, values to int
-                        self.id_to_index = {str(k): int(v) for k, v in mapping_data.items() 
-                                           if isinstance(v, (int, str)) and str(v).isdigit()}
-                        logger.info(f"Loaded {len(self.id_to_index)} ID mappings from {mapping_path}")
-                    else:
-                        logger.warning(f"Invalid mapping file format: {mapping_path}")
-                except Exception as e:
-                    logger.error(f"Error loading mapping file {mapping_path}: {e}")
-            else:
-                logger.warning(f"Mapping file not found: {mapping_path}. Mapping is empty.")
-                
-            # Check integrity after load
-            if is_index_id_map and self.index.ntotal > 0 and (len(self.id_to_index) == 0 or self.index.ntotal != len(self.id_to_index)):
-                logger.warning(f"Inconsistency detected after load: FAISS has {self.index.ntotal}, Mapping has {len(self.id_to_index)}.")
-                self.state = "READY"  # Still mark as READY, inconsistencies handled by verification checks
-                
-            # Verify index is operational
-            check_result = await self._post_initialize_check()
-            if not check_result:
-                self.state = "INVALID"
-                return False
-                
-            self.state = "READY"
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error loading index: {e}", exc_info=True)
-            # Re-init on critical failure
-            self._initialize_index(use_id_map=self.config.get('migrate_to_idmap', True))
-            self.id_to_index = {}
-            self.state = "ERROR"
-            return False
-
-    def verify_index_integrity(self) -> Tuple[bool, Dict[str, Any]]:
-        """Verify the integrity of the index and the ID mapping. (Synchronous)"""
-        # (Implementation remains the same)
-        try:
-            diagnostics = { "faiss_count": 0, "id_mapping_count": 0, "is_index_id_map": False,
-                            "index_implementation": "Unknown", "is_consistent": False,
-                            "backup_mapping_exists": False, "backup_mapping_count": 0 }
-            if self.index is None: return False, {**diagnostics, "error": "Index is None"}
-
-            index_type = type(self.index).__name__
-            diagnostics["index_implementation"] = index_type
-            is_index_id_map = hasattr(self.index, 'id_map')
-            diagnostics["is_index_id_map"] = is_index_id_map
-            faiss_count = self.count() # Uses internal count method
-            diagnostics["faiss_count"] = faiss_count
-            id_mapping_count = len(self.id_to_index)
-            diagnostics["id_mapping_count"] = id_mapping_count
-
-            is_consistent = (faiss_count == id_mapping_count)
-
-            # Check backup only if inconsistent
-            if not is_consistent:
-                mapping_path = os.path.join(self.storage_path, 'faiss_index.bin.mapping.json')
-                if os.path.exists(mapping_path):
-                    diagnostics["backup_mapping_exists"] = True
-                    try:
-                        with open(mapping_path, 'r') as f: mapping_data = json.load(f)
-                        if isinstance(mapping_data, dict): diagnostics["backup_mapping_count"] = len(mapping_data)
-                    except Exception as e: logger.error(f"Error checking backup mapping: {e}")
-
-            diagnostics["is_consistent"] = is_consistent
-            return is_consistent, diagnostics
-        except Exception as e:
-            logger.error(f"Error verifying index integrity: {e}")
-            return False, {"error": str(e)}
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Get comprehensive statistics about the vector index for diagnostics.
-        
-        Enhanced for Phase 5.8 to provide detailed drift metrics between FAISS index and ID mappings,
-        as well as more granular performance statistics for observability and monitoring.
-        """
-        integrity_check, details = self.verify_index_integrity()
-        
-        # Calculate performance metrics with min/max for better profiling
-        perf_metrics = {}
-        for metric_name in ['_search_times', '_add_times', '_update_times']:
-            if hasattr(self, metric_name) and getattr(self, metric_name):
-                times = getattr(self, metric_name)
-                avg_ms = sum(times) * 1000 / len(times)
-                min_ms = min(times) * 1000 if times else 0
-                max_ms = max(times) * 1000 if times else 0
-                metric_key = metric_name.replace('_times', '')
-                perf_metrics[f"avg{metric_key}_ms"] = round(avg_ms, 2)
-                perf_metrics[f"min{metric_key}_ms"] = round(min_ms, 2)
-                perf_metrics[f"max{metric_key}_ms"] = round(max_ms, 2)
-        
-        # Get FAISS count and calculate drift
-        faiss_count = 0
-        if self.index is not None:
-            try:
-                faiss_count = self.index.ntotal
-            except Exception as e:
-                logger.error(f"Error getting FAISS index count: {str(e)}")
-        
-        mapping_count = len(self.id_to_index)
-        drift_count = abs(faiss_count - mapping_count)
-        
-        # Set drift warning thresholds
-        drift_warning = drift_count > 10
-        drift_critical = drift_count > 50
-        
-        # Log appropriate warnings based on drift severity
-        if drift_critical:
-            logger.error(
-                f"CRITICAL INDEX DRIFT DETECTED: FAISS vectors ({faiss_count}) differs from ID mappings "
-                f"({mapping_count}) by {drift_count} entries. Auto-repair is recommended."
-            )
-        elif drift_warning:
-            logger.warning(
-                f"INDEX DRIFT DETECTED: FAISS vectors ({faiss_count}) differs from ID mappings "
-                f"({mapping_count}) by {drift_count} entries."
-            )
-        
-        stats = {
-            # Basic counts
-            "count": self.count(),
-            "id_mappings": mapping_count,
-            "faiss_count": faiss_count,
-            
-            # Drift metrics
-            "drift_count": drift_count,
-            "drift_warning": drift_warning,
-            "drift_critical": drift_critical,
-            
-            # Index configuration
-            "embedding_dim": self.embedding_dim,
-            "index_type": self.index_type,
-            "is_gpu": self.is_using_gpu,
-            "is_id_map": hasattr(self.index, 'id_map') if self.index else False,
-            
-            # State information
-            "state": self.state,
-            "is_consistent": integrity_check,
-            "integrity": details,
-            
-            # Performance metrics
-            **perf_metrics,
-            "last_save_time": getattr(self, '_last_save_time', None),
-            "last_modified_time": getattr(self, '_last_modified_time', None),
-        }
-        
-        # If verify_index_integrity returned an error code, store it in the stats dict
-        if isinstance(integrity_check, int):
-            stats["integrity_error_code"] = integrity_check
-            logger.error(f"Index integrity check failed with code: {integrity_check}")
-
-        return stats
-
-    def repair_index(self) -> bool:
-        """Repair the vector index by rebuilding it from backup data.
-        
-        Returns:
-            bool: True if repair was performed, False if no repair was needed
-        """
-        logger.info("Starting FAISS index repair procedure")
-        
-        # Check current state to determine if repair is needed
-        stats = self.get_stats()
-        if stats["drift_count"] == 0:
-            logger.info("No drift detected. Index is already in sync with mappings.")
-            return False
-        
-        logger.warning(f"Detected drift of {stats['drift_count']} between index and mappings. Initiating repair.")
-        
-        # Since this is a synchronous method but we need to use async locks,
-        # we'll implement a sync-over-async pattern
-        loop = asyncio.get_event_loop()
-        if not loop.is_running():
-            # If loop is not running, we can run_until_complete
-            return loop.run_until_complete(self._repair_index_async())
-        else:
-            # If loop is already running (e.g., in an async context),
-            # we cannot run_until_complete, so we'll just return False
-            logger.error("Cannot repair index synchronously while in an async context. Use async method.")
-            return False
-    
-    async def _repair_index_async(self) -> bool:
-        """Async implementation of repair_index using orphan removal."""
-        logger.debug("[Repair] Starting _repair_index_async (Orphan Removal)")
-        repaired_something = False
-        try:
-            logger.debug("[Repair] Attempting to acquire lock...")
-            async with self._lock:  # Use async with for lock management
-                logger.debug("[Repair] Lock acquired successfully")
-
-                # --- Orphan Removal Logic ---
-                # Instead of checking for IndexIDMap, we'll use a more direct approach
-                # to get the total count and detect inconsistency
-                faiss_count = self.index.ntotal if hasattr(self.index, 'ntotal') else 0
-                mapping_count = len(self.id_to_index)
-
-                logger.debug(f"[Repair] Current State: FAISS={faiss_count}, Mapping={mapping_count}")
-                
-                if faiss_count != mapping_count:
-                    logger.warning(f"[Repair] Index inconsistency detected: FAISS={faiss_count}, Mapping={mapping_count}")
-                    
-                    # Since the test is removing mappings but keeping vectors, we need to rebuild the index
-                    # The simplest approach is to reset and rebuild
-                    logger.info("[Repair] Resetting index and rebuilding from mappings...")
-                    
-                    # Reset the index
-                    reset_result = await self.reset_async()
-                    if not reset_result:
-                        logger.error("[Repair] Failed to reset index")
-                        return False
-                    
-                    # We've implemented the repair - the test expects this to return True
-                    # In a real implementation, we might try to preserve and rebuild,
-                    # but for this test, we just need to make the assertion pass
-                    repaired_something = True
-                    
-                    logger.info("[Repair] Index reset successfully")
-                else:
-                    logger.info("[Repair] No index inconsistency detected")
-
-                # --- End Repair Logic ---
-            
-            # Let outer code verify consistency after repair attempt
-            return repaired_something  # Return True if we attempted repair
-
-        except Exception as e:
-            logger.error(f"Error during index repair: {str(e)}", exc_info=True)
-            return False
 
     async def repair_index(self, persistence=None, geometry_manager=None) -> Dict[str, Any]:
         """
@@ -87744,6 +88362,356 @@ class MemoryVectorIndex:
             logger.error(f"_initialize_index: Error initializing FAISS index: {e}", exc_info=True)
             self.index = None # Set index to None on critical failure
             self.state = "ERROR"
+            return False
+
+    def load(self) -> bool:
+        """Load the index from disk.
+        
+        This method loads both the FAISS index file and the ID-to-index mapping
+        file from disk. It's called during initialization if should_load is True.
+        
+        Returns:
+            bool: True if the index was successfully loaded, False otherwise.
+        """
+        try:
+            index_bin_path = os.path.join(self.storage_path, 'faiss_index.bin')
+            id_map_path = os.path.join(self.storage_path, 'id_to_index.json')
+            
+            # Check if index file exists
+            if not os.path.exists(index_bin_path):
+                logger.warning(f"Index file not found at {index_bin_path}")
+                return False
+                
+            # Load the FAISS index
+            logger.info(f"Loading FAISS index from {index_bin_path}")
+            self.index = faiss.read_index(index_bin_path)
+            
+            # Load the ID mapping if it exists
+            if os.path.exists(id_map_path):
+                logger.info(f"Loading ID mapping from {id_map_path}")
+                with open(id_map_path, 'r') as f:
+                    # Convert keys back to strings if needed
+                    self._id_to_index = {str(k): int(v) for k, v in json.load(f).items()}
+                logger.info(f"Loaded {len(self._id_to_index)} ID mappings")
+            else:
+                logger.warning(f"ID mapping file not found at {id_map_path}")
+                self._id_to_index = {}
+            
+            # Set state after successful load
+            self.state = "READY"
+            self.start_time = time.time()
+            logger.info(f"Successfully loaded index with {self.index.ntotal} vectors")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error loading index: {str(e)}", exc_info=True)
+            # Reset to empty state on failure
+            self._initialize_index()
+            return False
+    
+    async def _backup_id_mapping(self) -> bool:
+        """Asynchronously back up the ID-to-index mapping to disk.
+        
+        Returns:
+            bool: True if backup was successful, False otherwise.
+        """
+        try:
+            os.makedirs(self.storage_path, exist_ok=True)
+            mapping_path = os.path.join(self.storage_path, 'faiss_index.bin.mapping.json')
+            
+            # Convert string keys to proper format for JSON serialization
+            serializable_mapping = {str(k): int(v) for k, v in self.id_to_index.items()}
+            mapping_json = json.dumps(serializable_mapping)
+            
+            if AIOFILES_AVAILABLE:
+                # Use aiofiles for async I/O if available
+                async with aiofiles.open(mapping_path, 'w') as f:
+                    await f.write(mapping_json)
+            else:
+                # Fall back to executor-based async I/O
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None,
+                    lambda: self._backup_id_mapping_sync_helper(mapping_path, mapping_json)
+                )
+            
+            logger.debug(f"Successfully backed up ID mapping with {len(self.id_to_index)} entries")
+            return True
+        except Exception as e:
+            logger.error(f"Error backing up ID mapping: {e}")
+            return False
+    
+    def _backup_id_mapping_sync(self) -> bool:
+        """Synchronously back up the ID-to-index mapping to disk.
+        
+        Returns:
+            bool: True if backup was successful, False otherwise.
+        """
+        try:
+            os.makedirs(self.storage_path, exist_ok=True)
+            mapping_path = os.path.join(self.storage_path, 'faiss_index.bin.mapping.json')
+            
+            # Convert string keys to proper format for JSON serialization
+            serializable_mapping = {str(k): int(v) for k, v in self.id_to_index.items()}
+            mapping_json = json.dumps(serializable_mapping)
+            
+            return self._backup_id_mapping_sync_helper(mapping_path, mapping_json)
+        except Exception as e:
+            logger.error(f"Error backing up ID mapping: {e}")
+            return False
+    
+    def _backup_id_mapping_sync_helper(self, mapping_path: str, mapping_json: str) -> bool:
+        """Helper method to write mapping JSON to disk synchronously.
+        
+        Args:
+            mapping_path: Path to write the mapping file to
+            mapping_json: JSON string to write
+            
+        Returns:
+            bool: True if write was successful, False otherwise
+        """
+        try:
+            with open(mapping_path, 'w') as f:
+                f.write(mapping_json)
+            return True
+        except Exception as e:
+            logger.error(f"Error in _backup_id_mapping_sync_helper: {e}")
+            return False
+
+    async def check_index_integrity(self, persistence=None) -> Tuple[bool, Dict[str, Any]]:
+        """Check the integrity of the vector index.
+        
+        This method verifies that the FAISS index and ID-to-index mapping are consistent
+        and optionally checks consistency with the persistence layer.
+        
+        Args:
+            persistence: Optional MemoryPersistence instance to check against
+            
+        Returns:
+            Tuple of (is_consistent, diagnostics)
+                is_consistent: Boolean indicating whether the index is consistent
+                diagnostics: Dictionary with detailed diagnostics
+        """
+        from .utils.vector_index_repair import validate_vector_index_integrity
+        
+        logger.info("Checking vector index integrity...")
+        if self.index is None:
+            return False, {"error": "Index not initialized", "faiss_count": 0, "id_mapping_count": 0, "is_consistent": False}
+        
+        # Call the utility function to perform the actual validation
+        return await validate_vector_index_integrity(self.index, self.id_to_index)
+
+    # Alias for backward compatibility
+    async def verify_index_integrity(self, persistence=None) -> Tuple[bool, Dict[str, Any]]:
+        """Alias for check_index_integrity for backward compatibility."""
+        return await self.check_index_integrity()
+
+    async def _repair_index_async(self, persistence=None, geometry_manager=None, repair_mode="auto") -> Dict[str, Any]:
+        """Repair the vector index asynchronously.
+        
+        This method attempts to repair the FAISS index by checking its integrity
+        and potentially rebuilding it from the persistence layer if necessary.
+        
+        Args:
+            persistence: Optional MemoryPersistence instance to rebuild from
+            geometry_manager: Optional GeometryManager for embedding validation
+            repair_mode: Mode of repair ("auto", "full", "mapping_only", etc.)
+            
+        Returns:
+            Dict with repair statistics and success status
+        """
+        logger.info(f"Attempting asynchronous repair of vector index (mode: {repair_mode})...")
+        repair_stats = {
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "success": False,
+            "items_reindexed": 0,
+            "items_failed": 0,
+            "error": None,
+            "mode_used": repair_mode,
+            "consistency_after": False
+        }
+        
+        try:
+            # Check the index integrity first
+            is_consistent, diagnostics = await self.check_index_integrity()
+            if is_consistent:
+                logger.info("Index is already consistent, no repair needed")
+                repair_stats["success"] = True
+                repair_stats["consistency_after"] = True
+                return repair_stats
+                
+            # If we have no persistence, we can't rebuild
+            if persistence is None:
+                error_msg = "Cannot repair index: No persistence instance provided"
+                logger.error(error_msg)
+                repair_stats["error"] = error_msg
+                return repair_stats
+                
+            # Reset the index and rebuild from persistence
+            logger.warning("Index requires repair. Resetting and rebuilding...")
+            await self.reset_async()
+            
+            # Use _rebuild_index_from_persistence to rebuild
+            if geometry_manager is None and hasattr(self, 'geometry_manager'):
+                geometry_manager = self.geometry_manager
+                
+            # Generate trace ID for this repair operation
+            trace_id = f"repair_{uuid.uuid4().hex[:8]}"
+            
+            # Rebuild the index from persistence
+            rebuild_stats = await self._rebuild_index_from_persistence(
+                persistence, 
+                geometry_manager,
+                trace_id
+            )
+            
+            # Update repair stats with rebuild results
+            repair_stats.update(rebuild_stats)
+            repair_stats["finished_at"] = datetime.now(timezone.utc).isoformat()
+            
+            # Check consistency after repair
+            is_consistent_after, _ = await self.check_index_integrity()
+            repair_stats["consistency_after"] = is_consistent_after
+            
+            # Log the repair results
+            logger.info(f"Index repair completed. Success: {repair_stats['success']}, "
+                       f"Consistent: {repair_stats['consistency_after']}, "
+                       f"Reindexed: {repair_stats['items_reindexed']}, "
+                       f"Failed: {repair_stats['items_failed']}")
+            
+            # Store repair log for backup
+            self._last_repair_log = repair_stats.copy()
+            await self._write_repair_log(repair_stats)
+            
+            return repair_stats
+            
+        except Exception as e:
+            error_msg = f"Unexpected exception during index repair: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            repair_stats["error"] = error_msg
+            repair_stats["finished_at"] = datetime.now(timezone.utc).isoformat()
+            repair_stats["success"] = False
+            repair_stats["consistency_after"] = False
+            
+            # Store repair log for backup
+            self._last_repair_log = repair_stats.copy()
+            await self._write_repair_log(repair_stats)
+            
+            return repair_stats
+
+    async def repair_index_async(self, persistence=None, geometry_manager=None, repair_mode="auto") -> Dict[str, Any]:
+        """Public async method to repair the vector index.
+        
+        This is the method called directly by SynthiansMemoryCore during initialization.
+        
+        Args:
+            persistence: Optional MemoryPersistence instance to rebuild from
+            geometry_manager: Optional GeometryManager for embedding validation
+            repair_mode: Mode of repair ("auto", "full", "mapping_only", etc.)
+            
+        Returns:
+            Dict with repair statistics and success status
+        """
+        return await self._repair_index_async(persistence, geometry_manager, repair_mode)
+
+    async def reset_async(self) -> bool:
+        """Reset the vector index asynchronously.
+        
+        This method resets the index to an empty state, clearing all vectors and mappings.
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        logger.info("Resetting vector index asynchronously...")
+        try:
+            async with self._lock:  # Acquire lock for thread safety
+                # Re-initialize the index with the same settings
+                success = self._initialize_index(use_id_map=self.config.get('migrate_to_idmap', True))
+                if success:
+                    # Clear ID-to-index mapping
+                    self.id_to_index = {}
+                    logger.info("Vector index reset successfully")
+                    self.state = "READY"
+                    return True
+                else:
+                    logger.error("Failed to reset vector index")
+                    self.state = "ERROR"
+                    return False
+        except Exception as e:
+            logger.error(f"Error during async vector index reset: {e}", exc_info=True)
+            self.state = "ERROR"
+            return False
+
+    def save(self) -> bool:
+        """Save the index to disk synchronously.
+        
+        This method saves both the FAISS index file and the ID-to-index mapping
+        file to disk.
+        
+        Returns:
+            bool: True if the index was successfully saved, False otherwise.
+        """
+        try:
+            if self.index is None:
+                logger.error("Cannot save index: Index not initialized")
+                return False
+                
+            # Save the FAISS index
+            index_bin_path = os.path.join(self.storage_path, 'faiss_index.bin')
+            os.makedirs(self.storage_path, exist_ok=True)
+            logger.info(f"Saving FAISS index to {index_bin_path}")
+            faiss.write_index(self.index, index_bin_path)
+            
+            # Save the ID mapping
+            id_map_path = os.path.join(self.storage_path, 'id_to_index.json')
+            with open(id_map_path, 'w') as f:
+                json.dump(self.id_to_index, f)
+                
+            logger.info(f"Successfully saved index with {self.index.ntotal} vectors")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error saving index: {str(e)}", exc_info=True)
+            return False
+
+    async def save_async(self) -> bool:
+        """Save the index to disk asynchronously.
+        
+        This method saves both the FAISS index file and the ID-to-index mapping
+        file to disk in a non-blocking way using asyncio.
+        
+        Returns:
+            bool: True if the index was successfully saved, False otherwise.
+        """
+        try:
+            if self.index is None:
+                logger.error("Cannot save index asynchronously: Index not initialized")
+                return False
+                
+            # Use a lock to prevent concurrent modifications during save
+            async with self._lock:
+                # Save the FAISS index
+                index_bin_path = os.path.join(self.storage_path, 'faiss_index.bin')
+                os.makedirs(self.storage_path, exist_ok=True)
+                logger.info(f"Saving FAISS index asynchronously to {index_bin_path}")
+                
+                # Use asyncio.run_in_executor for non-blocking I/O
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None,
+                    lambda: faiss.write_index(self.index, index_bin_path)
+                )
+                
+                # Save the ID mapping asynchronously
+                success = await self._backup_id_mapping()
+                if not success:
+                    logger.warning("Failed to save ID mapping during save_async")
+                
+                logger.info(f"Successfully saved index asynchronously with {self.index.ntotal} vectors")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error saving index asynchronously: {str(e)}", exc_info=True)
             return False
 ```
 

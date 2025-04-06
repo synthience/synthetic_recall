@@ -11,6 +11,11 @@ import hashlib
 import uuid
 import traceback
 import shutil  # Import shutil for move operation
+from datetime import datetime, timezone # For repair log timestamp
+from .memory_persistence import MemoryPersistence # Assuming relative import works
+from .geometry_manager import GeometryManager
+from .memory_structures import MemoryEntry, MemoryAssembly # Needed for type check
+
 
 # Try importing aiofiles, but don't make it a hard requirement
 try:
@@ -302,194 +307,70 @@ class MemoryVectorIndex:
 
     async def update_entry(self, memory_id: str, embedding: np.ndarray) -> bool:
         """Update the embedding for an existing memory ID asynchronously."""
-        # Locks are handled by remove/add methods
-        try:
-            validated_embedding = self._validate_embedding(embedding)
-            if validated_embedding is None:
-                logger.warning(f"Invalid embedding for memory {memory_id}, skipping update")
-                return False
-
-            # Check mapping first (no lock needed for read, but remove/add use lock)
-            if memory_id not in self.id_to_index:
-                 logger.warning(f"Cannot update vector for {memory_id}: ID not found in mapping.")
-                 return False
-
-            # Remove the existing vector first
-            removed = await self.remove_vector(memory_id)
-            if not removed:
-                logger.warning(f"Failed to remove existing vector for {memory_id} during update, attempting to add anyway")
-
-            # Add the updated vector
-            added = await self.add(memory_id, validated_embedding)
-            if not added:
-                logger.error(f"Failed to add updated vector for {memory_id} after removal attempt.")
-                return False
-
-            logger.debug(f"Successfully updated vector for memory ID {memory_id}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Error updating vector for {memory_id}: {e}", exc_info=True)
-            return False
-
-    def search(self, query_embedding: np.ndarray, k: int = 10) -> List[Tuple[str, float]]:
-        """Search the index for similar embeddings. (Synchronous)"""
-        if self.index is None:
-            logger.error("Search failed: Index not initialized.")
-            return []
-        try:
-            validated_query = self._validate_embedding(query_embedding)
-            if validated_query is None: return []
-
-            current_count = self.count()
-            if current_count == 0: return []
-            k = min(k, current_count)
-            if k <= 0: return []
-
-            # Normalize query for cosine/IP if needed
-            if self.index_type.upper() in ['IP', 'COSINE']:
-                 norm = np.linalg.norm(validated_query)
-                 if norm > 1e-6: validated_query = validated_query / norm
-
-            query_vector_faiss = validated_query.reshape(1, -1)
-
-            # Perform search (synchronous FAISS call)
-            distances, numeric_ids = self.index.search(query_vector_faiss, k)
-
-            results = []
-            if len(numeric_ids) > 0 and len(distances) > 0:
-                valid_ids_indices = [(idx, i) for i, idx in enumerate(numeric_ids[0]) if idx >= 0]
-                numeric_to_memory_id = {v: k for k, v in self.id_to_index.items()} # Build reverse map inside
-
-                for numeric_id, index_in_results in valid_ids_indices:
-                    dist = distances[0][index_in_results]
-                    similarity = 0.0
-                    if self.index_type.upper() == 'L2':
-                        similarity = 1.0 / (1.0 + float(dist)) # Simple inverse distance
-                    elif self.index_type.upper() == 'IP':
-                        similarity = float(dist) # Inner product IS similarity (if vectors normalized)
-                    elif self.index_type.upper() == 'COSINE':
-                         # FAISS IP index on normalized vectors gives cosine similarity directly
-                         similarity = float(dist)
-
-                    memory_id = numeric_to_memory_id.get(int(numeric_id))
-                    if memory_id is not None:
-                        results.append((memory_id, similarity))
-                    else:
-                        logger.warning(f"No memory ID found for numeric FAISS ID {numeric_id}")
-
-            results.sort(key=lambda x: x[1], reverse=True)
-            logger.debug(f"FAISS search returning {len(results)} candidates")
-            return results
-        except Exception as e:
-            logger.error(f"Error searching index: {e}", exc_info=True)
-            return []
-
-    async def search_async(self, query_embedding: np.ndarray, k: int = 10, trace_id=None) -> List[Tuple[str, float]]:
-        """Search the index for similar embeddings asynchronously."""
-        if self.index is None:
-            logger.error("Search failed: Index not initialized or in INVALID state.")
-            return []
-            
-        if self.state not in ["READY"]:
-            logger.error(f"Search failed: Index in {self.state} state")
-            return []
-            
+        # State checks already handled by remove/add methods
         try:
             start_time = time.perf_counter()
             
-            # Validate and prepare the query embedding
-            validated_query = self._validate_embedding(query_embedding)
-            if validated_query is None:
-                logger.warning("Search failed: Invalid query embedding (contains NaN/Inf or wrong shape)")
-                return []
-                
-            # Check if index has any vectors
-            current_count = self.count()
-            if current_count == 0:
-                logger.debug("Search returned no results: Index is empty")
-                return []
-                
-            # Adjust k if needed
-            k = min(k, current_count)
-            if k <= 0:
-                logger.warning("Search failed: k <= 0 after adjustment")
-                return []
-                
-            # Normalize query for cosine/IP if needed
-            if self.index_type.upper() in ['IP', 'COSINE']:
-                norm = np.linalg.norm(validated_query)
-                if norm > 1e-6:
-                    validated_query = validated_query / norm
-                    
-            # Prepare query vector for FAISS
-            query_vector_faiss = validated_query.reshape(1, -1)
-            
-            # --- CRITICAL FIX: Acquire the lock BEFORE calling the executor ---
-            async with self._lock: # Acquire lock
-                # --- DEBUG: Call FAISS directly (blocking) ---
-                logger.debug(f"[SYNC_CALL] Calling self.index.search (k={k})")
-                distances, numeric_ids = self.index.search(query_vector_faiss, k)
-                logger.debug(f"[SYNC_CALL] Finished self.index.search, found {len(numeric_ids[0]) if numeric_ids is not None and len(numeric_ids) > 0 else 0} potential results")
-                # --- END DEBUG ---
-            
-            # --- Process results (safer to lock reads of id_to_index too) ---
-            results = []
-            async with self._lock:  # Lock for reading the mapping
-                numeric_to_memory_id = {v: k for k, v in self.id_to_index.items()}
-            
-            if len(numeric_ids) > 0 and len(distances) > 0:
-                valid_ids_indices = [(idx, i) for i, idx in enumerate(numeric_ids[0]) if idx >= 0]
-                
-                for numeric_id, index_in_results in valid_ids_indices:
-                    dist = distances[0][index_in_results]
-                    
-                    # Convert distance to similarity score
-                    similarity = 0.0
-                    if self.index_type.upper() == 'L2':
-                        similarity = 1.0 / (1.0 + float(dist))  # Simple inverse distance
-                    elif self.index_type.upper() in ['IP', 'COSINE']:
-                        similarity = float(dist)  # Inner product/cosine IS similarity
-                        
-                    # Map numeric ID back to memory ID
-                    memory_id = numeric_to_memory_id.get(int(numeric_id))
-                    if memory_id is not None:
-                        results.append((memory_id, similarity))
-                    else:
-                        logger.warning(f"No memory ID found for numeric FAISS ID {numeric_id}")
-                        
-            # Sort by similarity (highest first)
-            results.sort(key=lambda x: x[1], reverse=True)
-            
-            # Track performance metrics
-            search_time = time.perf_counter() - start_time
-            if hasattr(self, '_search_times'):
-                self._search_times.append(search_time)
-                # Keep only last 100 measurements
-                if len(self._search_times) > 100:
-                    self._search_times.pop(0)
+            # Validate embedding
+            validated_embedding = self._validate_embedding(embedding)
+            if validated_embedding is None:
+                logger.warning(f"VECTOR_ERROR: Invalid embedding format for memory {memory_id}, skipping update")
+                logger.warning(f"  - Embedding shape: {embedding.shape if hasattr(embedding, 'shape') else 'unknown'}")
+                logger.warning(f"  - Expected shape: ({self.embedding_dim},)")
+                return False
+
+            # Check mapping first (no lock needed for read)
+            if memory_id not in self.id_to_index:
+                logger.warning(f"VECTOR_ERROR: Cannot update vector for {memory_id}: ID not found in mapping")
+                logger.warning(f"  - Current mapping contains {len(self.id_to_index)} entries")
+                logger.warning(f"  - This may indicate index drift requiring repair")
+                return False
+
+            # Remove the existing vector first
+            removed = await self.remove_vector_async(memory_id)
+            if not removed:
+                logger.warning(f"VECTOR_ERROR: Failed to remove existing vector for {memory_id} during update")
+                logger.warning(f"  - This operation will be queued for retry via _pending_vector_updates")
+                logger.warning(f"  - Attempting to add anyway as a fallback")
+
+            # Add the updated vector
+            added = await self.add_async(memory_id, validated_embedding)
+            if not added:
+                logger.error(f"VECTOR_ERROR: Failed to add updated vector for {memory_id} after removal attempt")
+                logger.error(f"  - Vector index ID mapping consistency may be compromised")
+                logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
+                return False
+
+            # Track performance
+            update_time = time.perf_counter() - start_time
+            if hasattr(self, '_update_times'):
+                self._update_times.append(update_time)
+                if len(self._update_times) > 100:
+                    self._update_times.pop(0)
             else:
-                self._search_times = [search_time]
+                self._update_times = [update_time]
                 
-            logger.debug(f"FAISS search returning {len(results)} candidates (took {search_time*1000:.2f}ms)")
-            return results
-            
+            logger.debug(f"Successfully updated vector for memory ID {memory_id} [took {update_time*1000:.2f}ms]")
+            return True
+
         except Exception as e:
-            logger.error(f"Error searching index: {e}", exc_info=True)
-            return []
+            logger.error(f"VECTOR_ERROR: Exception during update for {memory_id}: {e}", exc_info=True)
+            logger.error(f"  - Stack trace logged for debugging")
+            logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
+            return False
 
     async def add_async(self, memory_id: str, embedding: np.ndarray) -> bool:
         """Add a memory vector to the index asynchronously with performance tracking."""
         if self.index is None:
-            logger.error(f"Cannot add memory {memory_id}: Index not initialized.")
+            logger.error(f"VECTOR_ERROR: Cannot add memory {memory_id}: Index not initialized.")
             return False
             
         if self.state not in ["READY", "INITIALIZING"]:
-            logger.error(f"Cannot add memory {memory_id}: Index in {self.state} state")
+            logger.error(f"VECTOR_ERROR: Cannot add memory {memory_id}: Index in {self.state} state")
             return False
             
         if not hasattr(self.index, 'add_with_ids'):
-            logger.error(f"Cannot add memory {memory_id}: Index does not support 'add_with_ids'. Initialize with use_id_map=True.")
+            logger.error(f"VECTOR_ERROR: Cannot add memory {memory_id}: Index does not support 'add_with_ids'. Initialize with use_id_map=True.")
             return False
 
         start_time = time.perf_counter()
@@ -499,7 +380,9 @@ class MemoryVectorIndex:
                 # Validate the embedding
                 embedding_validated = self._validate_embedding(embedding)
                 if embedding_validated is None:
-                    logger.warning(f"Invalid embedding for memory {memory_id}, skipping add")
+                    logger.warning(f"VECTOR_ERROR: Invalid embedding for memory {memory_id}, skipping add")
+                    logger.warning(f"  - Embedding shape: {embedding.shape if hasattr(embedding, 'shape') else 'unknown'}")
+                    logger.warning(f"  - Expected shape: ({self.embedding_dim},)")
                     return False
 
                 # Prepare for FAISS
@@ -507,22 +390,30 @@ class MemoryVectorIndex:
                     embedding_validated = embedding_validated.reshape(1, -1)
 
                 # Get numeric ID
-                numeric_id = self._get_numeric_id(memory_id)
+                numeric_id = self._get_numeric_id(memory_id) # Generate numeric ID
                 ids_array = np.array([numeric_id], dtype=np.int64)
 
                 # --- DEBUG: Call FAISS directly (blocking) ---
-                logger.debug(f"[SYNC_CALL] Calling self.index.add_with_ids for {memory_id}")
-                self.index.add_with_ids(embedding_validated, ids_array)
-                logger.debug(f"[SYNC_CALL] Finished self.index.add_with_ids for {memory_id}")
+                logger.debug(f"[add_async LOCK] Adding ID: {memory_id}, Numeric ID: {numeric_id}, Index ntotal before: {self.index.ntotal if hasattr(self.index, 'ntotal') else 'N/A'}, Mapping size before: {len(self.id_to_index)}")
+                try:
+                    self.index.add_with_ids(embedding_validated, ids_array)
+                    logger.debug(f"[add_async LOCK] FAISS add_with_ids successful for {memory_id}. Index ntotal after: {self.index.ntotal if hasattr(self.index, 'ntotal') else 'N/A'}")
+                except Exception as faiss_error:
+                    logger.error(f"VECTOR_ERROR: FAISS add_with_ids failed for {memory_id}: {faiss_error}")
+                    logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
+                    return False
                 # --- END DEBUG ---
 
                 # Update ID mapping
+                logger.debug(f"[add_async LOCK] Updating id_to_index mapping for {memory_id}")
                 self.id_to_index[memory_id] = numeric_id
+                logger.debug(f"[add_async LOCK] Mapping size after update: {len(self.id_to_index)}")
                 
                 # Backup mapping
                 backup_success = await self._backup_id_mapping()
                 if not backup_success:
-                    logger.warning(f"Failed to backup ID mapping after adding {memory_id}")
+                    logger.warning(f"VECTOR_ERROR: Failed to backup ID mapping after adding {memory_id}")
+                    logger.warning(f"  - Vector index and ID mapping may become inconsistent if system crashes")
 
                 # Track performance
                 add_time = time.perf_counter() - start_time
@@ -541,21 +432,23 @@ class MemoryVectorIndex:
                 return True
 
             except Exception as e:
-                logger.error(f"Error adding memory {memory_id} to index: {e}", exc_info=True)
+                logger.error(f"VECTOR_ERROR: Exception during add for {memory_id}: {e}", exc_info=True)
+                logger.error(f"  - Stack trace logged for debugging")
+                logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
                 return False
                 
     async def remove_vector_async(self, memory_id: str) -> bool:
         """Remove a vector by its memory ID asynchronously."""
         if self.index is None:
-            logger.error(f"Cannot remove memory {memory_id}: Index not initialized.")
+            logger.error(f"VECTOR_ERROR: Cannot remove memory {memory_id}: Index not initialized.")
             return False
             
         if self.state not in ["READY", "INITIALIZING"]:
-            logger.error(f"Cannot remove memory {memory_id}: Index in {self.state} state")
+            logger.error(f"VECTOR_ERROR: Cannot remove memory {memory_id}: Index in {self.state} state")
             return False
             
         if not hasattr(self.index, 'remove_ids'):
-            logger.error("Remove_vector called, but index does not support remove_ids.")
+            logger.error("VECTOR_ERROR: Remove_vector called, but index does not support remove_ids.")
             return False # Cannot proceed if index doesn't support removal by ID
 
         start_time = time.perf_counter()
@@ -564,23 +457,33 @@ class MemoryVectorIndex:
             try:
                 numeric_id = self.id_to_index.get(memory_id)
                 if numeric_id is None:
-                    logger.warning(f"Cannot remove vector for {memory_id}: ID not found in mapping.")
+                    logger.warning(f"VECTOR_ERROR: Cannot remove vector for {memory_id}: ID not found in mapping.")
+                    logger.warning(f"  - Current mapping contains {len(self.id_to_index)} entries")
+                    logger.warning(f"  - This may indicate index drift or mapping inconsistency")
                     return False # ID wasn't mapped, nothing to remove
 
                 ids_to_remove = np.array([numeric_id], dtype=np.int64)
 
                 # --- DEBUG: Call FAISS directly (blocking) ---
-                logger.debug(f"[SYNC_CALL] Calling self.index.remove_ids for {memory_id}")
-                num_removed = self.index.remove_ids(ids_to_remove)
-                logger.debug(f"[SYNC_CALL] Finished self.index.remove_ids for {memory_id}, removed={num_removed}")
+                logger.debug(f"[remove_vector_async LOCK] Removing ID: {memory_id}, Numeric ID: {numeric_id}, Index ntotal before: {self.index.ntotal if hasattr(self.index, 'ntotal') else 'N/A'}, Mapping size before: {len(self.id_to_index)}")
+                try:
+                    num_removed = self.index.remove_ids(ids_to_remove)
+                    logger.debug(f"[remove_vector_async LOCK] FAISS remove_ids finished for {memory_id}, removed={num_removed}. Index ntotal after: {self.index.ntotal if hasattr(self.index, 'ntotal') else 'N/A'}")
+                except Exception as faiss_error:
+                    logger.error(f"VECTOR_ERROR: FAISS remove_ids failed for {memory_id}: {faiss_error}")
+                    logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
+                    return False
                 # --- END DEBUG ---
 
                 if num_removed > 0:
                     # Successfully removed from FAISS
+                    logger.debug(f"[remove_vector_async LOCK] Removing {memory_id} from id_to_index mapping")
                     del self.id_to_index[memory_id]
+                    logger.debug(f"[remove_vector_async LOCK] Mapping size after removal: {len(self.id_to_index)}")
                     backup_success = await self._backup_id_mapping()
                     if not backup_success:
-                         logger.warning(f"Failed to backup ID mapping after removing {memory_id}")
+                         logger.warning(f"VECTOR_ERROR: Failed to backup ID mapping after removing {memory_id}")
+                         logger.warning(f"  - Vector index and ID mapping may become inconsistent if system crashes")
                         
                     # Track performance
                     remove_time = time.perf_counter() - start_time
@@ -597,17 +500,192 @@ class MemoryVectorIndex:
                     logger.debug(f"Removed vector for memory ID {memory_id} [took {remove_time*1000:.2f}ms]")
                     return True
                 else:
-                    logger.warning(f"Vector for {memory_id} (numeric ID {numeric_id}) not found in FAISS index for removal, but removing from mapping.")
+                    logger.warning(f"VECTOR_ERROR: Vector for {memory_id} (numeric ID {numeric_id}) not found in FAISS index for removal")
+                    logger.warning(f"  - Removing from mapping to maintain consistency")
                     if memory_id in self.id_to_index:
                          del self.id_to_index[memory_id]
                          await self._backup_id_mapping() # Await the async backup
                     return False # Indicate vector wasn't actually in FAISS index
 
             except Exception as e:
-                logger.error(f"Error removing vector for {memory_id}: {e}", exc_info=True)
+                logger.error(f"VECTOR_ERROR: Exception during remove for {memory_id}: {e}", exc_info=True)
+                logger.error(f"  - Stack trace logged for debugging")
+                logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
+                return False
+
+    async def add_batch_async(self, memory_ids: List[str], embeddings: np.ndarray) -> bool:
+        """Add a batch of memory vectors to the index asynchronously.
+        
+        Args:
+            memory_ids: List of memory IDs as strings
+            embeddings: NumPy ndarray of embeddings with shape (N, embedding_dim)
+            
+        Returns:
+            bool: True if successful
+        """
+        if self.index is None:
+            logger.error("Cannot add batch: Index not initialized.")
+            return False
+            
+        # Validate the embeddings and memory_ids
+        if not isinstance(memory_ids, list) or len(memory_ids) == 0:
+            logger.error(f"Invalid memory_ids: {type(memory_ids)}, must be non-empty list")
+            return False
+            
+        if not isinstance(embeddings, np.ndarray):
+            logger.error(f"Invalid embeddings type: {type(embeddings)}, must be numpy.ndarray")
+            return False
+            
+        # Embeddings shape check
+        if len(embeddings.shape) != 2:
+            logger.error(f"Invalid embeddings shape: {embeddings.shape}, must be 2D array (N, embedding_dim)")
+            return False
+            
+        # Count check
+        if len(memory_ids) != embeddings.shape[0]:
+            logger.error(f"Mismatch between memory_ids ({len(memory_ids)}) and embeddings rows ({embeddings.shape[0]})")
+            return False
+            
+        # Create a trace ID for logging
+        trace_id = uuid.uuid4().hex[:8]
+        logger.info(f"[AddBatch][{trace_id}] Adding {len(memory_ids)} embeddings with shape {embeddings.shape} and dtype {embeddings.dtype}")
+        
+        # Check for NaN/Inf values
+        try:
+            has_nan = np.isnan(embeddings).any()
+            has_inf = np.isinf(embeddings).any()
+            if has_nan or has_inf:
+                nan_count = np.isnan(embeddings).sum() if has_nan else 0
+                inf_count = np.isinf(embeddings).sum() if has_inf else 0
+                logger.warning(f"[AddBatch][{trace_id}] Embeddings contain {nan_count} NaN and {inf_count} Inf values")
+                # Replace NaNs and Infs with zeros
+                embeddings = np.nan_to_num(embeddings, nan=0.0, posinf=0.0, neginf=0.0)
+                logger.info(f"[AddBatch][{trace_id}] Replaced NaN/Inf values with zeros")
+        except Exception as e:
+            logger.error(f"[AddBatch][{trace_id}] Error checking for NaN/Inf: {e}")
+            # Continue anyway, as this is just diagnostic
+        
+        # Validate dimensions
+        if embeddings.shape[1] != self.embedding_dim:
+            logger.warning(f"[AddBatch][{trace_id}] Embedding dimension mismatch: {embeddings.shape[1]} vs expected {self.embedding_dim}")
+            # Try to fix dimensions
+            try:
+                if embeddings.shape[1] < self.embedding_dim:
+                    # Pad with zeros
+                    padding = np.zeros((embeddings.shape[0], self.embedding_dim - embeddings.shape[1]), dtype=embeddings.dtype)
+                    embeddings = np.hstack((embeddings, padding))
+                    logger.info(f"[AddBatch][{trace_id}] Padded embeddings to shape {embeddings.shape}")
+                else:
+                    # Truncate
+                    embeddings = embeddings[:, :self.embedding_dim]
+                    logger.info(f"[AddBatch][{trace_id}] Truncated embeddings to shape {embeddings.shape}")
+            except Exception as e:
+                logger.error(f"[AddBatch][{trace_id}] Error resizing embeddings: {e}")
                 return False
                 
+        # Process asynchronously but ensure we get the lock
+        try:
+            async with self._lock:
+                # Inside lock, convert string IDs to numeric IDs
+                next_id = len(self.id_to_index)
+                numeric_ids = []
+                valid_embeddings = []
+                valid_str_ids = []
+                
+                for i, str_id in enumerate(memory_ids):
+                    # Check if ID already exists
+                    if str_id in self.id_to_index:
+                        logger.warning(f"[AddBatch][{trace_id}] Memory ID '{str_id}' already exists in index, skipping")
+                        continue
+                        
+                    # Add to valid collections
+                    numeric_ids.append(next_id)
+                    valid_embeddings.append(embeddings[i])
+                    valid_str_ids.append(str_id)
+                    
+                    # Update mapping
+                    self.id_to_index[str_id] = next_id
+                    next_id += 1
+                    
+                # If no valid items to add
+                if not valid_embeddings:
+                    logger.warning(f"[AddBatch][{trace_id}] No valid embeddings to add (all already exist)")
+                    return True  # Consider this a success - nothing to do
+                    
+                # Convert to numpy arrays
+                valid_embeddings_array = np.array(valid_embeddings, dtype=np.float32)
+                numeric_ids_array = np.array(numeric_ids, dtype=np.int64)
+                
+                # Detailed debugging info just before FAISS call
+                try:
+                    logger.info(f"[AddBatch][{trace_id}] FAISS input prepared: embeddings={valid_embeddings_array.shape} {valid_embeddings_array.dtype}, ids={numeric_ids_array.shape} {numeric_ids_array.dtype}")
+                    
+                    # Log a sample of the data for debugging
+                    sample_size = min(3, len(valid_str_ids))
+                    for i in range(sample_size):
+                        logger.debug(f"[AddBatch][{trace_id}] Sample {i}: ID={valid_str_ids[i]} (numeric={numeric_ids_array[i]})")
+                        logger.debug(f"[AddBatch][{trace_id}] Sample {i} embedding stats: min={valid_embeddings_array[i].min():.4f} max={valid_embeddings_array[i].max():.4f} mean={valid_embeddings_array[i].mean():.4f} std={valid_embeddings_array[i].std():.4f}")
+                        
+                    # Check memory usage
+                    emb_mb = valid_embeddings_array.nbytes / (1024 * 1024)
+                    ids_mb = numeric_ids_array.nbytes / (1024 * 1024)
+                    logger.info(f"[AddBatch][{trace_id}] Memory usage: embeddings={emb_mb:.2f}MB, ids={ids_mb:.2f}MB")
+                    
+                    # Check if using GPU index
+                    is_gpu_index = "GPU" in type(self.index).__name__
+                    logger.info(f"[AddBatch][{trace_id}] Using GPU index: {is_gpu_index}, Index type: {type(self.index).__name__}")
+                    
+                    # Check if using IDMap
+                    is_id_map = hasattr(self.index, 'id_map')
+                    logger.info(f"[AddBatch][{trace_id}] Using IDMap: {is_id_map}")
+                    
+                except Exception as log_err:
+                    logger.warning(f"[AddBatch][{trace_id}] Error logging debug info: {log_err}")
+                    # Continue anyway, this is just diagnostic
+                
+                # CRITICAL SECTION: Add to FAISS index
+                try:
+                    logger.info(f"[AddBatch][{trace_id}] Calling FAISS add_with_ids with {len(numeric_ids_array)} vectors")
+                    pre_count = self.index.ntotal if hasattr(self.index, 'ntotal') else -1
+                    
+                    # The actual FAISS call that might crash
+                    self.index.add_with_ids(valid_embeddings_array, numeric_ids_array)
+                    
+                    post_count = self.index.ntotal if hasattr(self.index, 'ntotal') else -1
+                    logger.info(f"[AddBatch][{trace_id}] FAISS add_with_ids successful! Pre-count={pre_count}, Post-count={post_count}, Delta={post_count-pre_count}")
+                except Exception as faiss_err:
+                    # Attempt to catch any Python exception from FAISS
+                    logger.error(f"[AddBatch][{trace_id}] FAISS add_with_ids FAILED with exception: {faiss_err}", exc_info=True)
+                    
+                    # Detailed exception analysis
+                    err_type = type(faiss_err).__name__
+                    err_msg = str(faiss_err)
+                    logger.error(f"[AddBatch][{trace_id}] FAISS error type: {err_type}, message: {err_msg}")
+                    
+                    # Rollback ID mapping updates
+                    for str_id in valid_str_ids:
+                        if str_id in self.id_to_index:
+                            del self.id_to_index[str_id]
+                    logger.info(f"[AddBatch][{trace_id}] Rolled back {len(valid_str_ids)} ID mapping entries after FAISS error")
+                    
+                    # Record error stat
+                    self._faiss_error_count = getattr(self, '_faiss_error_count', 0) + 1
+                    return False
+                
+                # If we got here, the FAISS operation succeeded
+                # Backup ID mapping in background task (don't await)
+                asyncio.create_task(self._backup_id_mapping())
+                
+                # Record modified time
+                self._last_modified_time = time.time()
+                
+                return True
+        except Exception as e:
+            logger.error(f"[AddBatch][{trace_id}] Unexpected error in add_batch_async: {e}", exc_info=True)
+            return False
+
     async def update_entry_async(self, memory_id: str, embedding: np.ndarray) -> bool:
+        logger.debug(f"[update_entry_async] Attempting update for ID: {memory_id}")
         """Update the embedding for an existing memory ID asynchronously."""
         # State checks already handled by remove/add methods
         try:
@@ -616,23 +694,31 @@ class MemoryVectorIndex:
             # Validate embedding
             validated_embedding = self._validate_embedding(embedding)
             if validated_embedding is None:
-                logger.warning(f"Invalid embedding for memory {memory_id}, skipping update")
+                logger.warning(f"VECTOR_ERROR: Invalid embedding format for memory {memory_id}, skipping update")
+                logger.warning(f"  - Embedding shape: {embedding.shape if hasattr(embedding, 'shape') else 'unknown'}")
+                logger.warning(f"  - Expected shape: ({self.embedding_dim},)")
                 return False
 
             # Check mapping first (no lock needed for read)
             if memory_id not in self.id_to_index:
-                logger.warning(f"Cannot update vector for {memory_id}: ID not found in mapping.")
+                logger.warning(f"VECTOR_ERROR: Cannot update vector for {memory_id}: ID not found in mapping")
+                logger.warning(f"  - Current mapping contains {len(self.id_to_index)} entries")
+                logger.warning(f"  - This may indicate index drift requiring repair")
                 return False
 
             # Remove the existing vector first
             removed = await self.remove_vector_async(memory_id)
             if not removed:
-                logger.warning(f"Failed to remove existing vector for {memory_id} during update, attempting to add anyway")
+                logger.warning(f"VECTOR_ERROR: Failed to remove existing vector for {memory_id} during update")
+                logger.warning(f"  - This operation will be queued for retry via _pending_vector_updates")
+                logger.warning(f"  - Attempting to add anyway as a fallback")
 
             # Add the updated vector
             added = await self.add_async(memory_id, validated_embedding)
             if not added:
-                logger.error(f"Failed to add updated vector for {memory_id} after removal attempt.")
+                logger.error(f"VECTOR_ERROR: Failed to add updated vector for {memory_id} after removal attempt")
+                logger.error(f"  - Vector index ID mapping consistency may be compromised")
+                logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
                 return False
 
             # Track performance
@@ -644,11 +730,13 @@ class MemoryVectorIndex:
             else:
                 self._update_times = [update_time]
                 
-            logger.debug(f"Successfully updated vector for memory ID {memory_id} [took {update_time*1000:.2f}ms]")
+            logger.debug(f"[update_entry_async] Successfully updated vector for memory ID {memory_id} [took {update_time*1000:.2f}ms]")
             return True
 
         except Exception as e:
-            logger.error(f"Error updating vector for {memory_id}: {e}", exc_info=True)
+            logger.error(f"VECTOR_ERROR: Exception during update for {memory_id}: {e}", exc_info=True)
+            logger.error(f"  - Stack trace logged for debugging")
+            logger.error(f"  - This operation will be queued for retry via _pending_vector_updates")
             return False
 
     def _validate_embedding(self, embedding: Union[np.ndarray, list, tuple]) -> Optional[np.ndarray]:
@@ -672,8 +760,10 @@ class MemoryVectorIndex:
             if len(embedding) != self.embedding_dim:
                 logger.warning(f"Aligning embedding dim: expected {self.embedding_dim}, got {len(embedding)}")
                 if len(embedding) < self.embedding_dim:
+                    # Pad with zeros
                     embedding = np.pad(embedding, (0, self.embedding_dim - len(embedding)))
                 else:
+                    # Truncate
                     embedding = embedding[:self.embedding_dim]
 
             # Ensure float32 for FAISS compatibility
@@ -682,523 +772,223 @@ class MemoryVectorIndex:
             logger.error(f"Error validating embedding: {e}", exc_info=True)
             return None
 
-    def count(self) -> int:
-        """Get the number of embeddings in the index."""
+    async def _rebuild_index_from_persistence(
+        self,
+        persistence: MemoryPersistence,
+        geometry_manager: GeometryManager,
+        trace_id: str
+    ) -> Dict[str, Any]:
+        """Loads all memories/assemblies and adds their embeddings to the current (empty) index."""
+        rebuild_stats = {"success": False, "items_reindexed": 0, "items_failed": 0, "error": None}
+        logger.info(f"[REBUILD][{trace_id}] Starting index rebuild from persistence...")
+
         try:
-            index_count = self.index.ntotal if self.index and hasattr(self.index, 'ntotal') else 0
-            mapping_count = len(self.id_to_index)
+            # Ensure persistence is initialized
+            # Assuming persistence has an `is_initialized` property or similar check
+            if hasattr(persistence, '_initialized') and not persistence._initialized:
+                 logger.info(f"[REBUILD][{trace_id}] Initializing persistence before loading...")
+                 await persistence.initialize()
+            elif not hasattr(persistence, '_initialized'):
+                 logger.warning(f"[REBUILD][{trace_id}] Persistence object does not have an '_initialized' attribute. Assuming it's ready.")
 
-            # Only log warning if counts mismatch AND we are using IndexIDMap (where they should match)
-            if index_count != mapping_count and hasattr(self.index, 'id_map'):
-                logger.warning(f"Vector index potential inconsistency! FAISS count: {index_count}, Mapping count: {mapping_count}")
+            # Load ALL items (could be memory intensive for very large datasets)
+            # Ensure load_all exists and accepts geometry_manager
+            if not hasattr(persistence, 'load_all'):
+                 raise NotImplementedError("Persistence object must have a 'load_all' method for rebuild.")
 
-            return index_count
-        except Exception as e:
-            logger.error(f"Error getting index count: {e}")
-            return 0
+            logger.info(f"[REBUILD][{trace_id}] Calling persistence.load_all...")
+            all_items = await persistence.load_all(geometry_manager) # Pass GM for validation during load
+            logger.info(f"[REBUILD][{trace_id}] Loaded {len(all_items)} items from persistence.")
 
-    async def reset_async(self) -> bool:
-        """Reset the index asynchronously, removing all embeddings.
-        Assumes the caller holds the necessary lock.
-        """
-        logger.info("[ResetAsync] Initiating asynchronous index reset (caller holds lock).")
-        try:
-            # Determine if current index uses IDMap before resetting
-            use_id_map = hasattr(self.index, 'id_map') if self.index else True
-            logger.info(f"[ResetAsync] Will use IDMap: {use_id_map}")
+            # Debug log the item types
+            item_types = {}
+            for item in all_items:
+                item_type = type(item).__name__
+                item_types[item_type] = item_types.get(item_type, 0) + 1
+            logger.info(f"[REBUILD][{trace_id}] Item types loaded: {item_types}")
+
+            items_to_index = []
+            for item in all_items:
+                item_id = None
+                embedding = None
+                # Check types using isinstance
+                if isinstance(item, MemoryEntry):
+                    item_id = item.id
+                    embedding = item.embedding
+                elif isinstance(item, MemoryAssembly):
+                    # Use the 'asm:' prefix convention
+                    item_id = f"asm:{item.assembly_id}"
+                    embedding = item.composite_embedding
+                else:
+                    logger.warning(f"[REBUILD][{trace_id}] Encountered unknown item type during load: {type(item)}")
+                    continue # Skip unknown types
+
+                if item_id and embedding is not None:
+                    # Log embedding details before validation
+                    try:
+                        emb_shape = getattr(embedding, 'shape', 'unknown')
+                        emb_type = type(embedding).__name__
+                        emb_dtype = getattr(embedding, 'dtype', 'unknown')
+                        logger.debug(f"[REBUILD][{trace_id}] Pre-validation: Item {item_id} embedding shape={emb_shape}, type={emb_type}, dtype={emb_dtype}")
+                    except Exception as shape_err:
+                        logger.debug(f"[REBUILD][{trace_id}] Error getting embedding details for {item_id}: {shape_err}")
+
+                    # Validate embedding before adding
+                    # Ensure geometry_manager has _validate_vector
+                    if not hasattr(geometry_manager, '_validate_vector'):
+                         raise NotImplementedError("GeometryManager must have a '_validate_vector' method.")
+
+                    try:
+                        validated_emb = geometry_manager._validate_vector(embedding, f"Rebuild Emb {item_id}")
+                        if validated_emb is not None:
+                            # Log successful validation details
+                            val_shape = getattr(validated_emb, 'shape', 'unknown')
+                            val_dtype = getattr(validated_emb, 'dtype', 'unknown')
+                            logger.debug(f"[REBUILD][{trace_id}] Post-validation: Item {item_id} validated embedding shape={val_shape}, dtype={val_dtype}")
+                            items_to_index.append({"id": item_id, "embedding": validated_emb})
+                        else:
+                            logger.warning(f"[REBUILD][{trace_id}] Invalid embedding for {item_id}, skipping.")
+                            rebuild_stats["items_failed"] += 1
+                    except Exception as val_err:
+                        logger.error(f"[REBUILD][{trace_id}] Error during embedding validation for {item_id}: {val_err}", exc_info=True)
+                        rebuild_stats["items_failed"] += 1
+                elif item_id:
+                    logger.warning(f"[REBUILD][{trace_id}] Item {item_id} missing embedding, skipping.")
+                    rebuild_stats["items_failed"] += 1
+                # No else needed, already handled unknown type
+
+            # Log validation summary
+            logger.info(f"[REBUILD][{trace_id}] After validation: {len(items_to_index)} valid items, {rebuild_stats['items_failed']} failed items")
+
+            # Check if we have any valid items to index
+            if not items_to_index:
+                logger.warning(f"[REBUILD][{trace_id}] No valid items to index after validation!")
+                rebuild_stats["success"] = True  # Still mark as success since there's nothing to do
+                return rebuild_stats
+
+            # Batch add to index
+            batch_size = 500 # Configurable?
+            logger.info(f"[REBUILD][{trace_id}] Indexing {len(items_to_index)} valid items in batches of {batch_size}...")
             
-            # Re-initialize
-            logger.info("[ResetAsync] Calling _initialize_index...")
-            success = self._initialize_index(use_id_map=use_id_map)
-            logger.info(f"[ResetAsync] _initialize_index result: {success}")
-            if not success:
-                self.state = "INVALID"
-                logger.error("[ResetAsync] Failed during _initialize_index.")
-                return False
+            # Check a sample of the first embedding to log its properties
+            if items_to_index:
+                sample_item = items_to_index[0]
+                sample_emb = sample_item["embedding"]
+                try:
+                    logger.info(f"[REBUILD][{trace_id}] Sample embedding: id={sample_item['id']}, shape={sample_emb.shape}, dtype={sample_emb.dtype}")
+                    
+                    # Check for NaN/Inf values
+                    has_nan = np.isnan(sample_emb).any() if hasattr(sample_emb, 'dtype') else False
+                    has_inf = np.isinf(sample_emb).any() if hasattr(sample_emb, 'dtype') else False
+                    if has_nan or has_inf:
+                        logger.warning(f"[REBUILD][{trace_id}] Sample embedding contains {'NaN' if has_nan else ''} {'Inf' if has_inf else ''}")
+                except Exception as sample_err:
+                    logger.error(f"[REBUILD][{trace_id}] Error examining sample embedding: {sample_err}")
+
+            # Process in batches
+            for i in range(0, len(items_to_index), batch_size):
+                batch = items_to_index[i:i+batch_size]
+                batch_start = i
+                batch_end = min(i+batch_size, len(items_to_index))
+                logger.info(f"[REBUILD][{trace_id}] Processing batch {i//batch_size + 1}: items {batch_start}-{batch_end-1}")
                 
-            logger.info("[ResetAsync] Clearing id_to_index mapping...")
-            self.id_to_index = {}
-            logger.info("[ResetAsync] Mapping cleared.")
-            
-            # Save empty ID mapping
-            logger.info("[ResetAsync] Saving empty mapping file...")
+                ids = [item['id'] for item in batch]
+                # Extract embeddings correctly
+                embeddings_list = [item['embedding'] for item in batch]
+
+                if not ids:
+                    logger.warning(f"[REBUILD][{trace_id}] Empty batch at index {i}, skipping.")
+                    continue
+
+                # Convert list of numpy arrays to a single 2D numpy array
+                try:
+                    # Log details about the embeddings list
+                    logger.info(f"[REBUILD][{trace_id}] Embeddings list contains {len(embeddings_list)} items")
+                    if embeddings_list:
+                        first_emb = embeddings_list[0]
+                        logger.info(f"[REBUILD][{trace_id}] First embedding in list: shape={getattr(first_emb, 'shape', 'unknown')}, dtype={getattr(first_emb, 'dtype', 'unknown')}")
+
+                    # Try to convert to numpy array    
+                    embeddings_array = np.array(embeddings_list, dtype=np.float32)
+                    logger.info(f"[REBUILD][{trace_id}] Created embeddings array with shape={embeddings_array.shape}, dtype={embeddings_array.dtype}")
+                    
+                    # Ensure it's 2D
+                    if len(embeddings_array.shape) == 1:
+                         if embeddings_array.shape[0] == self.embedding_dim and len(ids) == 1:
+                              embeddings_array = embeddings_array.reshape(1, -1)
+                              logger.info(f"[REBUILD][{trace_id}] Reshaped 1D array to {embeddings_array.shape}")
+                         else:
+                              error_msg = f"Unexpected shape after converting batch embeddings: {embeddings_array.shape}"
+                              logger.error(f"[REBUILD][{trace_id}] {error_msg}")
+                              raise ValueError(error_msg)
+                    elif len(embeddings_array.shape) != 2:
+                         error_msg = f"Unexpected dimensions after converting batch embeddings: {embeddings_array.shape}"
+                         logger.error(f"[REBUILD][{trace_id}] {error_msg}")
+                         raise ValueError(error_msg)
+
+                    # Debug: Check memory usage
+                    try:
+                        mem_mb = embeddings_array.nbytes / (1024 * 1024)
+                        logger.info(f"[REBUILD][{trace_id}] Embeddings array memory usage: {mem_mb:.2f} MB")
+                    except Exception as mem_err:
+                        logger.warning(f"[REBUILD][{trace_id}] Could not calculate memory usage: {mem_err}")
+
+                except Exception as arr_ex:
+                    logger.error(f"[REBUILD][{trace_id}] Error converting embeddings batch to NumPy array: {arr_ex}", exc_info=True)
+                    rebuild_stats["items_failed"] += len(batch)
+                    continue # Skip this batch
+
+                # --- This needs to use the lock internally --- (add_batch_async handles the lock)
+                logger.info(f"[REBUILD][{trace_id}] Calling add_batch_async for batch of {len(ids)} items...")
+                batch_success = await self.add_batch_async(ids, embeddings_array)
+                if batch_success:
+                    logger.info(f"[REBUILD][{trace_id}] Successfully added batch {i//batch_size + 1}")
+                    rebuild_stats["items_reindexed"] += len(batch)
+                else:
+                    rebuild_stats["items_failed"] += len(batch)
+                    logger.error(f"[REBUILD][{trace_id}] Failed to add batch starting at index {i} (add_batch_async returned False).")
+                    # Decide if we should abort or continue on batch failure
+                    # For now, continue to try subsequent batches
+
+            rebuild_stats["success"] = rebuild_stats["items_failed"] == 0
+            logger.info(f"[REBUILD][{trace_id}] Rebuild finished. Indexed: {rebuild_stats['items_reindexed']}, Failed: {rebuild_stats['items_failed']}")
+            return rebuild_stats
+
+        except NotImplementedError as nie:
+             logger.error(f"[REBUILD][{trace_id}] Missing required method: {nie}")
+             rebuild_stats["error"] = str(nie)
+             return rebuild_stats
+        except Exception as e:
+            logger.error(f"[REBUILD][{trace_id}] Error during rebuild: {e}", exc_info=True)
+            rebuild_stats["error"] = str(e)
+            return rebuild_stats
+
+    async def _write_repair_log(self, repair_stats: Dict[str, Any]):
+        """Write repair statistics to a JSON log file."""
+        log_dir = os.path.join(self.storage_path, "logs") # Use logs subdirectory
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            log_file = os.path.join(log_dir, f"repair_log_{timestamp}_{uuid.uuid4().hex[:8]}.json")
+
+            log_data = {
+                "repair_timestamp": datetime.now(timezone.utc).isoformat(),
+                **repair_stats
+            }
+
+            # Use aiofiles if available, otherwise sync write
             if AIOFILES_AVAILABLE:
-                mapping_path = os.path.join(self.storage_path, 'faiss_index.bin.mapping.json')
-                logger.debug(f"[ResetAsync] Using aiofiles to write empty mapping to {mapping_path}")
-                async with aiofiles.open(mapping_path, 'w') as f:
-                    await f.write('{}')
-                logger.info("[ResetAsync] Saved empty mapping via aiofiles.")
+                async with aiofiles.open(log_file, 'w') as f:
+                    await f.write(json.dumps(log_data, indent=2, default=str)) # Use default=str for non-serializable
             else:
-                logger.debug("[ResetAsync] Using executor to write empty mapping (aiofiles not available).")
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, self._backup_id_mapping_sync)
-                logger.info("[ResetAsync] Saved empty mapping via executor.")
-                
-            self.state = "READY"
-            logger.info("[ResetAsync] Reset completed successfully.")
-            return True
+                with open(log_file, 'w') as f:
+                    json.dump(log_data, f, indent=2, default=str)
+
+            logger.info(f"Wrote repair log to: {log_file}")
         except Exception as e:
-            logger.error(f"[ResetAsync] Error resetting index: {e}", exc_info=True)
-            self.state = "ERROR"
-            return False
-
-    def save(self, filepath: Optional[str] = None) -> bool:
-        """Save the index to disk. (Synchronous)"""
-        if self.index is None:
-            logger.error("Cannot save: Index not initialized.")
-            return False
-        try:
-            os.makedirs(self.storage_path, exist_ok=True)
-            if filepath is None:
-                filepath = os.path.join(self.storage_path, 'faiss_index.bin')
-
-            index_to_save = self.index
-            if self.is_using_gpu:
-                try:
-                    index_to_save = faiss.index_gpu_to_cpu(self.index)
-                except Exception as e:
-                    logger.warning(f"Could not extract CPU index from GPU: {e}")
-
-            faiss.write_index(index_to_save, filepath)
-            save_map_ok = self._backup_id_mapping_sync()
-
-            if not save_map_ok:
-                 logger.warning(f"Index saved to {filepath}, but failed to save mapping file.")
-
-            logger.info(f"Saved index to {filepath} with {self.count()} vectors")
-            return True
-        except Exception as e:
-            logger.error(f"Error saving index: {e}", exc_info=True)
-            return False
-
-    def load(self, filepath: Optional[str] = None) -> bool:
-        """Load the index from disk. (Synchronous)"""
-        try:
-            if filepath is None:
-                filepath = os.path.join(self.storage_path, 'faiss_index.bin')
-            mapping_path = filepath + '.mapping.json'
-
-            if not os.path.exists(filepath):
-                logger.warning(f"Index file not found: {filepath}. Initializing empty index.")
-                # Initialize empty index, respecting IDMap setting
-                return self._initialize_index(use_id_map=self.config.get('migrate_to_idmap', True))
-
-            logger.info(f"Loading FAISS index from {filepath}")
-            loaded_cpu_index = faiss.read_index(filepath)
-            is_index_id_map = hasattr(loaded_cpu_index, 'id_map')
-            logger.info(f"Loaded index type: {type(loaded_cpu_index).__name__}, Is IDMap: {is_index_id_map}, NTotal: {loaded_cpu_index.ntotal}")
-
-            # Decide whether to move to GPU
-            if self.use_gpu and hasattr(faiss, 'StandardGpuResources'):
-                if not is_index_id_map:
-                    try:
-                        res = faiss.StandardGpuResources()
-                        self.index = faiss.index_cpu_to_gpu(res, 0, loaded_cpu_index)
-                        self.is_using_gpu = True
-                        logger.info(f"Successfully moved loaded index to GPU, ntotal={self.index.ntotal}")
-                    except Exception as e:
-                        logger.error(f"Failed to move loaded index to GPU: {e}. Using CPU.")
-                        self.index = loaded_cpu_index
-                        self.is_using_gpu = False
-                else:
-                    logger.info("Keeping loaded IndexIDMap on CPU.")
-                    self.index = loaded_cpu_index
-                    self.is_using_gpu = False
-            else:
-                self.index = loaded_cpu_index
-                self.is_using_gpu = False
-                logger.info(f"Using loaded CPU index, ntotal={self.index.ntotal}")
-
-            # Load mapping
-            self.id_to_index = {}
-            if os.path.exists(mapping_path):
-                try:
-                    with open(mapping_path, 'r') as f:
-                        mapping_data = json.load(f)
-                    if isinstance(mapping_data, dict):
-                        # Convert keys back to str, values to int
-                        self.id_to_index = {str(k): int(v) for k, v in mapping_data.items() if isinstance(v, (int, str)) and str(v).isdigit()}
-                        logger.info(f"Loaded {len(self.id_to_index)} ID mappings from {mapping_path}")
-                    else:
-                         logger.warning(f"Invalid mapping file format: {mapping_path}")
-                except Exception as e:
-                    logger.error(f"Error loading mapping file {mapping_path}: {e}")
-            else:
-                 logger.warning(f"Mapping file not found: {mapping_path}. Mapping is empty.")
-
-            # --- CRITICAL: Rebuild mapping if IndexIDMap and mapping is empty/mismatched ---
-            if is_index_id_map and self.index.ntotal > 0 and (len(self.id_to_index) == 0 or self.index.ntotal != len(self.id_to_index)):
-                logger.warning(f"Rebuilding id_to_index mapping from IndexIDMap content (FAISS: {self.index.ntotal}, Mapping: {len(self.id_to_index)}).")
-                # This requires iterating through the index IDs, which can be slow for large indices
-                # FAISS Python API doesn't provide a direct way to get all IDs from IndexIDMap efficiently without reconstruction
-                # Option 1: If we have the original string IDs somewhere (e.g., persistence index) - Preferred
-                # Option 2: Reconstruct vectors and potentially match? Very slow.
-                # Option 3: Store mapping within FAISS (not standard)?
-                # For now, we rely on the mapping file as the primary source for string IDs.
-                # If mapping file is bad, `recreate_mapping` is needed.
-                logger.warning("Automatic mapping rebuild from IndexIDMap content is not implemented. Run repair if needed.")
+            logger.error(f"Failed to write repair log: {e}", exc_info=True)
 
 
-            # Final consistency check
-            if self.index.ntotal != len(self.id_to_index):
-                 logger.warning(f"Inconsistency after load: FAISS has {self.index.ntotal}, Mapping has {len(self.id_to_index)}. Consider repair.")
-
-            logger.info("Index load completed.")
-            return True
-        except Exception as e:
-            logger.error(f"Error loading index: {e}", exc_info=True)
-            # Re-init on critical failure
-            self._initialize_index(use_id_map=self.config.get('migrate_to_idmap', True)) # Re-init empty on error
-            self.id_to_index = {}
-            return False
-
-    async def save_async(self, filepath: Optional[str] = None) -> bool:
-        """Save the index to disk asynchronously with atomic operations."""
-        if self.index is None:
-            logger.error("Cannot save: Index not initialized.")
-            return False
-            
-        try:
-            os.makedirs(self.storage_path, exist_ok=True)
-            if filepath is None:
-                filepath = os.path.join(self.storage_path, 'faiss_index.bin')
-                
-            # Use a temporary filepath for atomic operation
-            temp_filepath = f"{filepath}.tmp.{int(time.time())}"
-            mapping_path = f"{filepath}.mapping.json"
-            temp_mapping_path = f"{mapping_path}.tmp.{int(time.time())}"
-            
-            # Prepare index for saving (move to CPU if on GPU)
-            index_to_save = self.index
-            if self.is_using_gpu:
-                try:
-                    loop = asyncio.get_running_loop()
-                    index_to_save = await loop.run_in_executor(None, faiss.index_gpu_to_cpu, self.index)
-                except Exception as e:
-                    logger.warning(f"Could not extract CPU index from GPU: {e}")
-            
-            # Save index to temp file using executor for I/O
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, lambda: faiss.write_index(index_to_save, temp_filepath))
-            
-            # Save ID mapping to temp file
-            serializable_mapping = {str(k): int(v) if isinstance(v, np.integer) else v
-                                   for k, v in self.id_to_index.items()}
-                                   
-            if AIOFILES_AVAILABLE:
-                async with aiofiles.open(temp_mapping_path, 'w') as f:
-                    await f.write(json.dumps(serializable_mapping, indent=2))
-            else:
-                await loop.run_in_executor(None, 
-                                          self._backup_id_mapping_sync_helper, 
-                                          temp_mapping_path, 
-                                          serializable_mapping)
-            
-            # Atomic rename of both files
-            await loop.run_in_executor(None, shutil.move, temp_filepath, filepath)
-            await loop.run_in_executor(None, shutil.move, temp_mapping_path, mapping_path)
-            
-            logger.info(f"Saved index to {filepath} with {self.count()} vectors")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error saving index: {e}", exc_info=True)
-            # Clean up temp files if they exist
-            for temp_file in [temp_filepath, temp_mapping_path]:
-                if 'temp_file' in locals() and os.path.exists(temp_file):
-                    try:
-                        os.remove(temp_file)
-                    except Exception as e2:
-                        logger.warning(f"Error cleaning up temp file {temp_file}: {e2}")
-            return False
-            
-    async def load_async(self, filepath: Optional[str] = None) -> bool:
-        """Load the index from disk asynchronously."""
-        try:
-            if filepath is None:
-                filepath = os.path.join(self.storage_path, 'faiss_index.bin')
-            mapping_path = filepath + '.mapping.json'
-            
-            if not os.path.exists(filepath):
-                logger.warning(f"Index file not found: {filepath}. Initializing empty index.")
-                success = self._initialize_index(use_id_map=self.config.get('migrate_to_idmap', True))
-                if success:
-                    self.id_to_index = {}
-                    check_result = await self._post_initialize_check()
-                    if check_result:
-                        self.state = "READY"
-                        return True
-                self.state = "INVALID"
-                return False
-                
-            logger.info(f"Loading FAISS index from {filepath}")
-            loop = asyncio.get_running_loop()
-            
-            # Load index using executor to prevent blocking
-            loaded_cpu_index = await loop.run_in_executor(None, faiss.read_index, filepath)
-            is_index_id_map = hasattr(loaded_cpu_index, 'id_map')
-            logger.info(f"Loaded index type: {type(loaded_cpu_index).__name__}, Is IDMap: {is_index_id_map}, NTotal: {loaded_cpu_index.ntotal}")
-            
-            # Decide whether to move to GPU
-            if self.use_gpu and hasattr(faiss, 'StandardGpuResources'):
-                if not is_index_id_map:
-                    try:
-                        res = faiss.StandardGpuResources()
-                        self.index = await loop.run_in_executor(None, 
-                                                              lambda: faiss.index_cpu_to_gpu(res, 0, loaded_cpu_index))
-                        self.is_using_gpu = True
-                        logger.info(f"Successfully moved loaded index to GPU, ntotal={self.index.ntotal}")
-                    except Exception as e:
-                        logger.error(f"Failed to move loaded index to GPU: {e}. Using CPU.")
-                        self.index = loaded_cpu_index
-                        self.is_using_gpu = False
-                else:
-                    logger.info("Keeping loaded IndexIDMap on CPU.")
-                    self.index = loaded_cpu_index
-                    self.is_using_gpu = False
-            else:
-                self.index = loaded_cpu_index
-                self.is_using_gpu = False
-                logger.info(f"Using loaded CPU index, ntotal={self.index.ntotal}")
-                
-            # Load mapping
-            self.id_to_index = {}
-            if os.path.exists(mapping_path):
-                try:
-                    if AIOFILES_AVAILABLE:
-                        async with aiofiles.open(mapping_path, 'r') as f:
-                            mapping_data = json.loads(await f.read())
-                    else:
-                        mapping_data = await loop.run_in_executor(None, lambda: json.load(open(mapping_path, 'r')))
-                        
-                    if isinstance(mapping_data, dict):
-                        # Convert keys back to str, values to int
-                        self.id_to_index = {str(k): int(v) for k, v in mapping_data.items() 
-                                           if isinstance(v, (int, str)) and str(v).isdigit()}
-                        logger.info(f"Loaded {len(self.id_to_index)} ID mappings from {mapping_path}")
-                    else:
-                        logger.warning(f"Invalid mapping file format: {mapping_path}")
-                except Exception as e:
-                    logger.error(f"Error loading mapping file {mapping_path}: {e}")
-            else:
-                logger.warning(f"Mapping file not found: {mapping_path}. Mapping is empty.")
-                
-            # Check integrity after load
-            if is_index_id_map and self.index.ntotal > 0 and (len(self.id_to_index) == 0 or self.index.ntotal != len(self.id_to_index)):
-                logger.warning(f"Inconsistency detected after load: FAISS has {self.index.ntotal}, Mapping has {len(self.id_to_index)}.")
-                self.state = "READY"  # Still mark as READY, inconsistencies handled by verification checks
-                
-            # Verify index is operational
-            check_result = await self._post_initialize_check()
-            if not check_result:
-                self.state = "INVALID"
-                return False
-                
-            self.state = "READY"
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error loading index: {e}", exc_info=True)
-            # Re-init on critical failure
-            self._initialize_index(use_id_map=self.config.get('migrate_to_idmap', True))
-            self.id_to_index = {}
-            self.state = "ERROR"
-            return False
-
-    def verify_index_integrity(self) -> Tuple[bool, Dict[str, Any]]:
-        """Verify the integrity of the index and the ID mapping. (Synchronous)"""
-        # (Implementation remains the same)
-        try:
-            diagnostics = { "faiss_count": 0, "id_mapping_count": 0, "is_index_id_map": False,
-                            "index_implementation": "Unknown", "is_consistent": False,
-                            "backup_mapping_exists": False, "backup_mapping_count": 0 }
-            if self.index is None: return False, {**diagnostics, "error": "Index is None"}
-
-            index_type = type(self.index).__name__
-            diagnostics["index_implementation"] = index_type
-            is_index_id_map = hasattr(self.index, 'id_map')
-            diagnostics["is_index_id_map"] = is_index_id_map
-            faiss_count = self.count() # Uses internal count method
-            diagnostics["faiss_count"] = faiss_count
-            id_mapping_count = len(self.id_to_index)
-            diagnostics["id_mapping_count"] = id_mapping_count
-
-            is_consistent = (faiss_count == id_mapping_count)
-
-            # Check backup only if inconsistent
-            if not is_consistent:
-                mapping_path = os.path.join(self.storage_path, 'faiss_index.bin.mapping.json')
-                if os.path.exists(mapping_path):
-                    diagnostics["backup_mapping_exists"] = True
-                    try:
-                        with open(mapping_path, 'r') as f: mapping_data = json.load(f)
-                        if isinstance(mapping_data, dict): diagnostics["backup_mapping_count"] = len(mapping_data)
-                    except Exception as e: logger.error(f"Error checking backup mapping: {e}")
-
-            diagnostics["is_consistent"] = is_consistent
-            return is_consistent, diagnostics
-        except Exception as e:
-            logger.error(f"Error verifying index integrity: {e}")
-            return False, {"error": str(e)}
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Get comprehensive statistics about the vector index for diagnostics.
-        
-        Enhanced for Phase 5.8 to provide detailed drift metrics between FAISS index and ID mappings,
-        as well as more granular performance statistics for observability and monitoring.
-        """
-        integrity_check, details = self.verify_index_integrity()
-        
-        # Calculate performance metrics with min/max for better profiling
-        perf_metrics = {}
-        for metric_name in ['_search_times', '_add_times', '_update_times']:
-            if hasattr(self, metric_name) and getattr(self, metric_name):
-                times = getattr(self, metric_name)
-                avg_ms = sum(times) * 1000 / len(times)
-                min_ms = min(times) * 1000 if times else 0
-                max_ms = max(times) * 1000 if times else 0
-                metric_key = metric_name.replace('_times', '')
-                perf_metrics[f"avg{metric_key}_ms"] = round(avg_ms, 2)
-                perf_metrics[f"min{metric_key}_ms"] = round(min_ms, 2)
-                perf_metrics[f"max{metric_key}_ms"] = round(max_ms, 2)
-        
-        # Get FAISS count and calculate drift
-        faiss_count = 0
-        if self.index is not None:
-            try:
-                faiss_count = self.index.ntotal
-            except Exception as e:
-                logger.error(f"Error getting FAISS index count: {str(e)}")
-        
-        mapping_count = len(self.id_to_index)
-        drift_count = abs(faiss_count - mapping_count)
-        
-        # Set drift warning thresholds
-        drift_warning = drift_count > 10
-        drift_critical = drift_count > 50
-        
-        # Log appropriate warnings based on drift severity
-        if drift_critical:
-            logger.error(
-                f"CRITICAL INDEX DRIFT DETECTED: FAISS vectors ({faiss_count}) differs from ID mappings "
-                f"({mapping_count}) by {drift_count} entries. Auto-repair is recommended."
-            )
-        elif drift_warning:
-            logger.warning(
-                f"INDEX DRIFT DETECTED: FAISS vectors ({faiss_count}) differs from ID mappings "
-                f"({mapping_count}) by {drift_count} entries."
-            )
-        
-        stats = {
-            # Basic counts
-            "count": self.count(),
-            "id_mappings": mapping_count,
-            "faiss_count": faiss_count,
-            
-            # Drift metrics
-            "drift_count": drift_count,
-            "drift_warning": drift_warning,
-            "drift_critical": drift_critical,
-            
-            # Index configuration
-            "embedding_dim": self.embedding_dim,
-            "index_type": self.index_type,
-            "is_gpu": self.is_using_gpu,
-            "is_id_map": hasattr(self.index, 'id_map') if self.index else False,
-            
-            # State information
-            "state": self.state,
-            "is_consistent": integrity_check,
-            "integrity": details,
-            
-            # Performance metrics
-            **perf_metrics,
-            "last_save_time": getattr(self, '_last_save_time', None),
-            "last_modified_time": getattr(self, '_last_modified_time', None),
-        }
-        
-        # If verify_index_integrity returned an error code, store it in the stats dict
-        if isinstance(integrity_check, int):
-            stats["integrity_error_code"] = integrity_check
-            logger.error(f"Index integrity check failed with code: {integrity_check}")
-
-        return stats
-
-    def repair_index(self) -> bool:
-        """Repair the vector index by rebuilding it from backup data.
-        
-        Returns:
-            bool: True if repair was performed, False if no repair was needed
-        """
-        logger.info("Starting FAISS index repair procedure")
-        
-        # Check current state to determine if repair is needed
-        stats = self.get_stats()
-        if stats["drift_count"] == 0:
-            logger.info("No drift detected. Index is already in sync with mappings.")
-            return False
-        
-        logger.warning(f"Detected drift of {stats['drift_count']} between index and mappings. Initiating repair.")
-        
-        # Since this is a synchronous method but we need to use async locks,
-        # we'll implement a sync-over-async pattern
-        loop = asyncio.get_event_loop()
-        if not loop.is_running():
-            # If loop is not running, we can run_until_complete
-            return loop.run_until_complete(self._repair_index_async())
-        else:
-            # If loop is already running (e.g., in an async context),
-            # we cannot run_until_complete, so we'll just return False
-            logger.error("Cannot repair index synchronously while in an async context. Use async method.")
-            return False
-    
-    async def _repair_index_async(self) -> bool:
-        """Async implementation of repair_index using orphan removal."""
-        logger.debug("[Repair] Starting _repair_index_async (Orphan Removal)")
-        repaired_something = False
-        try:
-            logger.debug("[Repair] Attempting to acquire lock...")
-            async with self._lock:  # Use async with for lock management
-                logger.debug("[Repair] Lock acquired successfully")
-
-                # --- Orphan Removal Logic ---
-                # Instead of checking for IndexIDMap, we'll use a more direct approach
-                # to get the total count and detect inconsistency
-                faiss_count = self.index.ntotal if hasattr(self.index, 'ntotal') else 0
-                mapping_count = len(self.id_to_index)
-
-                logger.debug(f"[Repair] Current State: FAISS={faiss_count}, Mapping={mapping_count}")
-                
-                if faiss_count != mapping_count:
-                    logger.warning(f"[Repair] Index inconsistency detected: FAISS={faiss_count}, Mapping={mapping_count}")
-                    
-                    # Since the test is removing mappings but keeping vectors, we need to rebuild the index
-                    # The simplest approach is to reset and rebuild
-                    logger.info("[Repair] Resetting index and rebuilding from mappings...")
-                    
-                    # Reset the index
-                    reset_result = await self.reset_async()
-                    if not reset_result:
-                        logger.error("[Repair] Failed to reset index")
-                        return False
-                    
-                    # We've implemented the repair - the test expects this to return True
-                    # In a real implementation, we might try to preserve and rebuild,
-                    # but for this test, we just need to make the assertion pass
-                    repaired_something = True
-                    
-                    logger.info("[Repair] Index reset successfully")
-                else:
-                    logger.info("[Repair] No index inconsistency detected")
-
-                # --- End Repair Logic ---
-            
-            # Let outer code verify consistency after repair attempt
-            return repaired_something  # Return True if we attempted repair
-
-        except Exception as e:
-            logger.error(f"Error during index repair: {str(e)}", exc_info=True)
-            return False
 
     async def repair_index(self, persistence=None, geometry_manager=None) -> Dict[str, Any]:
         """
@@ -1328,4 +1118,354 @@ class MemoryVectorIndex:
             logger.error(f"_initialize_index: Error initializing FAISS index: {e}", exc_info=True)
             self.index = None # Set index to None on critical failure
             self.state = "ERROR"
+            return False
+
+    def load(self) -> bool:
+        """Load the index from disk.
+        
+        This method loads both the FAISS index file and the ID-to-index mapping
+        file from disk. It's called during initialization if should_load is True.
+        
+        Returns:
+            bool: True if the index was successfully loaded, False otherwise.
+        """
+        try:
+            index_bin_path = os.path.join(self.storage_path, 'faiss_index.bin')
+            id_map_path = os.path.join(self.storage_path, 'id_to_index.json')
+            
+            # Check if index file exists
+            if not os.path.exists(index_bin_path):
+                logger.warning(f"Index file not found at {index_bin_path}")
+                return False
+                
+            # Load the FAISS index
+            logger.info(f"Loading FAISS index from {index_bin_path}")
+            self.index = faiss.read_index(index_bin_path)
+            
+            # Load the ID mapping if it exists
+            if os.path.exists(id_map_path):
+                logger.info(f"Loading ID mapping from {id_map_path}")
+                with open(id_map_path, 'r') as f:
+                    # Convert keys back to strings if needed
+                    self._id_to_index = {str(k): int(v) for k, v in json.load(f).items()}
+                logger.info(f"Loaded {len(self._id_to_index)} ID mappings")
+            else:
+                logger.warning(f"ID mapping file not found at {id_map_path}")
+                self._id_to_index = {}
+            
+            # Set state after successful load
+            self.state = "READY"
+            self.start_time = time.time()
+            logger.info(f"Successfully loaded index with {self.index.ntotal} vectors")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error loading index: {str(e)}", exc_info=True)
+            # Reset to empty state on failure
+            self._initialize_index()
+            return False
+    
+    async def _backup_id_mapping(self) -> bool:
+        """Asynchronously back up the ID-to-index mapping to disk.
+        
+        Returns:
+            bool: True if backup was successful, False otherwise.
+        """
+        try:
+            os.makedirs(self.storage_path, exist_ok=True)
+            mapping_path = os.path.join(self.storage_path, 'faiss_index.bin.mapping.json')
+            
+            # Convert string keys to proper format for JSON serialization
+            serializable_mapping = {str(k): int(v) for k, v in self.id_to_index.items()}
+            mapping_json = json.dumps(serializable_mapping)
+            
+            if AIOFILES_AVAILABLE:
+                # Use aiofiles for async I/O if available
+                async with aiofiles.open(mapping_path, 'w') as f:
+                    await f.write(mapping_json)
+            else:
+                # Fall back to executor-based async I/O
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None,
+                    lambda: self._backup_id_mapping_sync_helper(mapping_path, mapping_json)
+                )
+            
+            logger.debug(f"Successfully backed up ID mapping with {len(self.id_to_index)} entries")
+            return True
+        except Exception as e:
+            logger.error(f"Error backing up ID mapping: {e}")
+            return False
+    
+    def _backup_id_mapping_sync(self) -> bool:
+        """Synchronously back up the ID-to-index mapping to disk.
+        
+        Returns:
+            bool: True if backup was successful, False otherwise.
+        """
+        try:
+            os.makedirs(self.storage_path, exist_ok=True)
+            mapping_path = os.path.join(self.storage_path, 'faiss_index.bin.mapping.json')
+            
+            # Convert string keys to proper format for JSON serialization
+            serializable_mapping = {str(k): int(v) for k, v in self.id_to_index.items()}
+            mapping_json = json.dumps(serializable_mapping)
+            
+            return self._backup_id_mapping_sync_helper(mapping_path, mapping_json)
+        except Exception as e:
+            logger.error(f"Error backing up ID mapping: {e}")
+            return False
+    
+    def _backup_id_mapping_sync_helper(self, mapping_path: str, mapping_json: str) -> bool:
+        """Helper method to write mapping JSON to disk synchronously.
+        
+        Args:
+            mapping_path: Path to write the mapping file to
+            mapping_json: JSON string to write
+            
+        Returns:
+            bool: True if write was successful, False otherwise
+        """
+        try:
+            with open(mapping_path, 'w') as f:
+                f.write(mapping_json)
+            return True
+        except Exception as e:
+            logger.error(f"Error in _backup_id_mapping_sync_helper: {e}")
+            return False
+
+    async def check_index_integrity(self, persistence=None) -> Tuple[bool, Dict[str, Any]]:
+        """Check the integrity of the vector index.
+        
+        This method verifies that the FAISS index and ID-to-index mapping are consistent
+        and optionally checks consistency with the persistence layer.
+        
+        Args:
+            persistence: Optional MemoryPersistence instance to check against
+            
+        Returns:
+            Tuple of (is_consistent, diagnostics)
+                is_consistent: Boolean indicating whether the index is consistent
+                diagnostics: Dictionary with detailed diagnostics
+        """
+        from .utils.vector_index_repair import validate_vector_index_integrity
+        
+        logger.info("Checking vector index integrity...")
+        if self.index is None:
+            return False, {"error": "Index not initialized", "faiss_count": 0, "id_mapping_count": 0, "is_consistent": False}
+        
+        # Call the utility function to perform the actual validation
+        return await validate_vector_index_integrity(self.index, self.id_to_index)
+
+    # Alias for backward compatibility
+    async def verify_index_integrity(self, persistence=None) -> Tuple[bool, Dict[str, Any]]:
+        """Alias for check_index_integrity for backward compatibility."""
+        return await self.check_index_integrity()
+
+    async def _repair_index_async(self, persistence=None, geometry_manager=None, repair_mode="auto") -> Dict[str, Any]:
+        """Repair the vector index asynchronously.
+        
+        This method attempts to repair the FAISS index by checking its integrity
+        and potentially rebuilding it from the persistence layer if necessary.
+        
+        Args:
+            persistence: Optional MemoryPersistence instance to rebuild from
+            geometry_manager: Optional GeometryManager for embedding validation
+            repair_mode: Mode of repair ("auto", "full", "mapping_only", etc.)
+            
+        Returns:
+            Dict with repair statistics and success status
+        """
+        logger.info(f"Attempting asynchronous repair of vector index (mode: {repair_mode})...")
+        repair_stats = {
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "success": False,
+            "items_reindexed": 0,
+            "items_failed": 0,
+            "error": None,
+            "mode_used": repair_mode,
+            "consistency_after": False
+        }
+        
+        try:
+            # Check the index integrity first
+            is_consistent, diagnostics = await self.check_index_integrity()
+            if is_consistent:
+                logger.info("Index is already consistent, no repair needed")
+                repair_stats["success"] = True
+                repair_stats["consistency_after"] = True
+                return repair_stats
+                
+            # If we have no persistence, we can't rebuild
+            if persistence is None:
+                error_msg = "Cannot repair index: No persistence instance provided"
+                logger.error(error_msg)
+                repair_stats["error"] = error_msg
+                return repair_stats
+                
+            # Reset the index and rebuild from persistence
+            logger.warning("Index requires repair. Resetting and rebuilding...")
+            await self.reset_async()
+            
+            # Use _rebuild_index_from_persistence to rebuild
+            if geometry_manager is None and hasattr(self, 'geometry_manager'):
+                geometry_manager = self.geometry_manager
+                
+            # Generate trace ID for this repair operation
+            trace_id = f"repair_{uuid.uuid4().hex[:8]}"
+            
+            # Rebuild the index from persistence
+            rebuild_stats = await self._rebuild_index_from_persistence(
+                persistence, 
+                geometry_manager,
+                trace_id
+            )
+            
+            # Update repair stats with rebuild results
+            repair_stats.update(rebuild_stats)
+            repair_stats["finished_at"] = datetime.now(timezone.utc).isoformat()
+            
+            # Check consistency after repair
+            is_consistent_after, _ = await self.check_index_integrity()
+            repair_stats["consistency_after"] = is_consistent_after
+            
+            # Log the repair results
+            logger.info(f"Index repair completed. Success: {repair_stats['success']}, "
+                       f"Consistent: {repair_stats['consistency_after']}, "
+                       f"Reindexed: {repair_stats['items_reindexed']}, "
+                       f"Failed: {repair_stats['items_failed']}")
+            
+            # Store repair log for backup
+            self._last_repair_log = repair_stats.copy()
+            await self._write_repair_log(repair_stats)
+            
+            return repair_stats
+            
+        except Exception as e:
+            error_msg = f"Unexpected exception during index repair: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            repair_stats["error"] = error_msg
+            repair_stats["finished_at"] = datetime.now(timezone.utc).isoformat()
+            repair_stats["success"] = False
+            repair_stats["consistency_after"] = False
+            
+            # Store repair log for backup
+            self._last_repair_log = repair_stats.copy()
+            await self._write_repair_log(repair_stats)
+            
+            return repair_stats
+
+    async def repair_index_async(self, persistence=None, geometry_manager=None, repair_mode="auto") -> Dict[str, Any]:
+        """Public async method to repair the vector index.
+        
+        This is the method called directly by SynthiansMemoryCore during initialization.
+        
+        Args:
+            persistence: Optional MemoryPersistence instance to rebuild from
+            geometry_manager: Optional GeometryManager for embedding validation
+            repair_mode: Mode of repair ("auto", "full", "mapping_only", etc.)
+            
+        Returns:
+            Dict with repair statistics and success status
+        """
+        return await self._repair_index_async(persistence, geometry_manager, repair_mode)
+
+    async def reset_async(self) -> bool:
+        """Reset the vector index asynchronously.
+        
+        This method resets the index to an empty state, clearing all vectors and mappings.
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        logger.info("Resetting vector index asynchronously...")
+        try:
+            async with self._lock:  # Acquire lock for thread safety
+                # Re-initialize the index with the same settings
+                success = self._initialize_index(use_id_map=self.config.get('migrate_to_idmap', True))
+                if success:
+                    # Clear ID-to-index mapping
+                    self.id_to_index = {}
+                    logger.info("Vector index reset successfully")
+                    self.state = "READY"
+                    return True
+                else:
+                    logger.error("Failed to reset vector index")
+                    self.state = "ERROR"
+                    return False
+        except Exception as e:
+            logger.error(f"Error during async vector index reset: {e}", exc_info=True)
+            self.state = "ERROR"
+            return False
+
+    def save(self) -> bool:
+        """Save the index to disk synchronously.
+        
+        This method saves both the FAISS index file and the ID-to-index mapping
+        file to disk.
+        
+        Returns:
+            bool: True if the index was successfully saved, False otherwise.
+        """
+        try:
+            if self.index is None:
+                logger.error("Cannot save index: Index not initialized")
+                return False
+                
+            # Save the FAISS index
+            index_bin_path = os.path.join(self.storage_path, 'faiss_index.bin')
+            os.makedirs(self.storage_path, exist_ok=True)
+            logger.info(f"Saving FAISS index to {index_bin_path}")
+            faiss.write_index(self.index, index_bin_path)
+            
+            # Save the ID mapping
+            id_map_path = os.path.join(self.storage_path, 'id_to_index.json')
+            with open(id_map_path, 'w') as f:
+                json.dump(self.id_to_index, f)
+                
+            logger.info(f"Successfully saved index with {self.index.ntotal} vectors")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error saving index: {str(e)}", exc_info=True)
+            return False
+
+    async def save_async(self) -> bool:
+        """Save the index to disk asynchronously.
+        
+        This method saves both the FAISS index file and the ID-to-index mapping
+        file to disk in a non-blocking way using asyncio.
+        
+        Returns:
+            bool: True if the index was successfully saved, False otherwise.
+        """
+        try:
+            if self.index is None:
+                logger.error("Cannot save index asynchronously: Index not initialized")
+                return False
+                
+            # Use a lock to prevent concurrent modifications during save
+            async with self._lock:
+                # Save the FAISS index
+                index_bin_path = os.path.join(self.storage_path, 'faiss_index.bin')
+                os.makedirs(self.storage_path, exist_ok=True)
+                logger.info(f"Saving FAISS index asynchronously to {index_bin_path}")
+                
+                # Use asyncio.run_in_executor for non-blocking I/O
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None,
+                    lambda: faiss.write_index(self.index, index_bin_path)
+                )
+                
+                # Save the ID mapping asynchronously
+                success = await self._backup_id_mapping()
+                if not success:
+                    logger.warning("Failed to save ID mapping during save_async")
+                
+                logger.info(f"Successfully saved index asynchronously with {self.index.ntotal} vectors")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error saving index asynchronously: {str(e)}", exc_info=True)
             return False

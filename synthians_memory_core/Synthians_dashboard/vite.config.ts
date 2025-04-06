@@ -28,4 +28,39 @@ export default defineConfig({
     outDir: path.resolve(__dirname, "dist", "public"),
     emptyOutDir: true,
   },
+  server: {
+    proxy: {
+      // Proxy /api/memory-core requests to Memory Core service
+      // Assuming 'synthians_core' is the service name in docker-compose.yml
+      '/api/memory-core': {
+        target: 'http://synthians_core:5010',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api\/memory-core/, ''),
+      },
+      // Proxy /api/neural-memory requests to Neural Memory service
+      // Assuming 'trainer-server' is the service name in docker-compose.yml
+      '/api/neural-memory': {
+        target: 'http://trainer-server:8001',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api\/neural-memory/, ''),
+      },
+      // Proxy /api/cce requests to Context Cascade Engine service
+      // Assuming 'context-cascade-orchestrator' is the service name in docker-compose.yml
+      '/api/cce': {
+        target: 'http://context-cascade-orchestrator:8002',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api\/cce/, ''),
+      },
+      // Optional: Proxy for alerts if handled by a separate backend part
+      // '/api/alerts': {
+      //   target: 'http://localhost:YOUR_ALERT_PORT', // Adjust if needed
+      //   changeOrigin: true,
+      //   secure: false,
+      //   rewrite: (path) => path.replace(/^\/api\/alerts/, ''),
+      // },
+    },
+  },
 });

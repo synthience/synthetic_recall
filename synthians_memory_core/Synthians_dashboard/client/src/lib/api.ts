@@ -220,12 +220,20 @@ export const useRuntimeConfig = (serviceName: string | null) => {
   });
 };
 
-export const verifyMemoryCoreIndex = async () => {
-  return api.post('/memory-core/admin/verify_index');
+export const verifyMemoryCoreIndex = async () => { // Renamed back to original name to fix import error
+  // Correct method and path
+  return api.get('/memory-core/check_index_integrity');
 };
 
 export const triggerMemoryCoreRetryLoop = async () => {
-  return api.post('/memory-core/admin/trigger_retry_loop');
+  // Correct method and path (uses the NEWLY implemented endpoint)
+  return api.post('/memory-core/diagnostics/trigger_retry_loop');
+};
+
+// Add missing function from plan
+export const repairMemoryCoreIndex = async (repairType: string = 'auto') => {
+  // Correct method and path
+  return api.post('/memory-core/repair_index', { repair_type: repairType });
 };
 
 export const initializeNeuralMemory = async () => {
