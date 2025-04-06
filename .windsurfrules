@@ -1,167 +1,73 @@
-## 🧠📄 Synthians Cognitive System Cheat Sheet — *Phase 5.8 (Stabilized & Drift-Aware)*
-
-> *"The blueprint remembers. The associator adapts. The cascade organizes. Now the archive stabilizes, traces, and tells its own recovery story."*
 
 ---
 
-### 🏛️ MEMORY CORE (MC) — *The Archive*
+## **Phase 5.9.1: UI Integration - CHEAT SHEET (v1.0)**
 
-#### 🧰 Role
-Persistent, indexed memory layer for contextual recall. Supports **QuickRecal scoring**, emotional filtering, **Memory Assembly activation boosting**, and **embedding drift detection**.
+**🎯 Goal:** Connect the **Synthians Cognitive Dashboard frontend** to the stabilized backend APIs, replacing all static/placeholder data with live data, implementing loading/error states, and respecting the `ENABLE_EXPLAINABILITY` feature flag.
 
-#### 📦 Key Components
-- `SynthiansMemoryCore`, `MemoryPersistence`, `MemoryVectorIndex` (FAISS)
-- `UnifiedQuickRecallCalculator`, `GeometryManager`, `EmotionAnalyzer`
-- `MetadataSynthesizer`, `ThresholdCalibrator`
+**Key Focus Area:** `Synthians_dashboard/client/` directory (React Frontend). Backend services are considered stable for this phase.
 
 ---
 
-#### 🧱 Memory Structures
-##### `MemoryEntry`
-- Core unit: `content`, `embedding`, `metadata`, `quick_recal_score`
-- Embeddings **validated for NaN/Inf**. Normalized.
+### **Core Tasks & Action Plan:**
 
-##### `MemoryAssembly`
-- Group of related `MemoryEntry` IDs.
-- Fields: `composite_embedding`, `hyperbolic_embedding`, `activation_count`, `last_activation`, `vector_index_updated_at`, `tags`, `topics`, `assembly_schema_version`
-- Maintains a **timestamped index sync trace** via `vector_index_updated_at`
-- Lifecycle-enabled (`active`, `merged_from`, `created_at`, `updated_at`)
-
----
-
-#### 🔁 Indexing + Boosting
-- **Composite embeddings** stored in FAISS with ID prefix `"asm:"`
-- Activated via `_activate_assemblies()` if aligned similarity ≥ `activation_threshold`
-- Boost applied per `assembly_boost_mode` + `assembly_boost_factor`, gated by:
-  - Drift check: `now() - vector_index_updated_at < MAX_ALLOWED_DRIFT`
-  - Alignment result must not be `None`
-- Final `relevance_score` = similarity + boost (clamped ≤ 1.0)
+1.  **Use API Hooks:** In page components (`pages/*.tsx`), import and use the appropriate `useQuery` hooks from `lib/api.ts` (e.g., `useMemoryCoreStats`, `useAssemblies`, `useMergeLog`, `useRuntimeConfig`, etc.).
+2.  **Access Nested Data:** Remember that data fetched via the proxy is nested. Access actual payload via `hookResult.data?.data?.fieldName` (e.g., `statsQuery.data?.data?.core_stats?.total_memories`). Verify expected structure against `shared/schema.ts`.
+3.  **Pass Data to UI Components:** Feed the fetched `data.data`, `isLoading`, and `isError` states as props to the relevant `components/dashboard/*.tsx` components (e.g., pass assembly list to `AssemblyTable`, stats to `OverviewCard`).
+4.  **Implement Loading States:** In *every* component that displays fetched data, check the `isLoading` prop/state. Render `<Skeleton />` components matching the approximate final layout while loading.
+5.  **Implement Error States:** In *every* component displaying fetched data, check the `isError` prop/state. If true, display a user-friendly error message (e.g., "Failed to load data", use `error.message`) instead of crashing. Use `<Alert variant="destructive">` where appropriate.
+6.  **Conditional Rendering (Feature Flag):**
+    *   Import `useFeatures` from `contexts/FeaturesContext.tsx`.
+    *   Get `const { explainabilityEnabled } = useFeatures();`.
+    *   Wrap *all* UI elements related to Phase 5.9 features (Merge Log view, Lineage view, Config viewer, Explain buttons/views) with ` {explainabilityEnabled && ...}`.
+    *   Provide fallback UI or informative text (e.g., "Feature disabled") when `explainabilityEnabled` is false.
+7.  **On-Demand Fetching (Explainability):** For explainability hooks (`useExplainActivation`, `useExplainMerge`, maybe `useAssemblyLineage`), ensure `enabled: false` is set in the `useQuery` options in `lib/api.ts` (if not already). Trigger `refetch()` manually in the UI component (e.g., `assembly-inspector.tsx`) when the user clicks a button.
+8.  **Data Formatting:** Use utility functions (`lib/utils.ts -> formatTimeAgo`) or standard JS (`Date.toLocaleString()`, `Number.toLocaleString()`) to format dates, numbers, etc., for display within UI components. Handle `null`/`undefined` values gracefully (e.g., display 'N/A').
 
 ---
 
-#### 💾 Persistence
-- All entries + assemblies saved via `MemoryPersistence` (async JSON)
-- Vector index persisted as:
-  - `.bin` (FAISS structure)
-  - `.mapping.json` (ID↔vector ID map)
-- Assemblies: Saved in `assemblies/` folder per ID
+### **🔑 Key Files & Modules Involved:**
+
+*   **Data Fetching:** `client/src/lib/api.ts` (Verify hooks, maybe add `enabled: false` for explainability)
+*   **Data Types:** `shared/schema.ts` (Reference/update if minor discrepancies found)
+*   **Feature Flag:** `client/src/contexts/FeaturesContext.tsx` (`useFeatures` hook)
+*   **Pages (Hook Usage & Prop Passing):** `client/src/pages/**/*.tsx` (e.g., `overview.tsx`, `memory-core.tsx`, `assemblies/index.tsx`, `assemblies/[id].tsx`, `config.tsx`, `logs.tsx` or wherever merge log is shown)
+*   **Dashboard Components (Data Display):** `client/src/components/dashboard/**/*.tsx` (e.g., `OverviewCard.tsx`, `AssemblyTable.tsx`, `MergeLogView.tsx`, `LineageView.tsx`, `MergeExplanationView.tsx`, `ActivationExplanationView.tsx`)
+*   **UI Primitives:** `client/src/components/ui/` (Used for rendering, especially `Skeleton`, `Alert`)
+*   **Utilities:** `client/src/lib/utils.ts` (Formatting functions)
 
 ---
 
-#### 🔍 Retrieval Pipeline
-1. `retrieve_memories(query_embedding)`
-2. `_activate_assemblies(query_embedding)`
-3. `_get_candidate_memories()` collects direct and assembly-linked memory IDs
-4. Apply relevance boost from assemblies
-5. **Apply filters:** Gating, metadata
-6. **Sort by `relevance_score`**
-7. Return `top_k`
+### **⚙️ Key Concepts & Mechanisms:**
+
+*   **TanStack Query:** Handles fetching, caching, `isLoading`, `isError`, `error`, `data` states. Trigger refetches via `refetch()` or `queryClient.invalidateQueries()`.
+*   **Proxy Data Structure:** API responses are nested: `hookResult.data = { success: boolean, data: ActualPayload | null, error?: string }`. Access the real payload via `hookResult.data.data`.
+*   **Feature Flag:** `useFeatures().explainabilityEnabled` controls visibility of new diagnostic/explainability UI.
+*   **Loading States:** Use `<Skeleton>` for visual feedback during `isLoading`.
+*   **Error States:** Display errors gracefully using `isError` and `error` without crashing.
 
 ---
 
-#### 📊 Diagnostics & Observability
-- `/stats` includes:
-  - FAISS vector count, mapping count, **vector index pending updates**
-  - Assembly activation stats: counts, sizes, boost logs
-- `/assemblies`, `/assemblies/{id}` expose:
-  - `tags`, `topics`, `activation_count`, `drift_seconds`
-- **Recovery Timeline (experimental):**
-  - Exposes lifecycle of memory/assembly updates
-  - API under `/assemblies/{id}/timeline`
-- Logs:
-  - `[VECTOR_TRACE]` includes `faiss_index.ntotal` and mapping delta
-  - Activation boost logs show contribution per memory
+### **❗ Common Pitfalls & Reminders:**
+
+*   **Nesting:** Don't forget the extra `.data` access: `queryResult.data?.data?.fieldName`.
+*   **Loading/Error:** Implement loading/error states for *every* data display component.
+*   **Feature Flag:** Conditionally render *all* Phase 5.9 UI based on `explainabilityEnabled`. Check both rendering and disabling interactive elements (buttons).
+*   **Schema Drift:** If data looks wrong, check the browser network tab vs. `shared/schema.ts`. Update the schema first if the backend is correct.
+*   **Hook Dependencies:** Ensure `useQuery` keys are correct, especially for hooks with parameters (e.g., `useAssembly(id)`).
+*   **NM Timeouts:** Monitor Neural Memory response times via the dashboard. If persistent timeouts occur, investigate NM service or potentially increase specific proxy timeouts (requires backend proxy change).
 
 ---
 
-### 🧠 NEURAL MEMORY (NM) — *The Associator*
+### **✅ Verification Checklist:**
 
-#### 🧰 Role
-Test-time-updatable vector memory (`k → v`) via momentum update. No structural changes in Phase 5.8.
-
-#### 🧪 Components
-- `NeuralMemoryModule` (TF/Keras), `MemoryMLP`
-- Tracks `loss`, `grad_norm`, `performance_history`
-
-#### 🔄 API (Unchanged)
-- `POST /update_memory`
-- `POST /retrieve`
-- `GET /get_projections`, `calculate_gates`, `diagnose_emoloop`
-
----
-
-### ⚙️ Context Cascade Engine (CCE) — *The Orchestrator*
-
-#### 🧰 Role
-Manages cognitive loop, memory selection, variant execution, and LLM advice routing.
-
-#### 🔄 Phase 5.8 Behavior
-- Delegates retrieval to MC (now with assembly boost)
-- Records `activation_hints` and memory context
-- Optionally uses LLM summaries to **boost QR scores** via:
-  - `POST /api/memories/update_quickrecal_score`
-
----
-
-### ✨ PHASE 5.8 HIGHLIGHTS
-
-| Feature | Description |
-|--------|-------------|
-| ✅ **Assembly Boosting** | Related memories boosted via activated assemblies |
-| ✅ **Embedding Drift Awareness** | Uses `vector_index_updated_at` to ensure alignment freshness |
-| ✅ **Repair-Resilient Retrieval** | Index is now **verified post-load**, with diagnostics and auto-repair paths |
-| ✅ **Diagnostics Dashboard** | `/stats`, `/assemblies`, retry queue, and boost logs all surfaced |
-| ✅ **Lifecycle Control** | Pruning, merging via background loop with config flags |
-| ✅ **Fail-Resilient Index Add/Update** | Retry buffer + sync fallback with `/stats` visibility |
-| ✅ **Schema Migration Ready** | `assembly_schema_version` supports upgrade flow via `from_dict()` |
-
----
-
-### ⚙️ Configuration Flags
-
-- `enable_assembly_pruning = True/False`
-- `enable_assembly_merging = True/False`
-- `assembly_activation_threshold = float`
-- `assembly_boost_mode = linear|sigmoid`
-- `assembly_boost_factor = float`
-- `max_allowed_drift_seconds = int`
-
----
-
-### 🧠 Pro Tips
-
-- **Drift > threshold?** Skip boost. Log desync.
-- **Assembly not indexed?** Check `vector_index_updated_at` = None.
-- **Empty results?** Check `/stats` for FAISS vector count vs mapping.
-- **Repair Needed?** Trigger `/repair_index` manually or verify load-time auto repair fired.
-
----
-
-### 📡 Upcoming Phase 5.9 Anchors (Interpretability & Summarization)
-
-- `MemoryAssembly.semantic_version_id`
-- Composite drift diffs
-- LLM-aware summarization of active assemblies
-- Timeline-based memory mutation tracing
-
----
-
-### 🔒 Stability Check Summary
-
-| System Checkpoint | Validation |
-|------------------|------------|
-| Embedding Shape & NaN | ✅ `validate_embedding()` + `safe_normalize()` |
-| Index ↔ Mapping Sync | ✅ `verify_index_integrity()` + `.ntotal == len(mapping)` |
-| Retry Queue Health | ✅ `/stats["vector_index_pending_updates"]` |
-| Assembly Activation Drift | ✅ `now - vector_index_updated_at < threshold` |
-| Repair Endpoint | ✅ `/repair_index` (manual fallback) |
-| Timeline View | ✅ `/assemblies/{id}/timeline` (optional dev mode) |
-
----
-
-### 🧬 Final Thought
-
-> **Stability is not just code—it’s behavioral memory.**  
-> Every retrieval is a story made whole by coordination, visibility, and trust in drift-aware recovery.
+*   [ ] No static/placeholder data remains in the UI.
+*   [ ] All relevant pages/components display live data from APIs.
+*   [ ] Loading skeletons are shown correctly while data is fetching.
+*   [ ] API errors are handled gracefully within components, displaying error messages.
+*   [ ] Phase 5.9 features (Merge Log, Config Viewer, Lineage, Explanations) are hidden/disabled when `ENABLE_EXPLAINABILITY` is `false`.
+*   [ ] Phase 5.9 features display correct data when `ENABLE_EXPLAINABILITY` is `true`.
+*   [ ] Explainability views fetch data on demand (e.g., button click).
+*   [ ] Dates, numbers, and large text blocks are formatted correctly.
 
 ---
