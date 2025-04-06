@@ -21,12 +21,16 @@ export type User = typeof users.$inferSelect;
 
 // ServiceStatus interfaces for health endpoints
 export interface ServiceStatusData {
-  status: string; // 'ok' or 'error'
-  uptime?: string;
+  status: string; // 'healthy' or 'unhealthy'
+  uptime_seconds?: number;
+  uptime?: string; // For Neural Memory which returns uptime as string
   version?: string;
   memory_count?: number;
   assembly_count?: number;
   error?: string | null;
+  timestamp?: string; // For Neural Memory which includes timestamp
+  tensorflow_version?: string; // For Neural Memory
+  neural_memory_initialized?: boolean; // For Neural Memory
 }
 
 export interface ServiceStatusResponse {
@@ -55,6 +59,13 @@ export interface MemoryVectorIndexStats {
   is_id_map: boolean;
   drift_warning?: boolean;
   drift_critical?: boolean;
+  // Added fields from Phase 5.8
+  total_vectors?: number;
+  index_size_mb?: number;
+  vector_dimensions?: number;
+  healthy?: boolean;
+  pending_updates?: number;
+  last_update_at?: string;
 }
 
 export interface MemoryAssemblyStats {
@@ -84,11 +95,15 @@ export interface MemoryStatsData {
     last_update?: string;
     last_backup?: string;
   };
-  quick_recal_stats?: {
+  quick_recall_stats?: {
     recall_rate?: number;
+    avg_latency_ms?: number;
+    count?: number;
   };
   threshold_stats?: {
     recall_rate?: number;
+    avg_latency_ms?: number;
+    count?: number;
   };
   vector_index_stats: MemoryVectorIndexStats;
   assemblies: MemoryAssemblyStats;
@@ -137,6 +152,8 @@ export interface NeuralMemoryDiagnosticsResponse {
 export interface CCEResponse {
   timestamp: string;
   status: 'success' | 'error';
+  input?: string;
+  error?: string;
   variant_output: {
     variant_type: string;
   };
@@ -145,6 +162,7 @@ export interface CCEResponse {
     reason: string;
     performance_used: boolean;
   };
+  llm_advice?: string;
   llm_advice_used?: {
     raw_advice?: string;
     adjusted_advice: string;
@@ -169,6 +187,7 @@ export interface CCEConfigResponse {
 
 export interface CCEMetricsData {
   recent_responses: CCEResponse[];
+  avg_response_time_ms?: number;
 }
 
 export interface CCEMetricsResponse {
@@ -220,6 +239,11 @@ export interface CCEStatusData {
   is_processing: boolean;
   current_variant: string;
   dev_mode: boolean;
+  memory_stats?: {
+    used_mb: number;
+    total_mb: number;
+    percentage: number;
+  };
 }
 
 export interface CCEStatusResponse {

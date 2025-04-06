@@ -12,6 +12,7 @@ import { MetricsChart } from "@/components/dashboard/MetricsChart";
 import { usePollingStore } from "@/lib/store";
 import { ServiceStatus as ServiceStatusType } from "@shared/schema";
 import { useFeatures } from "@/contexts/FeaturesContext";
+import { formatDuration } from "@/lib/utils";
 
 export default function NeuralMemory() {
   const { refreshAllData } = usePollingStore();
@@ -24,11 +25,14 @@ export default function NeuralMemory() {
   const neuralMemoryDiagnostics = useNeuralMemoryDiagnostics(timeWindow);
   
   // Prepare service status object
-  const serviceStatus = neuralMemoryHealth.data?.data ? {
+  const serviceStatus = neuralMemoryHealth.data?.success && neuralMemoryHealth.data.data ? {
     name: "Neural Memory",
-    status: neuralMemoryHealth.data.data.status === "ok" ? "Healthy" : "Unhealthy",
+    // Access status from nested data property and use robust check
+    status: ["ok", "healthy"].includes(neuralMemoryHealth.data.data.status?.toLowerCase()) ? "Healthy" : "Unhealthy",
     url: "/api/neural-memory/health",
-    uptime: neuralMemoryHealth.data.data.uptime || "Unknown",
+    // Handle both uptime formats (string or number)
+    uptime: neuralMemoryHealth.data.data.uptime || 
+           (neuralMemoryHealth.data.data.uptime_seconds ? formatDuration(neuralMemoryHealth.data.data.uptime_seconds) : "Unknown"),
     version: neuralMemoryHealth.data.data.version || "Unknown"
   } as ServiceStatusType : null;
   
@@ -51,6 +55,10 @@ export default function NeuralMemory() {
   // Determine if any metrics are in warning/critical state
   const isGradNormHigh = 
     (neuralMemoryDiagnostics.data?.data?.avg_grad_norm ?? 0) > 0.8;
+    
+  // Check for loading and error states
+  const isLoading = neuralMemoryHealth.isLoading || neuralMemoryStatus.isLoading || neuralMemoryDiagnostics.isLoading;
+  const hasError = neuralMemoryHealth.isError || neuralMemoryStatus.isError || neuralMemoryDiagnostics.isError;
   
   return (
     <>
@@ -61,7 +69,7 @@ export default function NeuralMemory() {
             Detailed monitoring of the <code className="text-primary">NeuralMemoryModule</code>
           </p>
         </div>
-        <RefreshButton onClick={refreshAllData} />
+        <RefreshButton onClick={refreshAllData} isLoading={isLoading} />
       </div>
       
       {/* Status Card */}
@@ -117,11 +125,11 @@ export default function NeuralMemory() {
                 )}
               </div>
               <div>
-                <p className="text-sm text-gray-500 mb-1">Version</p>
+                <p className="text-sm text-gray-500 mb-1">TensorFlow Version</p>
                 {neuralMemoryHealth.isLoading ? (
                   <Skeleton className="h-5 w-32" />
-                ) : serviceStatus?.version ? (
-                  <p className="text-lg">{serviceStatus.version}</p>
+                ) : neuralMemoryHealth.data?.data?.tensorflow_version ? (
+                  <p className="text-lg">{neuralMemoryHealth.data.data.tensorflow_version}</p>
                 ) : (
                   <p className="text-gray-400">Unknown</p>
                 )}
@@ -131,12 +139,142 @@ export default function NeuralMemory() {
         </CardContent>
       </Card>
       
-      {/* Configuration Overview */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Neural Memory Configuration</CardTitle>
-        </CardHeader>
-        <CardContent>
+      {/* Main Tabs */}
+      <Tabs defaultValue="diagnostics" className="mb-6">
+        <TabsList className="mb-4">
+          <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
+          <TabsTrigger value="configuration">Configuration</TabsTrigger>
+          {explainabilityEnabled && (
+            <TabsTrigger value="metrics">Detailed Metrics</TabsTrigger>
+          )}
+        </TabsList>
+        
+        <TabsContent value="diagnostics" className="mt-4">
+          {neuralMemoryDiagnostics.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Failed to load Neural Memory diagnostics</AlertTitle>
+              <AlertDescription>
+                {neuralMemoryDiagnostics.error?.message || "There was an error fetching diagnostic data. Please try again."}
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Performance Metrics */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>Performance Metrics</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {neuralMemoryDiagnostics.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                    </div>
+                  ) : neuralMemoryDiagnostics.data?.data ? (
+                    <div className="space-y-4">
+                      <div>
+                        <div className="flex justify-between mb-1">
+                          <p className="text-sm text-gray-500">Average Loss</p>
+                          <p className="text-sm font-mono">
+                            {neuralMemoryDiagnostics.data.data.avg_loss.toFixed(5)}
+                          </p>
+                        </div>
+                        <Progress 
+                          value={Math.min(neuralMemoryDiagnostics.data.data.avg_loss * 100, 100)} 
+                          className="h-2" 
+                        />
+                      </div>
+                      <div>
+                        <div className="flex justify-between mb-1">
+                          <p className="text-sm text-gray-500">Gradient Norm</p>
+                          <p className={`text-sm font-mono ${isGradNormHigh ? "text-amber-500" : ""}`}>
+                            {neuralMemoryDiagnostics.data.data.avg_grad_norm.toFixed(5)}
+                            {isGradNormHigh && <span className="ml-2 text-amber-500">⚠</span>}
+                          </p>
+                        </div>
+                        <Progress 
+                          value={Math.min(neuralMemoryDiagnostics.data.data.avg_grad_norm * 100, 100)} 
+                          className={isGradNormHigh ? "h-2 bg-amber-900/20" : "h-2"} 
+                        />
+                      </div>
+                      <div>
+                        <div className="flex justify-between mb-1">
+                          <p className="text-sm text-gray-500">QR Boost</p>
+                          <p className="text-sm font-mono">
+                            {neuralMemoryDiagnostics.data.data.avg_qr_boost.toFixed(5)}
+                          </p>
+                        </div>
+                        <Progress 
+                          value={Math.min(neuralMemoryDiagnostics.data.data.avg_qr_boost * 100, 100)} 
+                          className="h-2" 
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-gray-400 text-center py-8">No diagnostic data available</p>
+                  )}
+                </CardContent>
+              </Card>
+              
+              {/* Emotional Loop */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>Emotional Loop</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {neuralMemoryDiagnostics.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                    </div>
+                  ) : neuralMemoryDiagnostics.data?.data?.emotional_loop ? (
+                    <div className="space-y-4">
+                      <div>
+                        <p className="text-sm text-gray-500 mb-1">Dominant Emotions</p>
+                        <div className="flex flex-wrap gap-1">
+                          {neuralMemoryDiagnostics.data.data.emotional_loop.dominant_emotions.map((emotion: string, index: number) => (
+                            <Badge key={index} variant="secondary">{emotion}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500 mb-1">Entropy</p>
+                        <p className="text-lg">
+                          {neuralMemoryDiagnostics.data.data.emotional_loop.entropy.toFixed(3)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500 mb-1">Bias Index</p>
+                        <p className="text-lg">
+                          {neuralMemoryDiagnostics.data.data.emotional_loop.bias_index.toFixed(3)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500 mb-1">Match Rate</p>
+                        <div className="flex justify-between mb-1">
+                          <span></span>
+                          <p className="text-sm font-mono">
+                            {(neuralMemoryDiagnostics.data.data.emotional_loop.match_rate * 100).toFixed(1)}%
+                          </p>
+                        </div>
+                        <Progress 
+                          value={neuralMemoryDiagnostics.data.data.emotional_loop.match_rate * 100} 
+                          className="h-2" 
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-gray-400 text-center py-8">No emotional loop data available</p>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </TabsContent>
+        
+        <TabsContent value="configuration" className="mt-4">
           {neuralMemoryStatus.isLoading ? (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Skeleton className="h-16 w-full" />
@@ -180,182 +318,98 @@ export default function NeuralMemory() {
               <p>No configuration data available</p>
             </div>
           )}
-        </CardContent>
-      </Card>
-      
-      {/* Warning if high grad norm */}
-      {isGradNormHigh && neuralMemoryDiagnostics.data?.data && !neuralMemoryDiagnostics.isError && (
-        <Alert variant="destructive" className="mb-6">
-          <AlertTitle className="flex items-center">
-            <i className="fas fa-exclamation-circle mr-2"></i>
-            High Gradient Norm Detected
-          </AlertTitle>
-          <AlertDescription>
-            The gradient norm of {neuralMemoryDiagnostics.data.data.avg_grad_norm.toFixed(4)} exceeds the recommended threshold of 0.7500.
-          </AlertDescription>
-        </Alert>
-      )}
-      
-      {/* Tabs for Performance Metrics */}
-      <Tabs defaultValue="performance" className="mb-6">
-        <TabsList>
-          <TabsTrigger value="performance">Performance Metrics</TabsTrigger>
-          <TabsTrigger value="emotional">Emotional Loop</TabsTrigger>
-          {explainabilityEnabled && (
-            <TabsTrigger value="recommendations">Recommendations</TabsTrigger>
-          )}
-        </TabsList>
-        
-        <TabsContent value="performance" className="mt-4">
-          <div className="grid grid-cols-1 gap-6">
-            <MetricsChart
-              title="Neural Memory Performance"
-              data={chartData}
-              dataKeys={[
-                { key: "loss", color: "#FF008C", name: "Loss" },
-                { key: "grad_norm", color: "#1EE4FF", name: "Gradient Norm" },
-                { key: "qr_boost", color: "#FF3EE8", name: "QR Boost" }
-              ]}
-              isLoading={neuralMemoryDiagnostics.isLoading}
-              isError={neuralMemoryDiagnostics.isError}
-              error={neuralMemoryDiagnostics.error}
-              timeRange={timeWindow}
-              onTimeRangeChange={setTimeWindow}
-              summary={[
-                { 
-                  label: "Avg. Loss", 
-                  value: neuralMemoryDiagnostics.data?.data?.avg_loss?.toFixed(4) || "--", 
-                  color: "text-primary" 
-                },
-                { 
-                  label: "Avg. Grad Norm", 
-                  value: neuralMemoryDiagnostics.data?.data?.avg_grad_norm?.toFixed(4) || "--",
-                  color: isGradNormHigh ? "text-destructive" : "text-secondary"
-                },
-                { 
-                  label: "Avg. QR Boost", 
-                  value: neuralMemoryDiagnostics.data?.data?.avg_qr_boost?.toFixed(4) || "--",
-                  color: "text-primary" 
-                }
-              ]}
-            />
-          </div>
-        </TabsContent>
-        
-        <TabsContent value="emotional" className="mt-4">
-          {neuralMemoryDiagnostics.isLoading ? (
-            <Card>
-              <CardContent className="pt-6">
-                <div className="space-y-4">
-                  <Skeleton className="h-8 w-full" />
-                  <Skeleton className="h-24 w-full" />
-                  <Skeleton className="h-8 w-full" />
-                </div>
-              </CardContent>
-            </Card>
-          ) : neuralMemoryDiagnostics.isError ? (
-            <Alert variant="destructive">
-              <AlertTitle>Failed to load emotional loop data</AlertTitle>
-              <AlertDescription>
-                {neuralMemoryDiagnostics.error?.message || "An error occurred while fetching emotional loop diagnostics."}
-              </AlertDescription>
-            </Alert>
-          ) : neuralMemoryDiagnostics.data?.data?.emotional_loop ? (
-            <Card>
-              <CardContent className="pt-6">
-                <div className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Emotional Entropy</p>
-                      <p className="text-lg font-mono">
-                        {neuralMemoryDiagnostics.data.data.emotional_loop.entropy.toFixed(4)}
-                      </p>
-                      <Progress 
-                        value={neuralMemoryDiagnostics.data.data.emotional_loop.entropy * 100} 
-                        className="h-1.5 mt-2" 
-                      />
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Bias Index</p>
-                      <p className="text-lg font-mono">
-                        {neuralMemoryDiagnostics.data.data.emotional_loop.bias_index.toFixed(4)}
-                      </p>
-                      <Progress 
-                        value={neuralMemoryDiagnostics.data.data.emotional_loop.bias_index * 100} 
-                        className="h-1.5 mt-2" 
-                      />
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Match Rate</p>
-                      <p className="text-lg font-mono">
-                        {(neuralMemoryDiagnostics.data.data.emotional_loop.match_rate * 100).toFixed(2)}%
-                      </p>
-                      <Progress 
-                        value={neuralMemoryDiagnostics.data.data.emotional_loop.match_rate * 100} 
-                        className="h-1.5 mt-2" 
-                      />
-                    </div>
-                  </div>
-                  
-                  <div>
-                    <p className="text-sm text-gray-500 mb-1">Dominant Emotions</p>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {neuralMemoryDiagnostics.data.data.emotional_loop.dominant_emotions.map((emotion: string, idx: number) => (
-                        <Badge key={idx} variant="outline" className="bg-primary/5">
-                          {emotion}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="text-center py-8 text-gray-400">
-              <p>No emotional loop data available</p>
-            </div>
-          )}
         </TabsContent>
         
         {explainabilityEnabled && (
-          <TabsContent value="recommendations" className="mt-4">
+          <TabsContent value="metrics" className="mt-4">
             {neuralMemoryDiagnostics.isLoading ? (
               <Card>
                 <CardContent className="pt-6">
                   <div className="space-y-4">
                     <Skeleton className="h-8 w-full" />
-                    <Skeleton className="h-16 w-full" />
-                    <Skeleton className="h-16 w-full" />
+                    <Skeleton className="h-40 w-full" />
+                    <Skeleton className="h-8 w-full" />
                   </div>
                 </CardContent>
               </Card>
             ) : neuralMemoryDiagnostics.isError ? (
               <Alert variant="destructive">
-                <AlertTitle>Failed to load recommendations</AlertTitle>
+                <AlertTitle>Failed to load metrics data</AlertTitle>
                 <AlertDescription>
-                  {neuralMemoryDiagnostics.error?.message || "An error occurred while fetching Neural Memory recommendations."}
+                  {neuralMemoryDiagnostics.error?.message || "An error occurred while fetching Neural Memory metrics data."}
                 </AlertDescription>
               </Alert>
-            ) : neuralMemoryDiagnostics.data?.data?.recommendations && neuralMemoryDiagnostics.data.data.recommendations.length > 0 ? (
-              <Card>
-                <CardContent className="pt-6">
-                  <div className="space-y-4">
-                    {neuralMemoryDiagnostics.data.data.recommendations.map((recommendation: string, idx: number) => (
-                      <Alert key={idx} className="bg-primary/5 border-primary/20">
-                        <div className="flex">
-                          <i className="fas fa-lightbulb text-secondary mt-1 mr-2"></i>
-                          <AlertDescription className="text-primary-foreground">
-                            {recommendation}
-                          </AlertDescription>
-                        </div>
-                      </Alert>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
+            ) : neuralMemoryDiagnostics.data?.data ? (
+              <div className="grid grid-cols-1 gap-6">
+                <MetricsChart
+                  title="Neural Memory Performance"
+                  data={chartData}
+                  dataKeys={[
+                    { key: "loss", color: "#FF008C", name: "Loss" },
+                    { key: "grad_norm", color: "#1EE4FF", name: "Gradient Norm" },
+                    { key: "qr_boost", color: "#FF3EE8", name: "QR Boost" }
+                  ]}
+                  isLoading={neuralMemoryDiagnostics.isLoading}
+                  isError={neuralMemoryDiagnostics.isError}
+                  error={neuralMemoryDiagnostics.error}
+                  timeRange={timeWindow}
+                  onTimeRangeChange={setTimeWindow}
+                  summary={[
+                    { 
+                      label: "Avg. Loss", 
+                      value: neuralMemoryDiagnostics.data?.data?.avg_loss?.toFixed(4) || "--", 
+                      color: "text-primary" 
+                    },
+                    { 
+                      label: "Avg. Grad Norm", 
+                      value: neuralMemoryDiagnostics.data?.data?.avg_grad_norm?.toFixed(4) || "--",
+                      color: isGradNormHigh ? "text-destructive" : "text-secondary"
+                    },
+                    { 
+                      label: "Avg. QR Boost", 
+                      value: neuralMemoryDiagnostics.data?.data?.avg_qr_boost?.toFixed(4) || "--",
+                      color: "text-primary" 
+                    }
+                  ]}
+                />
+                
+                {/* Recommendations section */}
+                {neuralMemoryDiagnostics.data?.data?.recommendations?.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle>System Recommendations</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <ul className="list-disc list-inside space-y-2">
+                        {neuralMemoryDiagnostics.data.data.recommendations.map((rec: string, idx: number) => (
+                          <li key={idx} className="text-sm">{rec}</li>
+                        ))}
+                      </ul>
+                    </CardContent>
+                  </Card>
+                )}
+                
+                {/* Alerts section */}
+                {neuralMemoryDiagnostics.data?.data?.alerts?.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle>System Alerts</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        {neuralMemoryDiagnostics.data.data.alerts.map((alert: string, idx: number) => (
+                          <Alert key={idx} variant="destructive">
+                            <AlertDescription>{alert}</AlertDescription>
+                          </Alert>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
             ) : (
               <div className="text-center py-8 text-gray-400">
-                <p>No recommendations available</p>
+                <p>No metrics data available</p>
               </div>
             )}
           </TabsContent>

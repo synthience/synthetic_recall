@@ -12,6 +12,7 @@ import { AssemblyTable } from "@/components/dashboard/AssemblyTable";
 import { ServiceStatus } from "@/components/layout/ServiceStatus";
 import { usePollingStore } from "@/lib/store";
 import { ServiceStatus as ServiceStatusType } from "@shared/schema";
+import { formatDuration, formatTimeAgo } from "@/lib/utils";
 
 export default function MemoryCore() {
   const { refreshAllData } = usePollingStore();
@@ -23,17 +24,24 @@ export default function MemoryCore() {
   const assemblies = useAssemblies();
   
   // Prepare service status object
-  const serviceStatus = memoryCoreHealth.data?.data ? {
+  const serviceStatus = memoryCoreHealth.data?.success && memoryCoreHealth.data.data ? {
     name: "Memory Core",
-    status: memoryCoreHealth.data.data.status === "ok" ? "Healthy" : "Unhealthy",
+    // Access status from nested data property and use robust check
+    status: ["ok", "healthy"].includes(memoryCoreHealth.data.data.status?.toLowerCase()) ? "Healthy" : "Unhealthy",
     url: "/api/memory-core/health",
-    uptime: memoryCoreHealth.data.data.uptime || "Unknown",
+    // Handle both uptime formats (string or number)
+    uptime: memoryCoreHealth.data.data.uptime || 
+           (memoryCoreHealth.data.data.uptime_seconds ? formatDuration(memoryCoreHealth.data.data.uptime_seconds) : "Unknown"),
     version: memoryCoreHealth.data.data.version || "Unknown"
   } as ServiceStatusType : null;
   
   // Calculate warning thresholds for vector index drift
   const isDriftAboveWarning = (memoryCoreStats.data?.data?.vector_index_stats?.drift_count ?? 0) > 50;
   const isDriftAboveCritical = (memoryCoreStats.data?.data?.vector_index_stats?.drift_count ?? 0) > 100;
+  
+  // Check for loading and error states
+  const isLoading = memoryCoreHealth.isLoading || memoryCoreStats.isLoading || assemblies.isLoading;
+  const hasError = memoryCoreHealth.isError || memoryCoreStats.isError || assemblies.isError;
   
   return (
     <>
@@ -44,7 +52,7 @@ export default function MemoryCore() {
             Detailed monitoring of the <code className="text-primary">SynthiansMemoryCore</code>
           </p>
         </div>
-        <RefreshButton onClick={refreshAllData} />
+        <RefreshButton onClick={refreshAllData} isLoading={isLoading} />
       </div>
       
       {/* Status Card */}
@@ -114,309 +122,375 @@ export default function MemoryCore() {
         </CardContent>
       </Card>
       
-      {/* Tabs for different views */}
-      <Tabs defaultValue="overview" className="mb-6">
-        <TabsList>
-          <TabsTrigger value="overview" onClick={() => setActiveTab("overview")}>Overview</TabsTrigger>
-          <TabsTrigger value="vector-index" onClick={() => setActiveTab("vector-index")}>Vector Index</TabsTrigger>
-          <TabsTrigger value="assemblies" onClick={() => setActiveTab("assemblies")}>Assemblies</TabsTrigger>
-          <TabsTrigger value="persistence" onClick={() => setActiveTab("persistence")}>Persistence</TabsTrigger>
+      {/* Main Content Tabs */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-6">
+        <TabsList className="mb-4">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="vector-index">Vector Index</TabsTrigger>
+          <TabsTrigger value="assemblies">Assemblies</TabsTrigger>
+          <TabsTrigger value="persistence">Persistence</TabsTrigger>
         </TabsList>
         
-        <TabsContent value="overview" className="mt-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card className="col-span-2">
-              <CardHeader>
-                <CardTitle>Core Stats</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {memoryCoreStats.isLoading ? (
-                  <div className="space-y-4">
-                    <Skeleton className="h-16 w-full" />
-                    <Skeleton className="h-16 w-full" />
-                  </div>
-                ) : memoryCoreStats.isError ? (
-                  <Alert variant="destructive">
-                    <AlertTitle>Failed to load statistics</AlertTitle>
-                    <AlertDescription>
-                      {memoryCoreStats.error?.message || "An error occurred while fetching Memory Core statistics."}
-                    </AlertDescription>
-                  </Alert>
-                ) : memoryCoreStats.data?.data?.core_stats ? (
-                  <div className="grid grid-cols-2 gap-6">
-                    <div>
-                      <div className="mb-4">
-                        <p className="text-sm text-gray-500">Total Memories</p>
-                        <p className="text-2xl font-mono">
-                          {memoryCoreStats.data.data.core_stats.total_memories.toLocaleString()}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-gray-500">Dirty Memories</p>
-                        <p className="text-2xl font-mono">
-                          {memoryCoreStats.data.data.core_stats.dirty_memories.toLocaleString()}
-                        </p>
-                      </div>
+        {/* Overview Tab */}
+        <TabsContent value="overview">
+          {memoryCoreStats.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Failed to load Memory Core statistics</AlertTitle>
+              <AlertDescription>
+                {memoryCoreStats.error?.message || "There was an error fetching Memory Core stats. Please try again."}
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>Memory Stats</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {memoryCoreStats.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
                     </div>
-                    <div>
-                      <div className="mb-4">
-                        <p className="text-sm text-gray-500">Total Assemblies</p>
-                        <p className="text-2xl font-mono">
-                          {memoryCoreStats.data.data.core_stats.total_assemblies.toLocaleString()}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-gray-500">Pending Vector Updates</p>
-                        <p className="text-2xl font-mono">
-                          {memoryCoreStats.data.data.core_stats.pending_vector_updates.toLocaleString()}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-4 text-gray-400">
-                    <p>No statistics available</p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-            
-            <Card>
-              <CardHeader>
-                <CardTitle>Performance</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {memoryCoreStats.isLoading ? (
-                  <div className="space-y-4">
-                    <Skeleton className="h-8 w-full" />
-                    <Skeleton className="h-8 w-full" />
-                  </div>
-                ) : memoryCoreStats.isError ? (
-                  <Alert variant="destructive">
-                    <AlertDescription>
-                      Failed to load performance data
-                    </AlertDescription>
-                  </Alert>
-                ) : memoryCoreStats.data?.data?.quick_recal_stats || memoryCoreStats.data?.data?.threshold_stats ? (
-                  <div className="space-y-4">
-                    {memoryCoreStats.data?.data?.quick_recal_stats && (
-                      <div>
-                        <div className="flex justify-between mb-1">
-                          <p className="text-sm text-gray-500">Quick Recall Rate</p>
-                          <p className="text-sm font-mono">
-                            {((memoryCoreStats.data.data.quick_recal_stats.recall_rate ?? 0) * 100).toFixed(2)}%
-                          </p>
-                        </div>
-                        <Progress value={(memoryCoreStats.data.data.quick_recal_stats.recall_rate ?? 0) * 100} className="h-2" />
-                      </div>
-                    )}
-                    {memoryCoreStats.data?.data?.threshold_stats && (
-                      <div>
-                        <div className="flex justify-between mb-1">
-                          <p className="text-sm text-gray-500">Threshold Recall Rate</p>
-                          <p className="text-sm font-mono">
-                            {((memoryCoreStats.data.data.threshold_stats.recall_rate ?? 0) * 100).toFixed(2)}%
-                          </p>
-                        </div>
-                        <Progress value={(memoryCoreStats.data.data.threshold_stats.recall_rate ?? 0) * 100} className="h-2" />
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-gray-400">Performance data unavailable</p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-        
-        <TabsContent value="vector-index" className="mt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Vector Index Stats</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {memoryCoreStats.isLoading ? (
-                <div className="space-y-4">
-                  <Skeleton className="h-8 w-full" />
-                  <Skeleton className="h-8 w-full" />
-                  <Skeleton className="h-8 w-full" />
-                </div>
-              ) : memoryCoreStats.isError ? (
-                <Alert variant="destructive">
-                  <AlertTitle>Failed to load vector index data</AlertTitle>
-                  <AlertDescription>
-                    {memoryCoreStats.error?.message || "An error occurred while fetching vector index information."}
-                  </AlertDescription>
-                </Alert>
-              ) : memoryCoreStats.data?.data?.vector_index_stats ? (
-                <div className="space-y-6">
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Index Size</p>
-                      <p className="text-lg font-mono">
-                        {memoryCoreStats.data.data.vector_index_stats.count.toLocaleString()}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Mapping Count</p>
-                      <p className="text-lg font-mono">
-                        {memoryCoreStats.data.data.vector_index_stats.mapping_count.toLocaleString()}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Indexed Vectors</p>
-                      <p className="text-lg font-mono">
-                        {memoryCoreStats.data.data.vector_index_stats.count.toLocaleString()}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Drift Count</p>
-                      <p className="text-lg font-mono">
-                        {(memoryCoreStats.data.data.vector_index_stats.drift_count ?? 0).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-                  
-                  <div>
-                    <div className="mb-2">
-                      <h3 className="font-medium">Health & Consistency</h3>
-                      <p className="text-sm text-gray-500">Statistics about consistency between memory store and vector index</p>
-                    </div>
+                  ) : (
                     <Table>
-                      <TableHeader>
-                        <TableRow className="bg-muted">
-                          <TableHead className="w-1/2">Metric</TableHead>
-                          <TableHead>Value</TableHead>
-                          <TableHead>Status</TableHead>
-                        </TableRow>
-                      </TableHeader>
                       <TableBody>
                         <TableRow>
-                          <TableCell className="font-medium">Index Score</TableCell>
-                          <TableCell>
-                            {(memoryCoreStats.data.data.vector_index_stats.count / 
-                              (memoryCoreStats.data.data.core_stats.total_memories || 1)).toFixed(2)}
-                          </TableCell>
-                          <TableCell>
-                            {(memoryCoreStats.data.data.vector_index_stats.count / 
-                              (memoryCoreStats.data.data.core_stats.total_memories || 1)) > 0.95 ? (
-                              <Badge className="bg-green-100 dark:bg-green-900/20 text-green-600 dark:text-green-400">
-                                <i className="fas fa-check mr-1"></i>
-                                Good
-                              </Badge>
-                            ) : (memoryCoreStats.data.data.vector_index_stats.count / 
-                              (memoryCoreStats.data.data.core_stats.total_memories || 1)) > 0.8 ? (
-                              <Badge className="bg-yellow-100 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400">
-                                <i className="fas fa-exclamation-triangle mr-1"></i>
-                                Warning
-                              </Badge>
-                            ) : (
-                              <Badge className="bg-red-100 dark:bg-red-900/20 text-red-600 dark:text-red-400">
-                                <i className="fas fa-times mr-1"></i>
-                                Critical
-                              </Badge>
-                            )}
+                          <TableCell className="font-medium">Total Memories</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.core_stats?.total_memories?.toLocaleString() ?? 'N/A'}
                           </TableCell>
                         </TableRow>
                         <TableRow>
-                          <TableCell className="font-medium">Drift Count</TableCell>
-                          <TableCell>
-                            {(memoryCoreStats.data.data.vector_index_stats.drift_count ?? 0).toLocaleString()}
-                          </TableCell>
-                          <TableCell>
-                            {(memoryCoreStats.data.data.vector_index_stats.drift_count ?? 0) < 10 ? (
-                              <Badge className="bg-green-100 dark:bg-green-900/20 text-green-600 dark:text-green-400">
-                                <i className="fas fa-check mr-1"></i>
-                                Good
-                              </Badge>
-                            ) : (memoryCoreStats.data.data.vector_index_stats.drift_count ?? 0) < 50 ? (
-                              <Badge className="bg-yellow-100 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400">
-                                <i className="fas fa-exclamation-triangle mr-1"></i>
-                                Warning
-                              </Badge>
-                            ) : (
-                              <Badge className="bg-red-100 dark:bg-red-900/20 text-red-600 dark:text-red-400">
-                                <i className="fas fa-times mr-1"></i>
-                                Critical
-                              </Badge>
-                            )}
+                          <TableCell className="font-medium">Total Assemblies</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.core_stats?.total_assemblies?.toLocaleString() ?? 'N/A'}
                           </TableCell>
                         </TableRow>
                         <TableRow>
-                          <TableCell className="font-medium">Index Type</TableCell>
-                          <TableCell colSpan={2}>
-                            {memoryCoreStats.data.data.vector_index_stats.index_type || 'Unknown'}
+                          <TableCell className="font-medium">Dirty Memories</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.core_stats?.dirty_memories?.toLocaleString() ?? 0}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Pending Vector Updates</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.core_stats?.pending_vector_updates?.toLocaleString() ?? 0}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Core Initialized</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.core_stats?.initialized ? (
+                              <Badge variant="secondary">Yes</Badge>
+                            ) : (
+                              <Badge variant="destructive">No</Badge>
+                            )}
                           </TableCell>
                         </TableRow>
                       </TableBody>
                     </Table>
-                  </div>
-                </div>
-              ) : (
-                <div className="text-center py-4 text-gray-400">
-                  <p>Vector index data unavailable</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>Assembly Stats</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {memoryCoreStats.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                    </div>
+                  ) : (
+                    <Table>
+                      <TableBody>
+                        <TableRow>
+                          <TableCell className="font-medium">Total Count</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.assemblies?.total_count?.toLocaleString() ?? 'N/A'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Indexed Count</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.assemblies?.indexed_count?.toLocaleString() ?? 'N/A'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Vector Indexed Count</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.assemblies?.vector_indexed_count?.toLocaleString() ?? 'N/A'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Average Size</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.assemblies?.average_size?.toFixed(2) ?? 'N/A'} memories
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Pruning Enabled</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.assemblies?.pruning_enabled ? (
+                              <Badge variant="secondary">Yes</Badge>
+                            ) : (
+                              <Badge variant="outline">No</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Merging Enabled</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.assemblies?.merging_enabled ? (
+                              <Badge variant="secondary">Yes</Badge>
+                            ) : (
+                              <Badge variant="outline">No</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </TabsContent>
+        
+        <TabsContent value="vector-index" className="mt-4">
+          {memoryCoreStats.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Failed to load Vector Index statistics</AlertTitle>
+              <AlertDescription>
+                {memoryCoreStats.error?.message || "There was an error fetching Vector Index data. Please try again."}
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <Card className="col-span-2">
+                <CardHeader className="pb-2">
+                  <CardTitle>Vector Index Status</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {memoryCoreStats.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                    </div>
+                  ) : (
+                    <Table>
+                      <TableBody>
+                        <TableRow>
+                          <TableCell className="font-medium">Total Vectors</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.vector_index_stats?.total_vectors?.toLocaleString() ?? 'N/A'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Index Size</TableCell>
+                          <TableCell className="text-right">
+                            {typeof memoryCoreStats.data?.data?.vector_index_stats?.index_size_mb === 'number' ? 
+                              `${memoryCoreStats.data.data.vector_index_stats.index_size_mb.toFixed(2)} MB` : 'N/A'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Vector Dimensions</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.vector_index_stats?.vector_dimensions ?? 'N/A'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Drift Count</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              {memoryCoreStats.data?.data?.vector_index_stats?.drift_count?.toLocaleString() ?? '0'}
+                              {isDriftAboveWarning && !isDriftAboveCritical && (
+                                <Badge variant="secondary">WARNING</Badge>
+                              )}
+                              {isDriftAboveCritical && (
+                                <Badge variant="destructive">CRITICAL</Badge>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Index Health</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.vector_index_stats?.healthy ? (
+                              <Badge variant="secondary">Healthy</Badge>
+                            ) : (
+                              <Badge variant="destructive">Unhealthy</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Pending Updates</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.vector_index_stats?.pending_updates?.toLocaleString() ?? '0'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableCell className="font-medium">Last Update</TableCell>
+                          <TableCell className="text-right">
+                            {memoryCoreStats.data?.data?.vector_index_stats?.last_update_at ? 
+                              formatTimeAgo(memoryCoreStats.data.data.vector_index_stats.last_update_at) : 'Never'}
+                          </TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>Performance</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {memoryCoreStats.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-12 w-full" />
+                      <Skeleton className="h-12 w-full" />
+                      <Skeleton className="h-12 w-full" />
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      {memoryCoreStats.data?.data?.quick_recall_stats && (
+                        <div>
+                          <div className="flex justify-between mb-1">
+                            <p className="text-sm text-gray-500">Quick Recall Rate</p>
+                            <p className="text-sm font-mono">
+                              {((memoryCoreStats.data.data.quick_recall_stats.recall_rate ?? 0) * 100).toFixed(2)}%
+                            </p>
+                          </div>
+                          <Progress 
+                            value={(memoryCoreStats.data.data.quick_recall_stats.recall_rate ?? 0) * 100} 
+                            className="h-2" 
+                          />
+                          <div className="flex justify-between text-xs text-gray-500 mt-1">
+                            <span>Avg. Latency: {memoryCoreStats.data.data.quick_recall_stats?.avg_latency_ms?.toFixed(2) ?? 'N/A'} ms</span>
+                            <span>Count: {memoryCoreStats.data.data.quick_recall_stats?.count ?? 0}</span>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {memoryCoreStats.data?.data?.threshold_stats && (
+                        <div>
+                          <div className="flex justify-between mb-1">
+                            <p className="text-sm text-gray-500">Threshold Recall Rate</p>
+                            <p className="text-sm font-mono">
+                              {((memoryCoreStats.data.data.threshold_stats.recall_rate ?? 0) * 100).toFixed(2)}%
+                            </p>
+                          </div>
+                          <Progress 
+                            value={(memoryCoreStats.data.data.threshold_stats.recall_rate ?? 0) * 100} 
+                            className="h-2" 
+                          />
+                          <div className="flex justify-between text-xs text-gray-500 mt-1">
+                            <span>Avg. Latency: {memoryCoreStats.data.data.threshold_stats?.avg_latency_ms?.toFixed(2) ?? 'N/A'} ms</span>
+                            <span>Count: {memoryCoreStats.data.data.threshold_stats?.count ?? 0}</span>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {!memoryCoreStats.data?.data?.quick_recall_stats && !memoryCoreStats.data?.data?.threshold_stats && (
+                        <p className="text-gray-400 text-center py-4">No performance data available</p>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          )}
         </TabsContent>
         
         <TabsContent value="assemblies" className="mt-4">
-          <AssemblyTable 
-            assemblies={assemblies.data?.data || []} 
-            isLoading={assemblies.isLoading}
-            isError={assemblies.isError}
-            error={assemblies.error}
-          />
+          {assemblies.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Failed to load assemblies</AlertTitle>
+              <AlertDescription>
+                {assemblies.error?.message || "There was an error fetching assembly data. Please try again."}
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle>Memory Assemblies</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <AssemblyTable
+                  assemblies={assemblies.data?.data || []}
+                  isLoading={assemblies.isLoading}
+                  isError={assemblies.isError}
+                  error={assemblies.error}
+                  showFilters={true}
+                />
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
         
         <TabsContent value="persistence" className="mt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Persistence Status</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {memoryCoreStats.isLoading ? (
-                <div className="space-y-4">
-                  <Skeleton className="h-8 w-full" />
-                  <Skeleton className="h-8 w-full" />
-                </div>
-              ) : memoryCoreStats.isError ? (
-                <Alert variant="destructive">
-                  <AlertTitle>Failed to load persistence data</AlertTitle>
-                  <AlertDescription>
-                    {memoryCoreStats.error?.message || "An error occurred while fetching persistence information."}
-                  </AlertDescription>
-                </Alert>
-              ) : memoryCoreStats.data?.data?.persistence_stats ? (
-                <div className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Last Update</p>
-                      <p className="text-lg">
-                        {memoryCoreStats.data.data.persistence_stats.last_update ? 
-                          new Date(memoryCoreStats.data.data.persistence_stats.last_update).toLocaleString() : 
-                          'Never'}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500 mb-1">Last Backup</p>
-                      <p className="text-lg">
-                        {memoryCoreStats.data.data.persistence_stats.last_backup ? 
-                          new Date(memoryCoreStats.data.data.persistence_stats.last_backup).toLocaleString() : 
-                          'Never'}
-                      </p>
-                    </div>
+          {memoryCoreStats.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Failed to load persistence statistics</AlertTitle>
+              <AlertDescription>
+                {memoryCoreStats.error?.message || "There was an error fetching persistence data. Please try again."}
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle>Persistence Status</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {memoryCoreStats.isLoading ? (
+                  <div className="space-y-4">
+                    <Skeleton className="h-16 w-full" />
+                    <Skeleton className="h-16 w-full" />
                   </div>
-                </div>
-              ) : (
-                <div className="text-center py-4 text-gray-400">
-                  <p>Persistence data unavailable</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                ) : (
+                  <Table>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-medium">Last Update</TableCell>
+                        <TableCell className="text-right">
+                          {memoryCoreStats.data?.data?.persistence_stats?.last_update ? 
+                            formatTimeAgo(memoryCoreStats.data.data.persistence_stats.last_update) : 
+                            'Never'}
+                        </TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-medium">Last Backup</TableCell>
+                        <TableCell className="text-right">
+                          {memoryCoreStats.data?.data?.persistence_stats?.last_backup ? 
+                            formatTimeAgo(memoryCoreStats.data.data.persistence_stats.last_backup) : 
+                            'Never'}
+                        </TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-medium">Database Status</TableCell>
+                        <TableCell className="text-right">
+                          {memoryCoreHealth.data?.data?.status?.toLowerCase() === 'healthy' ? (
+                            <Badge variant="secondary">Healthy</Badge>
+                          ) : (
+                            <Badge variant="destructive">Problem Detected</Badge>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
       </Tabs>
     </>

@@ -140,10 +140,26 @@ export default function Config() {
                   Failed to load Neural Memory configuration
                 </div>
               ) : neuralConfig.data?.config ? (
-                <div className="space-y-0">
-                  {Object.entries(neuralConfig.data.config).map(([key, value]) => (
-                    <ConfigItem key={key} label={key} value={value} />
-                  ))}
+                <div>
+                  {explainabilityEnabled && (
+                    <div className="bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200 p-3 rounded-md mb-4">
+                      <h3 className="font-semibold mb-1">Explainability Features: Enabled</h3>
+                      <p className="text-sm">Diagnostic and explainability features are currently active.</p>
+                    </div>
+                  )}
+
+                  {!explainabilityEnabled && (
+                    <div className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 p-3 rounded-md mb-4">
+                      <h3 className="font-semibold mb-1">Explainability Features: Disabled</h3>
+                      <p className="text-sm">Set <code className="bg-muted p-1 rounded">ENABLE_EXPLAINABILITY=true</code> to activate diagnostic features.</p>
+                    </div>
+                  )}
+                  
+                  <div className="space-y-0">
+                    {Object.entries(neuralConfig.data.config).map(([key, value]) => (
+                      <ConfigItem key={key} label={key} value={value} />
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <div className="text-center py-8 text-gray-400">
@@ -174,10 +190,26 @@ export default function Config() {
                   Failed to load CCE configuration
                 </div>
               ) : cceConfig.data?.config ? (
-                <div className="space-y-0">
-                  {Object.entries(cceConfig.data.config).map(([key, value]) => (
-                    <ConfigItem key={key} label={key} value={value} />
-                  ))}
+                <div>
+                  {explainabilityEnabled && (
+                    <div className="bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200 p-3 rounded-md mb-4">
+                      <h3 className="font-semibold mb-1">Explainability Features: Enabled</h3>
+                      <p className="text-sm">Diagnostic and explainability features are currently active.</p>
+                    </div>
+                  )}
+
+                  {!explainabilityEnabled && (
+                    <div className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 p-3 rounded-md mb-4">
+                      <h3 className="font-semibold mb-1">Explainability Features: Disabled</h3>
+                      <p className="text-sm">Set <code className="bg-muted p-1 rounded">ENABLE_EXPLAINABILITY=true</code> to activate diagnostic features.</p>
+                    </div>
+                  )}
+                  
+                  <div className="space-y-0">
+                    {Object.entries(cceConfig.data.config).map(([key, value]) => (
+                      <ConfigItem key={key} label={key} value={value} />
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <div className="text-center py-8 text-gray-400">

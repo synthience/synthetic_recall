@@ -12,6 +12,7 @@ import { CCEChart } from "@/components/dashboard/CCEChart";
 import { usePollingStore } from "@/lib/store";
 import { ServiceStatus, CCEResponse } from "@shared/schema";
 import { useFeatures } from "@/contexts/FeaturesContext";
+import { formatDuration, formatTimeAgo } from "@/lib/utils";
 
 export default function CCE() {
   const { refreshAllData } = usePollingStore();
@@ -24,11 +25,14 @@ export default function CCE() {
   const recentCCEResponses = useRecentCCEResponses();
   
   // Prepare service status object
-  const serviceStatus: ServiceStatus | null = cceHealth.data?.data ? {
+  const serviceStatus: ServiceStatus | null = cceHealth.data?.success && cceHealth.data.data ? {
     name: "Context Cascade Engine",
-    status: cceHealth.data.data.status === "ok" ? "Healthy" : "Unhealthy",
+    // Access status from nested data property and use robust check
+    status: ["ok", "healthy"].includes(cceHealth.data.data.status?.toLowerCase()) ? "Healthy" : "Unhealthy",
     url: "/api/cce/health",
-    uptime: cceHealth.data.data.uptime || "Unknown",
+    // Handle both uptime formats (string or number)
+    uptime: cceHealth.data.data.uptime || 
+           (cceHealth.data.data.uptime_seconds ? formatDuration(cceHealth.data.data.uptime_seconds) : "Unknown"),
     version: cceHealth.data.data.version || "Unknown"
   } : null;
   
@@ -54,6 +58,16 @@ export default function CCE() {
   const formatTime = (timestamp: string) => {
     return new Date(timestamp).toLocaleTimeString();
   };
+  
+  // Check for loading and error states
+  const isLoading = cceHealth.isLoading || cceStatus.isLoading || recentCCEResponses.isLoading;
+  const hasError = cceHealth.isError || cceStatus.isError || recentCCEResponses.isError;
+
+  // Safely access memory stats
+  const memoryUsage = cceStatus.data?.data?.memory_stats?.used_mb;
+  const avgResponseTime = recentCCEResponses.data?.data?.avg_response_time_ms;
+  const recentResponses = recentCCEResponses.data?.data?.recent_responses || [];
+  const responsesCount = recentResponses.length;
 
   return (
     <>
@@ -64,7 +78,7 @@ export default function CCE() {
             Monitoring the <code className="text-primary">Context Cascade Engine</code> and variant selection
           </p>
         </div>
-        <RefreshButton onClick={refreshAllData} />
+        <RefreshButton onClick={refreshAllData} isLoading={isLoading} />
       </div>
       
       {/* Status Card */}
@@ -97,237 +111,354 @@ export default function CCE() {
                 {cceHealth.error?.message || "Unable to fetch service health information. Please verify the CCE service is running."}
               </AlertDescription>
             </Alert>
+          ) : cceHealth.isLoading ? (
+            <div className="space-y-4">
+              <div className="flex justify-between">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-4 w-32" />
+              </div>
+              <div className="flex justify-between">
+                <Skeleton className="h-4 w-28" />
+                <Skeleton className="h-4 w-40" />
+              </div>
+              <div className="flex justify-between">
+                <Skeleton className="h-4 w-20" />
+                <Skeleton className="h-4 w-36" />
+              </div>
+            </div>
+          ) : serviceStatus ? (
+            <div className="space-y-2">
+              <div className="flex justify-between">
+                <span className="text-sm text-gray-500">Version</span>
+                <span className="text-sm font-mono">{serviceStatus.version}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm text-gray-500">Uptime</span>
+                <span className="text-sm font-mono">{serviceStatus.uptime}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm text-gray-500">Active Variant</span>
+                <span className="text-sm font-mono">
+                  {recentCCEResponses.isLoading ? (
+                    <Skeleton className="h-4 w-20 inline-block" />
+                  ) : (
+                    activeVariant
+                  )}
+                </span>
+              </div>
+              {memoryUsage !== undefined && (
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-500">Memory Usage</span>
+                  <span className="text-sm font-mono">
+                    {memoryUsage.toFixed(1)} MB
+                  </span>
+                </div>
+              )}
+            </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
-              <div>
-                <p className="text-sm text-gray-500 mb-1">Connection</p>
-                {cceHealth.isLoading ? (
-                  <Skeleton className="h-5 w-32" />
-                ) : serviceStatus ? (
-                  <p className="text-lg">{serviceStatus.url}</p>
-                ) : (
-                  <p className="text-red-500">Unreachable</p>
-                )}
-              </div>
-              <div>
-                <p className="text-sm text-gray-500 mb-1">Uptime</p>
-                {cceHealth.isLoading ? (
-                  <Skeleton className="h-5 w-32" />
-                ) : serviceStatus?.uptime ? (
-                  <p className="text-lg">{serviceStatus.uptime}</p>
-                ) : (
-                  <p className="text-gray-400">Unknown</p>
-                )}
-              </div>
-              <div>
-                <p className="text-sm text-gray-500 mb-1">Active Variant</p>
-                {recentCCEResponses.isLoading || cceHealth.isLoading ? (
-                  <Skeleton className="h-5 w-32" />
-                ) : recentCCEResponses.isError ? (
-                  <p className="text-red-500">Error</p>
-                ) : (
-                  <p className="text-lg font-mono text-secondary">{activeVariant}</p>
-                )}
-              </div>
+            <div className="text-center py-4 text-gray-400">
+              <p>No status information available</p>
             </div>
           )}
         </CardContent>
       </Card>
       
-      {/* Tabs for different views */}
-      <Tabs defaultValue="variants" className="mb-6">
+      {/* Tabs */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-6">
         <TabsList>
-          <TabsTrigger value="variants" onClick={() => setActiveTab("variants")}>Variant Selection</TabsTrigger>
+          <TabsTrigger value="overview">
+            Overview
+          </TabsTrigger>
+          <TabsTrigger value="responses">
+            Recent Responses
+          </TabsTrigger>
           {explainabilityEnabled && (
-            <TabsTrigger value="llm" onClick={() => setActiveTab("llm")}>LLM Guidance</TabsTrigger>
-          )}
-          {explainabilityEnabled && (
-            <TabsTrigger value="errors" onClick={() => setActiveTab("errors")}>Errors</TabsTrigger>
+            <TabsTrigger value="diagnostics">
+              Diagnostics
+            </TabsTrigger>
           )}
         </TabsList>
-        
-        <TabsContent value="variants" className="mt-4">
-          <div className="grid grid-cols-1 gap-6">
-            <CCEChart
-              title="Variant Distribution (Last 12 Hours)"
-              data={recentCCEResponses.data?.data?.recent_responses || []}
-              isLoading={recentCCEResponses.isLoading}
-              isError={recentCCEResponses.isError}
-              error={recentCCEResponses.error}
-            />
-            
+
+        {/* Overview Tab */}
+        <TabsContent value="overview" className="mt-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             <Card>
-              <CardHeader>
-                <CardTitle>Recent Variant Selections</CardTitle>
+              <CardHeader className="pb-2">
+                <CardTitle>Latest CCE Activity</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {recentCCEResponses.isLoading ? (
+                  <div className="space-y-4">
+                    <Skeleton className="h-20 w-full" />
+                    <Skeleton className="h-4 w-3/4" />
+                    <Skeleton className="h-4 w-1/2" />
+                  </div>
+                ) : recentCCEResponses.isError ? (
+                  <Alert variant="destructive">
+                    <AlertTitle>Failed to load recent responses</AlertTitle>
+                    <AlertDescription>
+                      {recentCCEResponses.error?.message || "An error occurred while fetching recent CCE responses."}
+                    </AlertDescription>
+                  </Alert>
+                ) : responsesCount > 0 ? (
+                  <div className="space-y-4">
+                    <div>
+                      <p className="text-sm text-gray-500 mb-1">Latest Response</p>
+                      <div className="bg-card border rounded-md p-3">
+                        <div className="flex justify-between mb-2">
+                          <Badge variant="outline">
+                            {recentResponses[0].variant_output?.variant_type || "Unknown"}
+                          </Badge>
+                          <span className="text-xs text-gray-500">
+                            {formatTime(recentResponses[0].timestamp)}
+                          </span>
+                        </div>
+                        <p className="text-sm truncate">
+                          {recentResponses[0].input?.substring(0, 60)}...
+                        </p>
+                        {recentResponses[0].status === "error" && (
+                          <Alert variant="destructive" className="mt-2">
+                            <AlertDescription>
+                              {recentResponses[0].error || "Unknown error"}
+                            </AlertDescription>
+                          </Alert>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-sm text-gray-500 mb-1">Errors ({errorResponses.length})</p>
+                      {errorResponses.length > 0 ? (
+                        <div className="text-sm text-destructive">
+                          {errorResponses.length} error(s) in the last {responsesCount} responses
+                        </div>
+                      ) : (
+                        <div className="text-sm text-primary">No errors detected</div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-4 text-gray-400">
+                    <p>No recent responses available</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle>Variant Usage</CardTitle>
               </CardHeader>
               <CardContent>
                 {recentCCEResponses.isLoading ? (
                   <div className="space-y-4">
                     <Skeleton className="h-32 w-full" />
+                    <Skeleton className="h-4 w-2/3" />
                   </div>
                 ) : recentCCEResponses.isError ? (
                   <Alert variant="destructive">
-                    <AlertTitle>Failed to load variant selection data</AlertTitle>
+                    <AlertTitle>Failed to load variant data</AlertTitle>
                     <AlertDescription>
-                      {recentCCEResponses.error?.message || "An error occurred while fetching CCE response data."}
+                      {recentCCEResponses.error?.message || "An error occurred while fetching variant usage data."}
                     </AlertDescription>
                   </Alert>
-                ) : variantSelections.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="w-[120px]">Timestamp</TableHead>
-                          <TableHead>Selected Variant</TableHead>
-                          <TableHead>Reason</TableHead>
-                          <TableHead className="text-center">Perf. Used</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {variantSelections.map((response: CCEResponse, index: number) => (
-                          <TableRow key={index}>
-                            <TableCell className="font-mono text-xs">
-                              {formatTime(response.timestamp)}
-                            </TableCell>
-                            <TableCell>
-                              <Badge className="bg-muted text-secondary">
-                                {response.variant_selection?.selected_variant}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-sm">
-                              {response.variant_selection?.reason || "N/A"}
-                            </TableCell>
-                            <TableCell className="text-center">
-                              {response.variant_selection?.performance_used ? (
-                                <i className="fas fa-check text-green-400"></i>
-                              ) : (
-                                <i className="fas fa-times text-gray-500"></i>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                ) : responsesCount > 0 ? (
+                  <div>
+                    <div className="h-32 mb-4 text-center text-gray-400">
+                      <CCEChart 
+                        data={recentResponses} 
+                        isLoading={recentCCEResponses.isLoading}
+                        isError={recentCCEResponses.isError}
+                        error={recentCCEResponses.error}
+                        title="Variant Distribution"
+                      />
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <p className="text-xs">Most Used Variant:</p>
+                          <p className="font-mono">
+                            {/* Logic to determine most used variant */}
+                            {activeVariant}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs">Avg. Response Time:</p>
+                          <p className="font-mono">
+                            {avgResponseTime !== undefined ? 
+                              `${avgResponseTime.toFixed(2)} ms` : "N/A"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 ) : (
-                  <p className="text-gray-400 text-center py-4">No variant selection data available</p>
+                  <div className="text-center py-4 text-gray-400">
+                    <p>No variant data available</p>
+                  </div>
                 )}
               </CardContent>
             </Card>
           </div>
         </TabsContent>
-        
-        {explainabilityEnabled && (
-          <TabsContent value="llm" className="mt-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>LLM Guidance Usage</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {recentCCEResponses.isLoading ? (
-                  <div className="space-y-4">
-                    <Skeleton className="h-64 w-full" />
-                  </div>
-                ) : recentCCEResponses.isError ? (
-                  <Alert variant="destructive">
-                    <AlertTitle>Failed to load LLM guidance data</AlertTitle>
-                    <AlertDescription>
-                      {recentCCEResponses.error?.message || "An error occurred while fetching LLM guidance data."}
-                    </AlertDescription>
-                  </Alert>
-                ) : llmGuidanceResponses.length > 0 ? (
-                  <div className="space-y-4">
-                    {llmGuidanceResponses.map((response: CCEResponse, index: number) => (
-                      <div key={index} className="border border-border rounded-lg p-4">
-                        <div className="flex justify-between mb-3">
-                          <span className="text-xs text-gray-400">
-                            {new Date(response.timestamp).toLocaleString()}
-                          </span>
-                          <Badge variant="outline" className="text-primary border-primary">
-                            Confidence: {response.llm_advice_used?.confidence_level.toFixed(2)}
-                          </Badge>
-                        </div>
-                        
-                        <h4 className="text-sm font-medium mb-2">Adjusted Advice</h4>
-                        <div className="bg-muted p-3 rounded text-sm mb-4 font-mono">
-                          {response.llm_advice_used?.adjusted_advice || "N/A"}
-                        </div>
-                        
-                        {response.llm_advice_used?.raw_advice && (
-                          <>
-                            <h4 className="text-sm font-medium mb-2">Raw LLM Advice</h4>
-                            <div className="bg-muted p-3 rounded text-sm mb-4 font-mono text-xs overflow-auto max-h-32">
-                              {response.llm_advice_used.raw_advice}
-                            </div>
-                          </>
-                        )}
-                        
-                        {response.llm_advice_used?.adjustment_reason && (
-                          <div className="text-xs text-gray-400">
-                            <span className="text-secondary">Adjustment Reason:</span> {response.llm_advice_used.adjustment_reason}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-gray-400 text-center py-4">No LLM guidance data available</p>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        )}
-        
-        {explainabilityEnabled && (
-          <TabsContent value="errors" className="mt-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>Recent Errors</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {recentCCEResponses.isLoading ? (
-                  <div className="space-y-4">
-                    <Skeleton className="h-32 w-full" />
-                  </div>
-                ) : recentCCEResponses.isError ? (
-                  <Alert variant="destructive">
-                    <AlertTitle>Failed to load error data</AlertTitle>
-                    <AlertDescription>
-                      {recentCCEResponses.error?.message || "An error occurred while fetching error data."}
-                    </AlertDescription>
-                  </Alert>
-                ) : errorResponses.length > 0 ? (
-                  <div className="space-y-4">
-                    {errorResponses.map((response: CCEResponse, index: number) => (
-                      <div key={index} className="border border-border rounded-lg p-4 bg-red-900/10">
-                        <div className="flex items-start">
-                          <i className="fas fa-exclamation-circle text-destructive mr-3 mt-1"></i>
-                          <div>
-                            <div className="flex items-center mb-2">
-                              <h4 className="text-sm font-medium mr-2">Error at {formatTime(response.timestamp)}</h4>
+
+        {/* Responses Tab */}
+        <TabsContent value="responses" className="mt-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle>Recent CCE Responses</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {recentCCEResponses.isLoading ? (
+                <div className="space-y-4">
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-32 w-full" />
+                </div>
+              ) : recentCCEResponses.isError ? (
+                <Alert variant="destructive">
+                  <AlertTitle>Failed to load recent responses</AlertTitle>
+                  <AlertDescription>
+                    {recentCCEResponses.error?.message || "An error occurred while fetching recent CCE responses."}
+                  </AlertDescription>
+                </Alert>
+              ) : responsesCount > 0 ? (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Time</TableHead>
+                        <TableHead>Input</TableHead>
+                        <TableHead>Variant</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {recentResponses.map((response: CCEResponse, index: number) => (
+                        <TableRow key={index}>
+                          <TableCell className="whitespace-nowrap">
+                            {formatTime(response.timestamp)}
+                          </TableCell>
+                          <TableCell className="max-w-xs truncate">
+                            {response.input?.substring(0, 50) || "N/A"}...
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">
+                              {response.variant_output?.variant_type || "Unknown"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {response.status === "error" ? (
                               <Badge variant="destructive">Error</Badge>
-                            </div>
-                            <p className="text-sm text-gray-300 mb-2">{response.error_details}</p>
-                            
-                            {response.variant_selection && (
-                              <div className="text-xs text-gray-400">
-                                <span>Attempted variant: </span>
-                                <span className="text-primary">{response.variant_selection.selected_variant}</span>
-                              </div>
+                            ) : (
+                              <Badge variant="default">Success</Badge>
                             )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : (
+                <div className="text-center py-8 text-gray-400">
+                  <p>No recent responses available</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Diagnostics Tab - Only show if explainabilityEnabled is true */}
+        {explainabilityEnabled && (
+          <TabsContent value="diagnostics" className="mt-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>LLM Guidance</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {recentCCEResponses.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-8 w-full" />
+                      <Skeleton className="h-40 w-full" />
+                    </div>
+                  ) : recentCCEResponses.isError ? (
+                    <Alert variant="destructive">
+                      <AlertTitle>Failed to load LLM guidance data</AlertTitle>
+                      <AlertDescription>
+                        {recentCCEResponses.error?.message || "An error occurred while fetching LLM guidance data."}
+                      </AlertDescription>
+                    </Alert>
+                  ) : llmGuidanceResponses.length > 0 ? (
+                    <div className="space-y-4">
+                      {llmGuidanceResponses.map((response: CCEResponse, idx: number) => (
+                        <div key={idx} className="border rounded-md p-3">
+                          <div className="flex justify-between mb-2">
+                            <Badge variant="outline">
+                              {response.variant_output?.variant_type || "Unknown"}
+                            </Badge>
+                            <span className="text-xs text-gray-500">
+                              {formatTime(response.timestamp)}
+                            </span>
+                          </div>
+                          <p className="text-sm mb-2 font-semibold">LLM Advice:</p>
+                          <p className="text-sm bg-primary/5 p-2 rounded">
+                            {response.llm_advice || "No specific advice recorded"}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 text-gray-400">
+                      <p>No LLM guidance data available</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle>Variant Selection History</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {recentCCEResponses.isLoading ? (
+                    <div className="space-y-4">
+                      <Skeleton className="h-8 w-full" />
+                      <Skeleton className="h-40 w-full" />
+                    </div>
+                  ) : recentCCEResponses.isError ? (
+                    <Alert variant="destructive">
+                      <AlertTitle>Failed to load variant selection data</AlertTitle>
+                      <AlertDescription>
+                        {recentCCEResponses.error?.message || "An error occurred while fetching variant selection data."}
+                      </AlertDescription>
+                    </Alert>
+                  ) : variantSelections.length > 0 ? (
+                    <div className="space-y-4">
+                      {variantSelections.map((response: CCEResponse, idx: number) => (
+                        <div key={idx} className="border rounded-md p-3">
+                          <div className="flex justify-between mb-2">
+                            <Badge variant="outline">
+                              {response.variant_output?.variant_type || "Unknown"}
+                            </Badge>
+                            <span className="text-xs text-gray-500">
+                              {formatTime(response.timestamp)}
+                            </span>
+                          </div>
+                          <div className="text-sm">
+                            <p className="mb-1"><span className="font-semibold">Input:</span> {response.input?.substring(0, 40)}...</p>
+                            <p><span className="font-semibold">Reason:</span> {response.variant_selection?.reason || "No reason provided"}</p>
                           </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-center py-8">
-                    <i className="fas fa-check-circle text-green-400 text-2xl mb-2"></i>
-                    <p className="text-gray-400">No errors detected in recent responses</p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 text-gray-400">
+                      <p>No variant selection data available</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           </TabsContent>
         )}
       </Tabs>
