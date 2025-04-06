@@ -205,6 +205,7 @@ async function proxyRequest(req: Request, res: Response, targetUrl: string, serv
   log(`Proxying ${method} ${req.originalUrl} to ${url}`);
 
   try {
+    log(`Proxy Attempt: ${method} ${url} with params ${JSON.stringify(req.query)}`);
     const response = await axios({
       method: method as any,
       url: url,
@@ -215,9 +216,16 @@ async function proxyRequest(req: Request, res: Response, targetUrl: string, serv
       },
       timeout: 20000 // 20 second timeout
     });
+    log(`Proxy Success: ${method} ${url} returned status ${response.status}`);
     res.status(response.status).json(response.data);
   } catch (error: any) {
     log(`Proxy Error for ${serviceName} to ${url}: ${error.message}`);
+    log(`Error Details: ${error.code || 'No code'}, IsAxiosError: ${axios.isAxiosError(error)}`);
+    
+    if (error.request) {
+      log(`Request made but no response received. Is the service running at ${targetUrl}?`);
+    }
+    
     if (axios.isAxiosError(error)) {
       const axiosError = error as AxiosError;
       const status = axiosError.response?.status || 500;

@@ -7,11 +7,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { RefreshCw } from 'lucide-react';
-import { MergeLogEntry } from '@shared/schema';
+import { useFeatures } from '@/contexts/FeaturesContext';
 
 export default function MemoryCoreDiagnostics() {
   const [selectedService, setSelectedService] = useState<string>('memory-core');
   const [logLimit, setLogLimit] = useState<number>(50);
+  const { explainabilityEnabled, isLoading: featuresLoading } = useFeatures();
   
   // Fetch merge log data
   const mergeLogQuery = useMergeLog(logLimit);
@@ -24,6 +25,52 @@ export default function MemoryCoreDiagnostics() {
     mergeLogQuery.refetch();
     configQuery.refetch();
   };
+  
+  if (featuresLoading) {
+    return (
+      <div className="container py-6">
+        <div className="space-y-6">
+          <div className="flex justify-between items-center">
+            <h1 className="text-2xl font-semibold">Memory Core Diagnostics</h1>
+          </div>
+          <Card>
+            <CardContent className="pt-6">
+              <div className="space-y-2">
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-4 w-5/6" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+  
+  if (!explainabilityEnabled) {
+    return (
+      <div className="container py-6">
+        <div className="space-y-6">
+          <div className="flex justify-between items-center">
+            <h1 className="text-2xl font-semibold">Memory Core Diagnostics</h1>
+          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle>Explainability Features Disabled</CardTitle>
+              <CardDescription>
+                The explainability features are currently disabled in the Memory Core configuration.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <p className="text-muted-foreground">
+                To enable these features, set <code className="bg-muted p-1 rounded">ENABLE_EXPLAINABILITY=true</code> in your Memory Core configuration.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
   
   return (
     <div className="container py-6">
@@ -38,7 +85,7 @@ export default function MemoryCoreDiagnostics() {
         
         {/* Merge Log */}
         <MergeLogView
-          entries={mergeLogQuery.data as MergeLogEntry[] | undefined}
+          entries={mergeLogQuery.data?.reconciled_log_entries}
           isLoading={mergeLogQuery.isLoading}
           isError={mergeLogQuery.isError}
           error={mergeLogQuery.error as Error}
@@ -88,7 +135,7 @@ export default function MemoryCoreDiagnostics() {
                     </tr>
                   </thead>
                   <tbody className="divide-y">
-                    {Object.entries(configQuery.data || {}).map(([key, value]) => (
+                    {configQuery.data?.config && Object.entries(configQuery.data.config).map(([key, value]) => (
                       <tr key={key} className="hover:bg-muted/50">
                         <td className="py-2 font-mono text-sm">{key}</td>
                         <td className="py-2 font-mono text-sm">

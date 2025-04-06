@@ -78,7 +78,7 @@ export default function Chat() {
           content: "Chat interface connected. Waiting for input... (Backend integration required)",
           timestamp: new Date(),
           metrics: {
-            variant: "MAC-13b",
+            variant: "MAC",
             surprise_level: 0.42,
             retrieved_memory_ids: ["MEM-123456", "MEM-789012"]
           }
@@ -211,7 +211,7 @@ export default function Chat() {
             <div className="space-y-4">
               <div>
                 <p className="text-sm text-gray-500 mb-1">Active Variant</p>
-                <Badge className="bg-muted text-secondary">MAC-13b</Badge>
+                <Badge className="bg-muted text-secondary">MAC</Badge>
               </div>
               
               <div>

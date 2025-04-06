@@ -39,7 +39,7 @@ export class MemStorage implements IStorage {
         id: "alert-3",
         type: "warning",
         title: "CCE variant selection fluctuating",
-        description: "Unusual switching between MAC-7b and MAC-13b variants detected (8 switches in 2 hours).",
+        description: "Unusual switching between MAC and MAG variants detected (8 switches in 2 hours).",
         timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString(), // 1 hour ago
         source: "CCE"
       }

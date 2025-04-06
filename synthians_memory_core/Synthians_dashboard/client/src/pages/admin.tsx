@@ -9,7 +9,7 @@ import { verifyMemoryCoreIndex, triggerMemoryCoreRetryLoop, initializeNeuralMemo
 
 export default function Admin() {
   const { toast } = useToast();
-  const [selectedVariant, setSelectedVariant] = useState("MAC-13b");
+  const [selectedVariant, setSelectedVariant] = useState("MAC");
   const [isLoading, setIsLoading] = useState({
     verifyIndex: false,
     retryLoop: false,
@@ -271,9 +271,9 @@ export default function Admin() {
                     <SelectValue placeholder="Select variant" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="MAC-7b">MAC-7b</SelectItem>
-                    <SelectItem value="MAC-13b">MAC-13b</SelectItem>
-                    <SelectItem value="TITAN-7b">TITAN-7b</SelectItem>
+                    <SelectItem value="MAC">MAC</SelectItem>
+                    <SelectItem value="MAG">MAG</SelectItem>
+                    <SelectItem value="MAL">MAL</SelectItem>
                   </SelectContent>
                 </Select>
                 

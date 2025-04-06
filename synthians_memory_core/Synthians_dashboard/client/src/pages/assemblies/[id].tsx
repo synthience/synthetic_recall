@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useAssembly } from "@/lib/api";
+import { useAssembly, useAssemblyLineage, useExplainMerge, useExplainActivation } from "@/lib/api";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -9,15 +9,28 @@ import { RefreshButton } from "@/components/ui/RefreshButton";
 import { useToast } from "@/hooks/use-toast";
 import { Link, useParams } from "wouter";
 import { usePollingStore } from "@/lib/store";
+import { LineageView } from "@/components/dashboard/LineageView";
+import { MergeExplanationView } from "@/components/dashboard/MergeExplanationView";
+import { ActivationExplanationView } from "@/components/dashboard/ActivationExplanationView";
+import { useFeatures } from "@/contexts/FeaturesContext";
+import { Input } from "@/components/ui/input";
 
 export default function AssemblyDetail() {
   const { id } = useParams();
   const { refreshAllData } = usePollingStore();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState("overview");
+  const { explainabilityEnabled } = useFeatures();
+  const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
+  const [maxDepth, setMaxDepth] = useState<number>(5);
   
   // Fetch assembly data
   const { data, isLoading, isError, error, refetch } = useAssembly(id || null);
+  
+  // Fetch explainability data when needed
+  const lineageQuery = useAssemblyLineage(id || null);
+  const mergeExplanationQuery = useExplainMerge(id || null);
+  const activationExplanationQuery = useExplainActivation(id || null, selectedMemoryId || undefined);
   
   useEffect(() => {
     if (isError) {
@@ -34,8 +47,9 @@ export default function AssemblyDetail() {
     if (!assembly?.vector_index_updated_at) {
       return {
         label: "Pending",
-        color: "text-yellow-400",
-        bgColor: "bg-muted/50"
+        color: "text-yellow-500 dark:text-yellow-400",
+        bgColor: "bg-yellow-100 dark:bg-yellow-900/20",
+        icon: "fas fa-clock"
       };
     }
     
@@ -45,15 +59,17 @@ export default function AssemblyDetail() {
     if (vectorDate >= updateDate) {
       return {
         label: "Indexed",
-        color: "text-secondary",
-        bgColor: "bg-muted/50"
+        color: "text-green-600 dark:text-green-400",
+        bgColor: "bg-green-100 dark:bg-green-900/20",
+        icon: "fas fa-check"
       };
     }
     
     return {
       label: "Syncing",
-      color: "text-primary",
-      bgColor: "bg-muted/50"
+      color: "text-blue-600 dark:text-blue-400",
+      bgColor: "bg-blue-100 dark:bg-blue-900/20",
+      icon: "fas fa-sync-alt"
     };
   };
   
@@ -62,7 +78,7 @@ export default function AssemblyDetail() {
     return new Date(timestamp).toLocaleString();
   };
   
-  const assembly = data?.data || null;
+  const assembly = data;
   const syncStatus = assembly ? getSyncStatus(assembly) : null;
   
   const handleRefresh = () => {
@@ -126,6 +142,7 @@ export default function AssemblyDetail() {
                   variant="outline" 
                   className={`${syncStatus?.bgColor} ${syncStatus?.color} self-start`}
                 >
+                  <i className={`${syncStatus?.icon} mr-1 text-xs`}></i>
                   {syncStatus?.label}
                 </Badge>
               </div>
@@ -160,6 +177,16 @@ export default function AssemblyDetail() {
               <TabsTrigger value="metadata" onClick={() => setActiveTab("metadata")}>Metadata</TabsTrigger>
               {assembly.vector_index_updated_at && (
                 <TabsTrigger value="embedding" onClick={() => setActiveTab("embedding")}>Embedding</TabsTrigger>
+              )}
+              {explainabilityEnabled && (
+                <>
+                  <TabsTrigger value="lineage" onClick={() => setActiveTab("lineage")}>Lineage</TabsTrigger>
+                  <TabsTrigger value="merge" onClick={() => {
+                    setActiveTab("merge");
+                    mergeExplanationQuery.refetch();
+                  }}>Merge Explanation</TabsTrigger>
+                  <TabsTrigger value="activation" onClick={() => setActiveTab("activation")}>Activation</TabsTrigger>
+                </>
               )}
             </TabsList>
             
@@ -211,6 +238,7 @@ export default function AssemblyDetail() {
                             variant="outline" 
                             className={`${syncStatus?.bgColor} ${syncStatus?.color}`}
                           >
+                            <i className={`${syncStatus?.icon} mr-1 text-xs`}></i>
                             {syncStatus?.label}
                           </Badge>
                         </div>
@@ -333,6 +361,102 @@ export default function AssemblyDetail() {
                   </CardContent>
                 </Card>
               </TabsContent>
+            )}
+            
+            {explainabilityEnabled && (
+              <>
+                <TabsContent value="lineage" className="mt-4">
+                  <LineageView 
+                    lineage={lineageQuery.data?.lineage} 
+                    isLoading={lineageQuery.isLoading} 
+                    isError={lineageQuery.isError} 
+                    error={lineageQuery.error as Error | null}
+                  />
+                  <Card className="mt-4">
+                    <CardHeader>
+                      <CardTitle>Lineage Options</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="flex items-center gap-4">
+                        <div className="flex-1">
+                          <p className="text-sm text-muted-foreground mb-2">Maximum Depth</p>
+                          <Input 
+                            type="number" 
+                            min={1} 
+                            max={10} 
+                            value={maxDepth} 
+                            onChange={(e) => setMaxDepth(parseInt(e.target.value) || 5)} 
+                          />
+                        </div>
+                        <Button onClick={() => lineageQuery.refetch()} className="self-end">
+                          Refresh Lineage
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+                
+                <TabsContent value="merge" className="mt-4">
+                  <MergeExplanationView 
+                    mergeData={mergeExplanationQuery.data?.explanation} 
+                    isLoading={mergeExplanationQuery.isLoading} 
+                    isError={mergeExplanationQuery.isError} 
+                    error={mergeExplanationQuery.error as Error | null}
+                  />
+                  <Card className="mt-4">
+                    <CardHeader>
+                      <CardTitle>Merge Explanation Actions</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <Button onClick={() => mergeExplanationQuery.refetch()}>
+                        Refresh Merge Data
+                      </Button>
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+                
+                <TabsContent value="activation" className="mt-4">
+                  <Card className="mb-4">
+                    <CardHeader>
+                      <CardTitle>Select Memory to Explain Activation</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 max-h-48 overflow-y-auto p-1">
+                        {assembly?.memory_ids?.map((memId: string) => (
+                          <Button 
+                            key={memId} 
+                            variant={selectedMemoryId === memId ? "default" : "outline"}
+                            className={`justify-start font-mono text-xs ${selectedMemoryId === memId ? "bg-primary" : ""}`}
+                            onClick={() => {
+                              setSelectedMemoryId(memId);
+                              activationExplanationQuery.refetch();
+                            }}
+                          >
+                            <i className="fas fa-memory mr-2"></i>
+                            {memId}
+                          </Button>
+                        )) || <p className="text-muted-foreground">No memories in this assembly</p>}
+                      </div>
+                    </CardContent>
+                  </Card>
+                  
+                  {selectedMemoryId ? (
+                    <ActivationExplanationView 
+                      activationData={activationExplanationQuery.data?.explanation} 
+                      memoryId={selectedMemoryId}
+                      isLoading={activationExplanationQuery.isLoading} 
+                      isError={activationExplanationQuery.isError} 
+                      error={activationExplanationQuery.error as Error | null}
+                    />
+                  ) : (
+                    <Card>
+                      <CardContent className="text-center py-8">
+                        <p className="text-muted-foreground">Select a memory to view activation details</p>
+                      </CardContent>
+                    </Card>
+                  )}
+                </TabsContent>
+              </>
             )}
           </Tabs>
         </>

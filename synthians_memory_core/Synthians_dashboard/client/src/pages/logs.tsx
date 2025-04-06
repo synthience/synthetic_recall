@@ -6,6 +6,10 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
+import { MergeLogView } from "@/components/dashboard/MergeLogView";
+import { useFeatures } from "@/contexts/FeaturesContext";
+import { useMergeLog } from "@/lib/api";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 // Mock log data structure (will be replaced with WebSocket data in the future)
 interface LogEntry {
@@ -52,6 +56,12 @@ export default function Logs() {
   const [levelFilter, setLevelFilter] = useState<string>("all");
   const [searchTerm, setSearchTerm] = useState("");
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  
+  // Get feature flags
+  const { explainabilityEnabled, isLoading: featuresLoading } = useFeatures();
+  
+  // Fetch merge logs if explainability is enabled
+  const mergeLogQuery = useMergeLog(50);
   
   // Create placeholder text explaining this is a future feature
   const placeholderInfo = (
@@ -223,6 +233,39 @@ export default function Logs() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Merge Log - Phase 5.9 feature */}
+      {explainabilityEnabled ? (
+        <div className="mt-8">
+          <MergeLogView 
+            entries={mergeLogQuery.data?.reconciled_log_entries} 
+            isLoading={mergeLogQuery.isLoading} 
+            isError={mergeLogQuery.isError} 
+            error={mergeLogQuery.error as Error | null} 
+          />
+        </div>
+      ) : featuresLoading ? (
+        <div className="mt-8">
+          <Card>
+            <CardContent className="py-6">
+              <div className="flex justify-center">
+                <div className="w-6 h-6 border-2 border-t-transparent border-primary rounded-full animate-spin"></div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      ) : (
+        <div className="mt-8">
+          <Alert>
+            <i className="fas fa-lock mr-2"></i>
+            <AlertTitle>Merge Log Feature Disabled</AlertTitle>
+            <AlertDescription>
+              The merge log feature is part of Phase 5.9 explainability features and is currently disabled. 
+              Enable the feature by setting ENABLE_EXPLAINABILITY=true in the Memory Core configuration.
+            </AlertDescription>
+          </Alert>
+        </div>
+      )}
     </>
   );
 }

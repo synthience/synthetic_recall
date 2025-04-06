@@ -1,16 +1,19 @@
 import React from "react";
 import { Link } from "wouter";
-import { Alert } from "@shared/schema";
+import { Alert as AlertType } from "@shared/schema";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 interface DiagnosticAlertsProps {
-  alerts: Alert[] | null;
+  alerts: AlertType[] | null;
   isLoading: boolean;
+  isError?: boolean;
+  error?: Error | null;
 }
 
-export function DiagnosticAlerts({ alerts, isLoading }: DiagnosticAlertsProps) {
+export function DiagnosticAlerts({ alerts, isLoading, isError = false, error = null }: DiagnosticAlertsProps) {
   const getAlertIcon = (type: string) => {
     switch (type) {
       case 'error':
@@ -34,7 +37,7 @@ export function DiagnosticAlerts({ alerts, isLoading }: DiagnosticAlertsProps) {
         return 'text-secondary';
     }
   };
-  
+
   const getActionColor = (type: string) => {
     switch (type) {
       case 'error':
@@ -92,7 +95,19 @@ export function DiagnosticAlerts({ alerts, isLoading }: DiagnosticAlertsProps) {
               </div>
             </div>
           ))
-        ) : alerts && alerts.length > 0 ? (
+        ) : isError ? (
+          <Alert variant="destructive" className="mb-4">
+            <AlertTitle>Failed to load alerts</AlertTitle>
+            <AlertDescription>
+              {error?.message || "There was an error fetching diagnostic alerts. Please try again later."}
+            </AlertDescription>
+          </Alert>
+        ) : !alerts || alerts.length === 0 ? (
+          <div className="p-4 text-center text-sm text-gray-400">
+            <i className="fas fa-info-circle mr-2"></i>
+            No diagnostic alerts to display
+          </div>
+        ) : (
           alerts.map((alert) => (
             <div 
               key={alert.id} 
@@ -115,11 +130,6 @@ export function DiagnosticAlerts({ alerts, isLoading }: DiagnosticAlertsProps) {
               </div>
             </div>
           ))
-        ) : (
-          <div className="p-4 text-center text-sm text-gray-400">
-            <i className="fas fa-info-circle mr-2"></i>
-            No diagnostic alerts to display
-          </div>
         )}
       </div>
     </div>

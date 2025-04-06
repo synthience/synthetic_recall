@@ -1,21 +1,30 @@
-import React from "react";
-import { useMemoryCoreStats, useNeuralMemoryConfig, useCCEConfig } from "@/lib/api";
+import React, { useState } from "react";
+import { useRuntimeConfig } from "@/lib/api";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RefreshButton } from "@/components/ui/RefreshButton";
 import { usePollingStore } from "@/lib/store";
+import { useFeatures } from "@/contexts/FeaturesContext";
 
 // Component for displaying config key-value pairs
-function ConfigItem({ label, value }: { label: string, value: string | number | boolean }) {
+function ConfigItem({ label, value }: { label: string, value: any }) {
+  const renderValue = () => {
+    if (value === null || value === undefined) return "null";
+    
+    if (typeof value === "object") {
+      return JSON.stringify(value, null, 2);
+    }
+    
+    return value.toString();
+  };
+
   return (
     <div className="py-2 border-b border-border last:border-0">
       <div className="flex justify-between items-start">
         <span className="text-sm font-medium">{label}</span>
         <span className="font-mono text-sm bg-muted px-2 py-1 rounded max-w-[50%] break-all">
-          {typeof value === "boolean" 
-            ? value ? "true" : "false"
-            : value.toString()}
+          {renderValue()}
         </span>
       </div>
     </div>
@@ -24,11 +33,23 @@ function ConfigItem({ label, value }: { label: string, value: string | number | 
 
 export default function Config() {
   const { refreshAllData } = usePollingStore();
+  const { explainabilityEnabled, isLoading: featuresLoading } = useFeatures();
+  const [selectedService, setSelectedService] = useState<string>("memory-core");
   
-  // Fetch configuration data
-  const memoryCoreStats = useMemoryCoreStats();
-  const neuralMemoryConfig = useNeuralMemoryConfig();
-  const cceConfig = useCCEConfig();
+  // Fetch runtime configuration data for the selected service
+  const memoryConfig = useRuntimeConfig("memory-core");
+  const neuralConfig = useRuntimeConfig("neural-memory");
+  const cceConfig = useRuntimeConfig("cce");
+
+  const handleTabChange = (value: string) => {
+    setSelectedService(value);
+  };
+
+  const handleRefresh = () => {
+    memoryConfig.refetch();
+    neuralConfig.refetch();
+    cceConfig.refetch();
+  };
   
   return (
     <>
@@ -39,10 +60,10 @@ export default function Config() {
             Display current runtime configurations of all services
           </p>
         </div>
-        <RefreshButton onClick={refreshAllData} />
+        <RefreshButton onClick={handleRefresh} />
       </div>
       
-      <Tabs defaultValue="memory-core" className="mb-6">
+      <Tabs defaultValue="memory-core" className="mb-6" onValueChange={handleTabChange}>
         <TabsList className="mb-4">
           <TabsTrigger value="memory-core">Memory Core</TabsTrigger>
           <TabsTrigger value="neural-memory">Neural Memory</TabsTrigger>
@@ -56,39 +77,43 @@ export default function Config() {
               <CardDescription>Runtime configuration settings for the Memory Core service</CardDescription>
             </CardHeader>
             <CardContent>
-              {memoryCoreStats.isLoading ? (
+              {memoryConfig.isLoading ? (
                 <div className="space-y-4">
                   <Skeleton className="h-10 w-full" />
                   <Skeleton className="h-10 w-full" />
                   <Skeleton className="h-10 w-full" />
                   <Skeleton className="h-10 w-full" />
                 </div>
-              ) : memoryCoreStats.data?.data ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <h3 className="text-sm font-medium text-primary mb-2 uppercase">Vector Index Configuration</h3>
-                    <div className="space-y-0">
-                      <ConfigItem label="Index Type" value={memoryCoreStats.data.data.vector_index.index_type} />
-                      <ConfigItem label="GPU Enabled" value={memoryCoreStats.data.data.vector_index.gpu_enabled} />
-                      <ConfigItem label="Drift Threshold" value={100} />
-                      <ConfigItem label="Dimension" value={1536} />
+              ) : memoryConfig.error ? (
+                <div className="text-center py-8 text-gray-400">
+                  <i className="fas fa-exclamation-circle text-destructive mr-2"></i>
+                  Failed to load Memory Core configuration
+                </div>
+              ) : memoryConfig.data?.config ? (
+                <div>
+                  {explainabilityEnabled && (
+                    <div className="bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200 p-3 rounded-md mb-4">
+                      <h3 className="font-semibold mb-1">Explainability Features: Enabled</h3>
+                      <p className="text-sm">Diagnostic and explainability features are currently active.</p>
                     </div>
-                  </div>
-                  
-                  <div>
-                    <h3 className="text-sm font-medium text-primary mb-2 uppercase">Process Configuration</h3>
-                    <div className="space-y-0">
-                      <ConfigItem label="Assembly Pruning" value={memoryCoreStats.data.data.assembly_stats.pruning_enabled} />
-                      <ConfigItem label="Assembly Merging" value={memoryCoreStats.data.data.assembly_stats.merging_enabled} />
-                      <ConfigItem label="Quick Recall Threshold" value={0.95} />
-                      <ConfigItem label="Persistence Enabled" value={true} />
+                  )}
+
+                  {!explainabilityEnabled && (
+                    <div className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 p-3 rounded-md mb-4">
+                      <h3 className="font-semibold mb-1">Explainability Features: Disabled</h3>
+                      <p className="text-sm">Set <code className="bg-muted p-1 rounded">ENABLE_EXPLAINABILITY=true</code> to activate diagnostic features.</p>
                     </div>
+                  )}
+
+                  <div className="space-y-0">
+                    {Object.entries(memoryConfig.data.config).map(([key, value]) => (
+                      <ConfigItem key={key} label={key} value={value} />
+                    ))}
                   </div>
                 </div>
               ) : (
                 <div className="text-center py-8 text-gray-400">
-                  <i className="fas fa-exclamation-circle text-destructive mr-2"></i>
-                  Failed to load Memory Core configuration
+                  No configuration data available
                 </div>
               )}
             </CardContent>
@@ -102,39 +127,27 @@ export default function Config() {
               <CardDescription>Runtime configuration settings for the Neural Memory service</CardDescription>
             </CardHeader>
             <CardContent>
-              {neuralMemoryConfig.isLoading ? (
+              {neuralConfig.isLoading ? (
                 <div className="space-y-4">
                   <Skeleton className="h-10 w-full" />
                   <Skeleton className="h-10 w-full" />
                   <Skeleton className="h-10 w-full" />
                   <Skeleton className="h-10 w-full" />
                 </div>
-              ) : neuralMemoryConfig.data?.data ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <h3 className="text-sm font-medium text-primary mb-2 uppercase">Model Configuration</h3>
-                    <div className="space-y-0">
-                      <ConfigItem label="Dimensions" value={neuralMemoryConfig.data.data.dimensions} />
-                      <ConfigItem label="Hidden Size" value={neuralMemoryConfig.data.data.hidden_size} />
-                      <ConfigItem label="Layers" value={neuralMemoryConfig.data.data.layers} />
-                      <ConfigItem label="Attention Heads" value={neuralMemoryConfig.data.data.attention_heads || 12} />
-                    </div>
-                  </div>
-                  
-                  <div>
-                    <h3 className="text-sm font-medium text-primary mb-2 uppercase">Training Configuration</h3>
-                    <div className="space-y-0">
-                      <ConfigItem label="Learning Rate" value={neuralMemoryConfig.data.data.learning_rate || 0.0001} />
-                      <ConfigItem label="Batch Size" value={neuralMemoryConfig.data.data.batch_size || 32} />
-                      <ConfigItem label="Gradient Clip" value={neuralMemoryConfig.data.data.gradient_clip || 1.0} />
-                      <ConfigItem label="Emotional Boost" value={neuralMemoryConfig.data.data.emotional_boost || true} />
-                    </div>
-                  </div>
-                </div>
-              ) : (
+              ) : neuralConfig.error ? (
                 <div className="text-center py-8 text-gray-400">
                   <i className="fas fa-exclamation-circle text-destructive mr-2"></i>
                   Failed to load Neural Memory configuration
+                </div>
+              ) : neuralConfig.data?.config ? (
+                <div className="space-y-0">
+                  {Object.entries(neuralConfig.data.config).map(([key, value]) => (
+                    <ConfigItem key={key} label={key} value={value} />
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-gray-400">
+                  No configuration data available
                 </div>
               )}
             </CardContent>
@@ -155,66 +168,26 @@ export default function Config() {
                   <Skeleton className="h-10 w-full" />
                   <Skeleton className="h-10 w-full" />
                 </div>
-              ) : cceConfig.data?.data ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <h3 className="text-sm font-medium text-primary mb-2 uppercase">Variant Configuration</h3>
-                    <div className="space-y-0">
-                      <ConfigItem label="Active Variant" value={cceConfig.data.data.active_variant} />
-                      <ConfigItem label="Confidence Threshold" value={cceConfig.data.data.variant_confidence_threshold} />
-                      <ConfigItem label="Auto Selection" value={true} />
-                      <ConfigItem label="Performance Based" value={true} />
-                    </div>
-                  </div>
-                  
-                  <div>
-                    <h3 className="text-sm font-medium text-primary mb-2 uppercase">LLM Configuration</h3>
-                    <div className="space-y-0">
-                      <ConfigItem label="LLM Guidance Enabled" value={cceConfig.data.data.llm_guidance_enabled} />
-                      <ConfigItem label="Retry Attempts" value={cceConfig.data.data.retry_attempts} />
-                      <ConfigItem label="Timeout (ms)" value={3000} />
-                      <ConfigItem label="Cache Results" value={true} />
-                    </div>
-                  </div>
-                </div>
-              ) : (
+              ) : cceConfig.error ? (
                 <div className="text-center py-8 text-gray-400">
                   <i className="fas fa-exclamation-circle text-destructive mr-2"></i>
                   Failed to load CCE configuration
+                </div>
+              ) : cceConfig.data?.config ? (
+                <div className="space-y-0">
+                  {Object.entries(cceConfig.data.config).map(([key, value]) => (
+                    <ConfigItem key={key} label={key} value={value} />
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-gray-400">
+                  No configuration data available
                 </div>
               )}
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
-      
-      <Card>
-        <CardHeader>
-          <CardTitle>Environment Variables</CardTitle>
-          <CardDescription>System environment variables affecting service behavior</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <h3 className="text-sm font-medium text-primary mb-2 uppercase">Service URLs</h3>
-              <div className="space-y-0">
-                <ConfigItem label="MEMORY_CORE_URL" value={process.env.MEMORY_CORE_URL || "http://memory-core:8080"} />
-                <ConfigItem label="NEURAL_MEMORY_URL" value={process.env.NEURAL_MEMORY_URL || "http://neural-memory:8080"} />
-                <ConfigItem label="CCE_URL" value={process.env.CCE_URL || "http://cce:8080"} />
-              </div>
-            </div>
-            
-            <div>
-              <h3 className="text-sm font-medium text-primary mb-2 uppercase">Dashboard Configuration</h3>
-              <div className="space-y-0">
-                <ConfigItem label="NODE_ENV" value={process.env.NODE_ENV || "production"} />
-                <ConfigItem label="Default Poll Rate (ms)" value={5000} />
-                <ConfigItem label="Max Visible Alerts" value={10} />
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
     </>
   );
 }

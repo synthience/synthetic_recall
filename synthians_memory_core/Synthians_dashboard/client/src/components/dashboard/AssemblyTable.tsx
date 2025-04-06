@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Link } from "wouter";
+import { formatTimeAgo } from "@/lib/utils";
 
 interface Assembly {
   id: string;
@@ -17,34 +18,28 @@ interface Assembly {
 interface AssemblyTableProps {
   assemblies: Assembly[] | null;
   isLoading: boolean;
+  isError?: boolean;
+  error?: Error | null;
   title?: string;
   showFilters?: boolean;
 }
 
-export function AssemblyTable({ assemblies, isLoading, title = "Assemblies", showFilters = true }: AssemblyTableProps) {
-  const formatTimeAgo = (timestamp: string) => {
-    const now = new Date();
-    const date = new Date(timestamp);
-    const diffMs = now.getTime() - date.getTime();
-    const diffMin = Math.floor(diffMs / 60000);
-    
-    if (diffMin < 60) {
-      return `${diffMin} minute${diffMin === 1 ? '' : 's'} ago`;
-    } else if (diffMin < 1440) {
-      const hours = Math.floor(diffMin / 60);
-      return `${hours} hour${hours === 1 ? '' : 's'} ago`;
-    } else {
-      const days = Math.floor(diffMin / 1440);
-      return `${days} day${days === 1 ? '' : 's'} ago`;
-    }
-  };
-
+export function AssemblyTable({
+  assemblies,
+  isLoading,
+  isError = false,
+  error = null,
+  title = "Assemblies",
+  showFilters = true
+}: AssemblyTableProps) {
+  // Helper function to get sync status
   const getSyncStatus = (assembly: Assembly) => {
     if (!assembly.vector_index_updated_at) {
       return {
         label: "Pending",
-        color: "text-yellow-400",
-        bgColor: "bg-muted/50"
+        color: "text-yellow-500 dark:text-yellow-400",
+        bgColor: "bg-yellow-100 dark:bg-yellow-900/20",
+        icon: "fas fa-clock"
       };
     }
     
@@ -54,15 +49,17 @@ export function AssemblyTable({ assemblies, isLoading, title = "Assemblies", sho
     if (vectorDate >= updateDate) {
       return {
         label: "Indexed",
-        color: "text-secondary",
-        bgColor: "bg-muted/50"
+        color: "text-green-600 dark:text-green-400",
+        bgColor: "bg-green-100 dark:bg-green-900/20",
+        icon: "fas fa-check"
       };
     }
     
     return {
       label: "Syncing",
-      color: "text-primary",
-      bgColor: "bg-muted/50"
+      color: "text-blue-600 dark:text-blue-400",
+      bgColor: "bg-blue-100 dark:bg-blue-900/20",
+      icon: "fas fa-sync-alt"
     };
   };
 
@@ -71,7 +68,11 @@ export function AssemblyTable({ assemblies, isLoading, title = "Assemblies", sho
       <CardHeader className="px-4 py-3 bg-muted border-b border-border flex justify-between items-center">
         <div className="flex items-center">
           <CardTitle className="font-medium">{title}</CardTitle>
-          <Badge variant="outline" className="ml-2 text-xs bg-muted/50 text-gray-300">Memory Core</Badge>
+          {!isLoading && assemblies && (
+            <Badge variant="outline" className="ml-2">
+              {assemblies.length} {assemblies.length === 1 ? 'assembly' : 'assemblies'}
+            </Badge>
+          )}
         </div>
         
         {showFilters && (
@@ -101,6 +102,7 @@ export function AssemblyTable({ assemblies, isLoading, title = "Assemblies", sho
           
           <TableBody className="divide-y divide-border">
             {isLoading ? (
+              // Loading state
               Array(5).fill(0).map((_, index) => (
                 <TableRow key={index}>
                   <TableCell className="px-4 py-2"><Skeleton className="h-4 w-24" /></TableCell>
@@ -111,40 +113,58 @@ export function AssemblyTable({ assemblies, isLoading, title = "Assemblies", sho
                   <TableCell className="px-4 py-2 text-right"><Skeleton className="h-4 w-10 ml-auto" /></TableCell>
                 </TableRow>
               ))
+            ) : isError ? (
+              // Error state
+              <TableRow>
+                <TableCell colSpan={6} className="text-center py-4 text-destructive">
+                  <div className="flex flex-col items-center">
+                    <i className="fas fa-exclamation-triangle mb-2"></i>
+                    <span>{error?.message || 'Failed to load assembly data'}</span>
+                  </div>
+                </TableCell>
+              </TableRow>
             ) : assemblies && assemblies.length > 0 ? (
+              // Data loaded successfully
               assemblies.map((assembly) => {
                 const syncStatus = getSyncStatus(assembly);
                 return (
                   <TableRow key={assembly.id} className="hover:bg-muted">
                     <TableCell className="px-4 py-2 whitespace-nowrap text-sm font-mono text-secondary">
-                      {assembly.id}
+                      {assembly.id.substring(0, 8)}...
                     </TableCell>
-                    <TableCell className="px-4 py-2 whitespace-nowrap text-sm">
+                    <TableCell className="px-4 py-2 whitespace-nowrap text-sm font-medium">
                       {assembly.name}
                     </TableCell>
                     <TableCell className="px-4 py-2 whitespace-nowrap text-sm">
-                      {assembly.member_count}
+                      {assembly.member_count.toLocaleString()}
                     </TableCell>
-                    <TableCell className="px-4 py-2 whitespace-nowrap text-xs text-gray-400">
+                    <TableCell className="px-4 py-2 whitespace-nowrap text-xs text-muted-foreground">
                       {formatTimeAgo(assembly.updated_at)}
                     </TableCell>
                     <TableCell className="px-4 py-2 whitespace-nowrap">
-                      <span className={`text-xs ${syncStatus.bgColor} ${syncStatus.color} px-2 py-0.5 rounded-full`}>
+                      <Badge variant="outline" className={`${syncStatus.bgColor} ${syncStatus.color}`}>
+                        <i className={`${syncStatus.icon} mr-1 text-xs`}></i>
                         {syncStatus.label}
-                      </span>
+                      </Badge>
                     </TableCell>
                     <TableCell className="px-4 py-2 whitespace-nowrap text-right text-sm font-medium">
                       <Link href={`/assemblies/${assembly.id}`}>
-                        <a className="text-primary hover:text-accent text-xs">View</a>
+                        <Button variant="ghost" size="sm" className="text-primary hover:text-accent text-xs">
+                          View <i className="fas fa-chevron-right ml-1"></i>
+                        </Button>
                       </Link>
                     </TableCell>
                   </TableRow>
                 );
               })
             ) : (
+              // No data
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-4 text-gray-400">
-                  No assemblies found
+                <TableCell colSpan={6} className="text-center py-4 text-muted-foreground">
+                  <div className="flex flex-col items-center">
+                    <i className="fas fa-info-circle mb-2"></i>
+                    <span>No assemblies found</span>
+                  </div>
                 </TableCell>
               </TableRow>
             )}

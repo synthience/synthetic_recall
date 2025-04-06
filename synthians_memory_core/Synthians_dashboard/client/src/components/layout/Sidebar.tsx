@@ -40,13 +40,16 @@ export function Sidebar() {
   return (
     <aside className="w-64 border-r border-border bg-sidebar hidden md:block">
       {/* Logo */}
-      <div className="flex items-center p-4 border-b border-border">
-        <div className="w-8 h-8 rounded-md bg-gradient-to-br from-primary to-accent flex items-center justify-center mr-2">
-          <span className="text-white font-bold">S</span>
+      <div className="flex flex-col items-center p-4 pb-3 border-b border-border">
+        <div className="h-50 flex items-center justify-center mb-1">
+          <img 
+            src="/Logo.png" 
+            alt="Synthience Logo" 
+            className="h-full w-auto object-contain"
+          />
         </div>
-        <div>
-          <h1 className="text-lg font-bold text-primary">Synthians</h1>
-          <p className="text-xs text-gray-500">Cognitive Dashboard v1.0</p>
+        <div className="text-center">
+          <p className="text-xs text-gray-500 tracking-wide">Cognitive Dashboard v1.0</p>
         </div>
       </div>
 

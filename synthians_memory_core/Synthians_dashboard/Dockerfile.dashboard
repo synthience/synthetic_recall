@@ -1,0 +1,24 @@
+# Use Node 18 as the base image
+FROM node:18-alpine
+
+# Create app directory
+WORKDIR /app
+
+# Copy package.json and package-lock.json
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy the rest of the application
+COPY . .
+
+# IMPORTANT: We need to ensure SERVER_ENTRY=server/index.ts
+# instead of trying to build it as a bundle
+
+# Expose the port the app runs on
+EXPOSE 5000
+
+# Command to run the application directly from source typescript
+# Skip the build step which isn't correctly configured
+CMD ["npm", "run", "dev"]

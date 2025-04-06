@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { RefreshButton } from "@/components/ui/RefreshButton";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { usePollingStore } from "@/lib/store";
+import { CCEResponse } from "@shared/schema";
 
 export default function LLMGuidance() {
   const { refreshAllData } = usePollingStore();
@@ -21,16 +22,16 @@ export default function LLMGuidance() {
   
   // Filter responses that have LLM advice
   const llmResponses = React.useMemo(() => {
-    if (!data?.data?.recent_responses) return [];
+    if (!data?.recent_responses) return [];
     
     // Only include responses with LLM advice
-    let filtered = data.data.recent_responses.filter(
-      response => response.llm_advice_used
+    let filtered = data.recent_responses.filter(
+      (response: CCEResponse) => response.llm_advice_used
     );
     
     // Apply confidence filter
     if (confidenceFilter !== "all") {
-      filtered = filtered.filter(response => {
+      filtered = filtered.filter((response: CCEResponse) => {
         const confidence = response.llm_advice_used?.confidence_level || 0;
         
         if (confidenceFilter === "high") {
@@ -47,7 +48,7 @@ export default function LLMGuidance() {
     
     // Apply variant filter
     if (variantFilter !== "all") {
-      filtered = filtered.filter(response => {
+      filtered = filtered.filter((response: CCEResponse) => {
         const variantHint = response.llm_advice_used?.adjusted_advice || "";
         return variantHint.toLowerCase().includes(variantFilter.toLowerCase());
       });
@@ -58,7 +59,7 @@ export default function LLMGuidance() {
   
   // Calculate statistics
   const stats = React.useMemo(() => {
-    if (!data?.data?.recent_responses) {
+    if (!data?.recent_responses) {
       return {
         totalRequests: 0,
         avgConfidence: 0,
@@ -66,12 +67,12 @@ export default function LLMGuidance() {
       };
     }
     
-    const llmResponses = data.data.recent_responses.filter(
-      response => response.llm_advice_used
+    const llmResponses = data.recent_responses.filter(
+      (response: CCEResponse) => response.llm_advice_used
     );
     
     // Calculate average confidence
-    const totalConfidence = llmResponses.reduce((acc, response) => {
+    const totalConfidence = llmResponses.reduce((acc: number, response: CCEResponse) => {
       return acc + (response.llm_advice_used?.confidence_level || 0);
     }, 0);
     
@@ -82,15 +83,15 @@ export default function LLMGuidance() {
     // Calculate variant distribution
     const variantDistribution: Record<string, number> = {};
     
-    llmResponses.forEach(response => {
+    llmResponses.forEach((response: CCEResponse) => {
       const advice = response.llm_advice_used?.adjusted_advice || "";
       
-      if (advice.toLowerCase().includes("mac-7b")) {
-        variantDistribution["MAC-7b"] = (variantDistribution["MAC-7b"] || 0) + 1;
-      } else if (advice.toLowerCase().includes("mac-13b")) {
-        variantDistribution["MAC-13b"] = (variantDistribution["MAC-13b"] || 0) + 1;
-      } else if (advice.toLowerCase().includes("titan")) {
-        variantDistribution["TITAN-7b"] = (variantDistribution["TITAN-7b"] || 0) + 1;
+      if (advice.toLowerCase().includes("mac")) {
+        variantDistribution["MAC"] = (variantDistribution["MAC"] || 0) + 1;
+      } else if (advice.toLowerCase().includes("mag")) {
+        variantDistribution["MAG"] = (variantDistribution["MAG"] || 0) + 1;
+      } else if (advice.toLowerCase().includes("mal")) {
+        variantDistribution["MAL"] = (variantDistribution["MAL"] || 0) + 1;
       }
     });
     
@@ -210,9 +211,9 @@ export default function LLMGuidance() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Variants</SelectItem>
-                  <SelectItem value="mac-7b">MAC-7b</SelectItem>
-                  <SelectItem value="mac-13b">MAC-13b</SelectItem>
-                  <SelectItem value="titan">TITAN-7b</SelectItem>
+                  <SelectItem value="mac">MAC</SelectItem>
+                  <SelectItem value="mag">MAG</SelectItem>
+                  <SelectItem value="mal">MAL</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -260,7 +261,7 @@ export default function LLMGuidance() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {llmResponses.map((response, index) => (
+                  {llmResponses.map((response: CCEResponse, index: number) => (
                     <TableRow key={index}>
                       <TableCell className="font-mono text-xs">
                         {formatTimestamp(response.timestamp)}

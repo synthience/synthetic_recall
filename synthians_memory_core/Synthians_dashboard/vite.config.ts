@@ -2,10 +2,12 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import themePlugin from "@replit/vite-plugin-shadcn-theme-json";
 import path from "path";
+import { fileURLToPath } from "url";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 
-// Use path.resolve directly based on __dirname
-const __dirname = path.resolve();
+// Correctly define __dirname for ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export default defineConfig({
   plugins: [
@@ -16,14 +18,14 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "synthians_memory_core", "Synthians_dashboard", "client", "src"),
-      "@shared": path.resolve(__dirname, "synthians_memory_core", "Synthians_dashboard", "shared"),
-      "@assets": path.resolve(__dirname, "synthians_memory_core", "Synthians_dashboard", "attached_assets"),
+      "@": path.resolve(__dirname, "client", "src"),
+      "@shared": path.resolve(__dirname, "shared"),
+      "@assets": path.resolve(__dirname, "attached_assets"),
     },
   },
-  root: path.resolve(__dirname, "synthians_memory_core", "Synthians_dashboard", "client"),
+  root: path.resolve(__dirname, "client"),
   build: {
-    outDir: path.resolve(__dirname, "synthians_memory_core", "Synthians_dashboard", "dist", "public"),
+    outDir: path.resolve(__dirname, "dist", "public"),
     emptyOutDir: true,
   },
 });
