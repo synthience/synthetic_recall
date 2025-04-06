@@ -2058,7 +2058,7 @@ class SynthiansMemoryCore:
         if not self._initialized: await self.initialize()
         
         async with self._lock: # We need the lock to ensure thread safety
-            is_consistent, diagnostics = await self.vector_index.verify_index_integrity()
+            is_consistent, diagnostics = self.vector_index.verify_index_integrity()  # Remove 'await' here
             
             return {
                 "success": True,
@@ -2085,7 +2085,7 @@ class SynthiansMemoryCore:
             logger.info("SynthiansMemoryCore", f"Starting index repair of type: {repair_type}")
             
             # Check initial integrity state
-            is_consistent_before, diagnostics_before = await self.vector_index.verify_index_integrity()
+            is_consistent_before, diagnostics_before = self.vector_index.verify_index_integrity()  # Remove 'await' here
             
             # If already consistent and not a forced rebuild, we can consider this a success
             if is_consistent_before and repair_type != "rebuild":
@@ -2139,7 +2139,7 @@ class SynthiansMemoryCore:
                 success = False
             
             # Check integrity after repair
-            is_consistent_after, diagnostics_after = await self.vector_index.verify_index_integrity()
+            is_consistent_after, diagnostics_after = self.vector_index.verify_index_integrity()  # Remove 'await' here
             
             # Determine overall success: either repair succeeded or the index is now consistent
             overall_success = success or is_consistent_after
@@ -2177,7 +2177,8 @@ class SynthiansMemoryCore:
         try:
             async with self._lock:
                 # Get integrity status
-                is_consistent, diagnostics = await self.vector_index.verify_index_integrity()
+                is_consistent, diagnostics = self.vector_index.verify_index_integrity()  # Remove 'await' here
+                
                 result["is_consistent"] = is_consistent
                 result["diagnostics"] = diagnostics
                 
