@@ -25,191 +25,234 @@ The persistence layer uses a structured directory layout:
 │   ├── faiss_index.bin         # Serialized FAISS index
 │   └── faiss_index.bin.mapping.json  # ID mapping information
 ├── stats/                      # Directory for statistics (Phase 5.9)
-│   └── assembly_activation_stats.json # Planned for Phase 5.9
+│   └── assembly_activation_stats.json # Assembly activation counters
 └── logs/                       # Directory for persistent logs (Phase 5.9)
-    └── merge_log.jsonl         # Planned for Phase 5.9
+    └── merge_log.jsonl         # Append-only log of merge events
 ```
 
-This structure ensures that:
-1. Memory entries and assemblies are stored in separate directories for organization.
-2. Each object has its own file, minimizing contention during parallel operations.
-3. The index file provides a quick way to list all available items without scanning directories.
-4. The vector index is stored separately from the memory objects.
-5. Statistics and logs have dedicated locations.
+## Key Components
 
-## Key Operations
+### Memory Index
 
-### Initialization
+The `memory_index.json` file serves as a central registry for all persisted objects. It has this structure:
 
-```python
-async def initialize(self) -> None:
-    """Initialize the persistence layer."""
-    # Create necessary directories
-    os.makedirs(os.path.join(self.storage_path, "memories"), exist_ok=True)
-    os.makedirs(os.path.join(self.storage_path, "assemblies"), exist_ok=True)
-    os.makedirs(os.path.join(self.storage_path, "vector_index"), exist_ok=True)
-    
-    # Load memory index if it exists
-    try:
-        await self._load_memory_index()
-    except FileNotFoundError:
-        self.memory_index = {"memories": {}, "assemblies": {}}
+```json
+{
+  "memories": {
+    "mem_uuid1": "memories/mem_uuid1.json",
+    "mem_uuid2": "memories/mem_uuid2.json",
+    ...
+  },
+  "assemblies": {
+    "asm_uuid1": "assemblies/asm_uuid1.json",
+    "asm_uuid2": "assemblies/asm_uuid2.json",
+    ...
+  }
+}
 ```
 
-### Saving Memory Entries
+This index helps the system quickly locate files without scanning directories.
+
+### Memory Entry Files
+
+Each `MemoryEntry` is stored as an individual JSON file with the structure derived from the object's `to_dict()` method:
+
+```json
+{
+  "id": "mem_uuid1",
+  "embedding": [0.1, 0.2, ...],  # Vector representation
+  "content": "Memory text content",
+  "creation_time": "2025-04-01T10:30:00",
+  "quickrecal_score": 0.75,
+  "emotional_content": {
+    "joy": 0.8,
+    "sadness": 0.1,
+    ...
+  },
+  "metadata": {
+    "source": "user_input",
+    "context": "conversation_123",
+    ...
+  }
+}
+```
+
+### Memory Assembly Files
+
+Each `MemoryAssembly` is stored as a JSON file with this structure:
+
+```json
+{
+  "id": "asm_uuid1",
+  "composite_embedding": [0.1, 0.2, ...],  # Combined vector
+  "memory_ids": ["mem_uuid1", "mem_uuid2", ...],
+  "creation_time": "2025-04-01T14:20:00",
+  "name": "Conversation about ML",
+  "vector_index_updated_at": "2025-04-01T14:25:00",  # Phase 5.8: Timestamp of last successful index update
+  "merged_from": ["asm_uuid2", "asm_uuid3"],  # Phase 5.9: Assembly lineage tracking
+  "metadata": {
+    "context": "user_session_456",
+    ...
+  }
+}
+```
+
+### Phase 5.9 Persistence Files
+
+#### Merge Log (append-only)
+
+The `merge_log.jsonl` is an append-only log file where each line is a separate JSON entry. There are two main event types:
+
+1. **Merge Events**:
+```json
+{
+  "event_type": "merge",
+  "merge_event_id": "merge_uuid_123",
+  "timestamp": "2025-04-01T15:32:45.123Z",
+  "source_assembly_ids": ["asm_abc", "asm_def"],
+  "target_assembly_id": "asm_merged_123",
+  "similarity_at_merge": 0.92,
+  "merge_threshold": 0.85,
+  "cleanup_status": "pending"
+}
+```
+
+2. **Cleanup Update Events**:
+```json
+{
+  "event_type": "cleanup_update",
+  "target_merge_event_id": "merge_uuid_123",
+  "timestamp": "2025-04-01T15:33:10.456Z",
+  "cleanup_status": "completed",
+  "error": null
+}
+```
+
+The `MergeTracker` class manages this log, including rotation and reconciliation.
+
+#### Assembly Activation Stats
+
+The `stats/assembly_activation_stats.json` file contains counters for assembly activations:
+
+```json
+{
+  "activation_counts": {
+    "asm_uuid1": 42,
+    "asm_uuid2": 17,
+    ...
+  },
+  "last_updated": "2025-04-01T16:45:30"
+}
+```
+
+This file is periodically updated by the `_persist_activation_stats` method in `SynthiansMemoryCore`.
+
+## Core Operations
+
+### Saving Operations
+
+Saving operations use asynchronous I/O with atomic file writes to prevent data corruption:
 
 ```python
 async def save_memory(self, memory: MemoryEntry) -> None:
-    """Save a memory entry to disk."""
-    # Add to index
-    self.memory_index["memories"][memory.id] = {
-        "id": memory.id,
-        "timestamp": memory.timestamp,
-        "file_path": f"memories/mem_{memory.id}.json"
-    }
+    """Save a memory entry to disk with atomic file writing."""
+    # Update index
+    memory_path = f"memories/mem_{memory.id}.json"
+    self.memory_index["memories"][memory.id] = memory_path
     
-    # Save memory to file
-    memory_path = os.path.join(self.storage_path, "memories", f"mem_{memory.id}.json")
-    async with aiofiles.open(memory_path, "w") as f:
-        await f.write(json.dumps(memory.__dict__, cls=NumpyEncoder))
+    # Serialize memory
+    memory_dict = memory.to_dict()
     
-    # Save updated index
-    await self._save_memory_index()
+    # Ensure directory exists
+    os.makedirs(os.path.join(self.storage_path, "memories"), exist_ok=True)
+    
+    # Write file atomically
+    await self.safe_write_json(
+        os.path.join(self.storage_path, memory_path),
+        memory_dict
+    )
+    
+    # Update index file
+    await self.save_memory_index()
 ```
 
-### Saving Assemblies
+The `safe_write_json` method writes to a temporary file and then renames it, ensuring atomic updates.
 
-```python
-async def save_assembly(self, assembly: MemoryAssembly) -> None:
-    """Save a memory assembly to disk."""
-    # Add to index
-    self.memory_index["assemblies"][assembly.id] = {
-        "id": assembly.id,
-        "updated_at": assembly.updated_at,
-        "file_path": f"assemblies/asm_{assembly.id}.json"
-    }
-    
-    # Save assembly to file
-    assembly_path = os.path.join(self.storage_path, "assemblies", f"asm_{assembly.id}.json")
-    async with aiofiles.open(assembly_path, "w") as f:
-        await f.write(json.dumps(assembly.__dict__, cls=NumpyEncoder))
-    
-    # Save updated index
-    await self._save_memory_index()
-```
+### Loading Operations
 
-### Loading Memory Entries
+Loading operations fetch objects from disk asynchronously:
 
 ```python
 async def load_memory(self, memory_id: str) -> Optional[MemoryEntry]:
     """Load a memory entry from disk."""
     if memory_id not in self.memory_index["memories"]:
         return None
-    
-    memory_path = os.path.join(self.storage_path, "memories", f"mem_{memory_id}.json")
-    try:
-        async with aiofiles.open(memory_path, "r") as f:
-            content = await f.read()
-            memory_dict = json.loads(content)
-            memory = MemoryEntry(**memory_dict)
-            return memory
-    except FileNotFoundError:
-        # Remove from index if file not found
-        del self.memory_index["memories"][memory_id]
-        await self._save_memory_index()
-        return None
-```
-
-### Loading Assemblies
-
-```python
-async def load_assembly(self, assembly_id: str) -> Optional[MemoryAssembly]:
-    """Load a memory assembly from disk."""
-    if assembly_id not in self.memory_index["assemblies"]:
-        return None
-    
-    assembly_path = os.path.join(self.storage_path, "assemblies", f"asm_{assembly_id}.json")
-    try:
-        async with aiofiles.open(assembly_path, "r") as f:
-            content = await f.read()
-            assembly_dict = json.loads(content)
-            assembly = MemoryAssembly(**assembly_dict)
-            return assembly
-    except FileNotFoundError:
-        # Remove from index if file not found
-        del self.memory_index["assemblies"][assembly_id]
-        await self._save_memory_index()
-        return None
-```
-
-## Robust Index Saving
-
-Phase 5.8 introduced improvements to ensure atomic index saves:
-
-```python
-async def _save_memory_index(self) -> None:
-    """Save the memory index to disk with atomic guarantees."""
-    index_path = os.path.join(self.storage_path, "memory_index.json")
-    temp_path = f"{index_path}.tmp"
-    
-    # First write to temporary file
-    async with aiofiles.open(temp_path, "w") as f:
-        await f.write(json.dumps(self.memory_index))
-        await f.flush()
-        os.fsync(f.fileno())  # Ensure data is written to disk
-    
-    # Then atomically move to final location
-    shutil.move(temp_path, index_path)
-```
-
-This approach ensures that the index file is never in a partially written state, which could happen if the system crashes during a write operation.
-
-## Batch Operations
-
-For efficiency, the persistence layer supports batch operations:
-
-```python
-async def save_memories_batch(self, memories: List[MemoryEntry]) -> None:
-    """Save multiple memory entries in a batch."""
-    for memory in memories:
-        self.memory_index["memories"][memory.id] = {
-            "id": memory.id,
-            "timestamp": memory.timestamp,
-            "file_path": f"memories/mem_{memory.id}.json"
-        }
         
-        memory_path = os.path.join(self.storage_path, "memories", f"mem_{memory.id}.json")
-        async with aiofiles.open(memory_path, "w") as f:
-            await f.write(json.dumps(memory.__dict__, cls=NumpyEncoder))
+    memory_path = os.path.join(
+        self.storage_path, 
+        self.memory_index["memories"][memory_id]
+    )
     
-    # Save updated index once for all memories
-    await self._save_memory_index()
+    async with aiofiles.open(memory_path, "r") as f:
+        content = await f.read()
+        
+    memory_dict = json.loads(content)
+    return MemoryEntry.from_dict(memory_dict)
 ```
 
-## Planned Phase 5.9 Enhancements
+## Thread Safety
 
-In Phase 5.9, the persistence layer will be enhanced to support:
-
-1. **Merge Logs**: A new file `logs/merge_log.jsonl` will store merge events in JSON Lines format.
-2. **Activation Statistics**: A new file `stats/assembly_activation_stats.json` will store assembly activation statistics.
-3. **Enhanced Error Handling**: Improved recovery from corrupted files.
+The persistence layer implements proper locking to ensure thread safety during concurrent operations:
 
 ```python
-# Example of planned merge log persistence
-async def log_merge_event(self, merge_event: Dict[str, Any]) -> None:
-    """Log a merge event to the merge log file."""
-    log_dir = os.path.join(self.storage_path, "logs")
-    os.makedirs(log_dir, exist_ok=True)
-    
-    log_path = os.path.join(log_dir, "merge_log.jsonl")
-    async with aiofiles.open(log_path, "a") as f:
-        await f.write(json.dumps(merge_event) + "\n")
+def __init__(self, storage_path: str):
+    self.storage_path = storage_path
+    self.memory_index = {"memories": {}, "assemblies": {}}
+    self._lock = asyncio.Lock()  # Async lock for thread safety
+    # ...
+
+async def save_memory(self, memory: MemoryEntry) -> None:
+    async with self._lock:  # Ensure thread-safe operations
+        # Saving logic here
+        # ...
 ```
 
-## Best Practices
+## Error Handling
 
-1. **Atomicity**: Use the temporary file + move approach for important files.
-2. **Error Handling**: Always handle file I/O exceptions and have recovery strategies.
-3. **Batch Operations**: Use batch operations for bulk saves/loads.
-4. **Directory Structure**: Maintain the established directory structure for compatibility.
-5. **Backups**: Regularly back up the entire storage directory.
+The persistence layer implements robust error handling for I/O operations:
+
+```python
+async def safe_write_json(self, filepath: str, data: Dict) -> None:
+    """Write JSON data to a file atomically using a temporary file."""
+    # Create temp file in the same directory
+    temp_path = f"{filepath}.tmp"
+    
+    try:
+        # Write to temp file
+        async with aiofiles.open(temp_path, "w") as f:
+            await f.write(json.dumps(data, indent=2, default=self._default_serializer))
+            await f.flush()  # Ensure data is written to disk
+        
+        # Rename temp file to target (atomic operation)
+        os.replace(temp_path, filepath)
+    except Exception as e:
+        # Clean up temp file if it exists
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise e  # Re-raise the exception
+```
+
+## Serialization Helpers
+
+The persistence implementation provides helper methods for handling special data types:
+
+```python
+def _default_serializer(self, obj):
+    """Handle special types during JSON serialization."""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    else:
+        raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+```

@@ -6,7 +6,7 @@ This document explains the vector indexing system in the Synthians Memory Core, 
 
 The vector index is a critical component that enables fast similarity-based retrieval of memories and assemblies. It maps unique identifiers to vector embeddings and provides efficient search capabilities.
 
-The primary implementation is in the `MemoryVectorIndex` class, which wraps FAISS's `IndexIDMap` functionality with additional features for persistence, error handling, and GPU acceleration.
+The primary implementation is in the `MemoryVectorIndex` class, which wraps FAISS's `IndexIDMap` functionality with additional features for persistence, error handling, asynchronous operations, and robust recovery mechanisms.
 
 ## Key Components
 
@@ -29,216 +29,172 @@ self.index_to_id = {}  # Reverse mapping for lookups
 
 **IMPORTANT:** While the underlying base index (e.g., `IndexFlatIP`) might support GPU search operations if `use_gpu=True` is set, FAISS `IndexIDMap` operations (`add_with_ids`, `remove_ids`) **execute on the CPU**. This is a fundamental limitation of the FAISS library architecture, not our implementation.
 
+## Asynchronous Operations
+
+As of Phase 5.8/5.9, the vector index implements comprehensive asynchronous support to prevent blocking the main event loop:
+
+### Core Async Vector Operations
+
+* **`search_knn_async`**: Performs k-nearest neighbor search asynchronously
+* **`add_vector_async`**: Adds single vectors without blocking
+* **`add_batch_async`**: Efficiently adds multiple vectors in batches asynchronously
+* **`remove_vector_async`**: Removes vectors from the index asynchronously
+* **`update_vector_async`**: Updates vector embeddings without blocking
+* **`update_entry_async`**: Complete entry update that handles embedding updates via remove+add pattern
+
+### Async Index Management
+
+* **`save_async`** and **`load_async`**: Asynchronous file I/O for index persistence
+* **`reset_async`**: Non-blocking index reset operation
+* **`repair_index_async`**: Asynchronously repairs corrupted indices
+* **`check_index_integrity`**: Verifies the integrity of the FAISS index and ID mappings
+
+All asynchronous methods use `asyncio.run_in_executor` to wrap CPU-bound FAISS operations, preventing them from blocking the event loop.
+
 ```python
-# Even with GPU enabled, these operations run on CPU
-self.index.add_with_ids(vectors_np, int_ids_np)  # CPU operation
-self.index.remove_ids(np.array(int_ids).astype('int64'))  # CPU operation
+async def add_vector_async(self, id_str, vector):
+    """Add a vector to the index asynchronously."""
+    # Vector validation and preprocessing
+    # ...
+    
+    # Run the CPU-bound operation in a thread pool
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, 
+        lambda: self.add_vector(id_str, vector)
+    )
 ```
 
-This means:
-1. Only search operations (`index.search()`) potentially benefit from GPU acceleration
-2. All add/remove operations are CPU-bound regardless of GPU acceleration settings
-3. Significant GPU acceleration is primarily seen for search operations on very large base indices *without* using `IndexIDMap`
+## Vector Index Persistence
 
-This limitation informs our error handling strategy with the retry queue in `SynthiansMemoryCore`, as add/remove operations can be relatively slow and potentially fail.
+The index is persisted to disk in two primary files:
 
-### Persistence Layer
+1. **`faiss_index.bin`**: The serialized FAISS index (binary format)
+2. **`faiss_id_mapping.json`**: The ID mappings (JSON format)
 
-The vector index is persisted to disk for recovery after restarts:
+These files are managed via:
+
+* **`save`/`save_async`**: Atomic saving of both index and mappings
+* **`load`/`load_async`**: Loading both index and mappings during initialization
+
+Backups are also automatically created during critical operations:
 
 ```python
-# The on-disk structure
-storage_path/
-├── vector_index/
-    ├── faiss_index.bin              # The serialized FAISS index
-    ├── faiss_index.bin.mapping.json # ID mapping for recovery
-    └── faiss_index.bin.backup       # Optional backup during saves
+backup_path = f"{path}.bak-{int(time.time())}"
+shutil.copy2(path, backup_path)  # Atomic copy
 ```
 
-The mapping file is critical for recovery, as it preserves the mapping between string IDs (used by the application) and integer IDs (used internally by FAISS).
+## Validation & Integrity Checking
 
-## Key Operations
+The system implements robust validation to catch potential issues:
 
-### Adding Entries
+* **`check_index_integrity`**: Verifies that the FAISS index and ID mappings are consistent
+* **`validate_vector_index_integrity`**: Higher-level validation including dimension checks
+* **Dimension Validation**: Ensures all vectors match the expected dimension
+* **NaN/Inf Detection**: Identifies problematic vector values
 
 ```python
-async def add_with_ids(self, ids: List[str], vectors: List[List[float]]) -> None:
-    # Convert to numpy arrays
-    vectors_np = np.array(vectors).astype('float32')
+async def check_index_integrity(self, persistence=None) -> Tuple[bool, Dict[str, Any]]:
+    """Returns (is_consistent, diagnostics)"""
+    diagnostics = {}
+    consistent = True
     
-    # Generate integer IDs for FAISS
-    int_ids = self._generate_int_ids(len(ids))
-    int_ids_np = np.array(int_ids).astype('int64')
+    # Check that all ID mappings are consistent
+    id_map_size = len(self.id_to_index)
+    reverse_map_size = len(self.index_to_id)
+    faiss_ntotal = self.index.ntotal if self.index else 0
     
-    # Update the index (CPU operation, even with GPU-enabled index)
-    self.index.add_with_ids(vectors_np, int_ids_np)
+    diagnostics["id_map_size"] = id_map_size
+    diagnostics["reverse_map_size"] = reverse_map_size
+    diagnostics["faiss_ntotal"] = faiss_ntotal
     
-    # Update mappings
-    for i, id_str in enumerate(ids):
-        self.id_to_index[id_str] = int_ids[i]
-        self.index_to_id[int_ids[i]] = id_str
+    if id_map_size != reverse_map_size or id_map_size != faiss_ntotal:
+        consistent = False
+        diagnostics["error"] = "Size mismatch between mappings and FAISS index"
+    
+    # Additional validation checks
+    # ...
+    
+    return consistent, diagnostics
 ```
 
-### Removing Entries
+## Repair Mechanisms
+
+When integrity issues are detected, the system can self-heal:
+
+* **`repair_index_async`**: Main entry point for index repair, which attempts multiple strategies:
+  1. **Fix ID mappings**: Rebuilds mappings from the FAISS index
+  2. **Full rebuild**: If mapping repair fails, rebuilds the entire index from persistence
+
+* **`_rebuild_id_mapping_from_index_async`**: Attempts to extract and rebuild ID mappings from FAISS
+* **`_rebuild_index_from_persistence_async`**: Complete rebuild using persisted memory and assembly data
 
 ```python
-async def remove_ids(self, ids: List[str]) -> None:
-    # Convert to FAISS integer IDs
-    int_ids = []
-    for id_str in ids:
-        if id_str in self.id_to_index:
-            int_ids.append(self.id_to_index[id_str])
-            
-    # Remove from index (CPU operation, even with GPU-enabled index)
-    if int_ids:
-        self.index.remove_ids(np.array(int_ids).astype('int64'))
+async def repair_index_async(self, persistence=None, geometry_manager=None):
+    """Comprehensive index repair function"""
+    if not persistence or not geometry_manager:
+        raise ValueError("Persistence and GeometryManager required for repair")
+    
+    # Try to fix just the ID mappings first (less expensive)
+    mapping_fixed = await self._rebuild_id_mapping_from_index_async()
+    if mapping_fixed:
+        return True
         
-        # Update mappings
-        for id_str in ids:
-            if id_str in self.id_to_index:
-                int_id = self.id_to_index[id_str]
-                del self.id_to_index[id_str]
-                del self.index_to_id[int_id]
+    # If mapping repair fails, do a full rebuild from persistence
+    return await self._rebuild_index_from_persistence_async(persistence, geometry_manager)
 ```
 
-### Searching
+## Embedding Dimension Handling
 
-```python
-async def search(self, query_vectors: List[List[float]], k: int = 10) -> List[Dict[str, Any]]:
-    query_np = np.array(query_vectors).astype('float32')
-    
-    # Search operation (GPU-accelerated if GPU enabled)
-    distances, indices = self.index.search(query_np, k)
-    
-    # Convert results to string IDs
-    results = []
-    for i in range(len(query_vectors)):
-        batch_results = []
-        for j in range(k):
-            if indices[i][j] != -1 and indices[i][j] in self.index_to_id:
-                batch_results.append({
-                    "id": self.index_to_id[indices[i][j]],
-                    "distance": float(distances[i][j]),
-                    "similarity": self._distance_to_similarity(distances[i][j])
-                })
-        results.append(batch_results)
-    
-    return results
-```
+The system supports handling embedding dimension mismatches:
+
+* **Input validation**: Ensures all input vectors have the correct dimension
+* **`_align_embeddings_async`**: Handles dimension mismatch by resizing vectors when needed
+* **Dimension consistency**: Maintains consistent dimensions across the index
+
+## Error Handling
+
+The system uses comprehensive error handling to prevent failures:
+
+* **`RunTimeError`**: Raised for critical index inconsistencies
+* **Trace-based logging**: Detailed logs for diagnosis with trace IDs
+* **State validation**: Checks for index initialization before operations
+* **Robust locks**: Proper async locking to prevent concurrent modification
+* **Exception capture**: All index operations are wrapped in try/except blocks
+
+## Integration with Memory Core
+
+The vector index is integrated into the Memory Core through:
+
+* **Synchronized timestamps**: `MemoryAssembly.vector_index_updated_at` tracks when an assembly's embedding was successfully added to the index
+* **Retry queue**: Failed index operations are queued in `_pending_vector_updates` for automatic retry
+* **`_vector_update_retry_loop`**: Background task that periodically attempts to process the retry queue
+* **Drift detection**: `detect_and_repair_index_drift` identifies mismatches between persisted assemblies and the vector index
 
 ## Phase 5.8 Stability Enhancements
 
-Phase 5.8 introduced several critical improvements to the vector index:
+Phase 5.8/5.9 introduced several critical improvements to the vector index:
 
-### 1. Drift Detection
+### 1. Comprehensive Asynchronous Support
+* Implemented complete async versions of all vector operations
+* Properly wrapped CPU-bound operations with `run_in_executor`
+* Added dimension checking and automatic resizing of vectors when needed
 
-The system now tracks synchronization between memory objects and their vector representations using timestamps:
+### 2. Drift Detection & Recovery
+* Better detection of index-to-persistence mismatches
+* `_pending_vector_updates` queue to track failed operations
+* Background retry loop for automatic recovery
 
-```python
-# In MemoryAssembly
-self.vector_index_updated_at = vector_index_updated_at  # Timestamp of last successful index update
+### 3. Improved Error Handling
+* Enhanced trace ID-based logging for better diagnostics
+* Comprehensive exception handling with state management
+* Atomic file operations for safer persistence
 
-# In retrieval logic
-if assembly.vector_index_updated_at is None or (
-    now - datetime.fromisoformat(assembly.vector_index_updated_at)).total_seconds() > self.config.ASSEMBLY_MAX_DRIFT_SECONDS:
-    # Skip assembly for boosting - not synchronized
-    continue
-```
+### 4. Batch Processing Optimization
+* Configurable batch sizes to avoid memory issues
+* More efficient bulk operations
 
-This prevents the system from using stale vector representations during retrieval.
-
-### 2. Pending Updates Queue
-
-Failed vector index operations are now queued for retry:
-
-```python
-try:
-    await self.vector_index.add_with_ids([assembly.id], [assembly.composite_embedding])
-    assembly.vector_index_updated_at = datetime.utcnow().isoformat()
-except Exception as e:
-    # Queue for retry
-    await self._pending_vector_updates.put({
-        "operation": "add",
-        "id": assembly.id,
-        "embedding": assembly.composite_embedding,
-        "is_assembly": True
-    })
-```
-
-This improves resilience to temporary FAISS failures.
-
-### 3. Index Integrity Checking
-
-The system now verifies index consistency on startup:
-
-```python
-async def check_index_integrity(self) -> Dict[str, Any]:
-    issues = []
-    
-    # Check if index size matches ID mapping count
-    if self.index.ntotal != len(self.id_to_index):
-        issues.append(f"Index size mismatch: FAISS has {self.index.ntotal} entries, mapping has {len(self.id_to_index)}")
-    
-    # Check for missing mappings
-    # ...
-    
-    return {
-        "status": "healthy" if not issues else "issues_found",
-        "issues": issues,
-        # ...
-    }
-```
-
-### 4. Automatic Repair
-
-The system can rebuild the index from stored data:
-
-```python
-async def repair_index_async(self) -> Dict[str, Any]:
-    # Get all memories and assemblies from persistence
-    memories = await self.persistence.list_all_memories()
-    assemblies = await self.persistence.list_all_assemblies()
-    
-    # Clear the index
-    await self.vector_index.reset()
-    
-    # Rebuild from persistence
-    # ...
-    
-    return {
-        "status": "completed",
-        "memories_added": memories_added,
-        "assemblies_added": assemblies_added,
-        # ...
-    }
-```
-
-## GPU Integration
-
-The system optionally supports GPU acceleration via FAISS's GPU indexing:
-
-```python
-if use_gpu:
-    try:
-        # Move index to GPU
-        res = faiss.StandardGpuResources()
-        self.index = faiss.index_cpu_to_gpu(res, 0, self.index)
-        self.using_gpu = True
-    except Exception as e:
-        logger.warning(f"Failed to initialize GPU index, falling back to CPU: {e}")
-        self.using_gpu = False
-```
-
-**Important Limitations:**
-
-1. Only search operations benefit from GPU acceleration.
-2. Add and remove operations still run on CPU due to FAISS limitations with `IndexIDMap`.
-3. The index is temporarily moved back to CPU for serialization during saves.
-
-## Best Practices
-
-1. **Batching**: Batch vector operations where possible to reduce overhead.
-2. **Error Handling**: Always handle FAISS exceptions, as they can occur due to GPU memory issues.
-3. **Index Size Monitoring**: Regularly check index size to ensure it remains manageable for your hardware.
-4. **Regular Verification**: Use `check_index_integrity` periodically to detect inconsistencies.
-5. **Backup Strategy**: Maintain backups of both the FAISS index and the ID mappings.
+### 5. Repair Mechanisms
+* Multi-tiered repair strategy (mapping fix → full rebuild)
+* Integration with the API via `/repair_index` endpoint
+* Self-healing via periodic integrity checks
