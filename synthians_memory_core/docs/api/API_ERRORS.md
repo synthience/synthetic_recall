@@ -84,6 +84,14 @@ Example error response:
 | 400 | `INVALID_SERVICE_NAME` | "Invalid service_name parameter." | service_name parameter is malformed |
 | 500 | `CONFIG_ACCESS_ERROR` | "Error accessing runtime configuration." | Problem retrieving configuration |
 
+### GET `/diagnostics/check_index_integrity`
+
+| Status | Code | Message | Description |
+|--------|------|---------|-------------|
+| 403 | `EXPLAINABILITY_DISABLED` | "Explainability is disabled. Set ENABLE_EXPLAINABILITY=true in configuration." | Feature flag is not enabled |
+| 500 | `INDEX_CHECK_ERROR` | "Error checking vector index integrity." | Problem analyzing the vector index |
+| 500 | `VECTOR_INDEX_ERROR` | "Vector index access error." | Problem accessing the vector index |
+
 ## Feature Flag Behavior
 
 All Phase 5.9 explainability and diagnostics endpoints are gated by the `ENABLE_EXPLAINABILITY` flag in the Memory Core configuration. When this flag is set to `false`, these endpoints will return a 403 Forbidden response with the `EXPLAINABILITY_DISABLED` error code.
