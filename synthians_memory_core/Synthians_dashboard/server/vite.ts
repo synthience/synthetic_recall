@@ -24,9 +24,13 @@ export function log(message: string, source = "express") {
 }
 
 export async function setupVite(app: Express, server: Server) {
+  // Explicitly define the port the server is running on
+  const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 5000;
+
   const serverOptions = {
     middlewareMode: true,
-    hmr: { server },
+    // Disable HMR to prevent reload loops
+    hmr: false,
     allowedHosts: true as const,
   };
 

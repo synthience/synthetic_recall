@@ -62,5 +62,6 @@ export default defineConfig({
       //   rewrite: (path) => path.replace(/^\/api\/alerts/, ''),
       // },
     },
+    hmr: false,
   },
 });

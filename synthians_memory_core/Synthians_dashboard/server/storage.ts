@@ -1,21 +1,41 @@
 import { users, type User, type InsertUser, type Alert } from "@shared/schema";
 
+// Define Log type to match what we expect from backend services
+export interface LogMessage {
+  id: string;
+  timestamp: string; // ISO string
+  service: 'memory-core' | 'neural-memory' | 'cce' | 'dashboard-proxy' | string; // Allow other sources
+  level: 'debug' | 'info' | 'warning' | 'error';
+  message: string;
+  context?: Record<string, any>;
+}
+
 // Extend the storage interface with additional methods
 export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   getAlerts(): Promise<Alert[]>;
+  getLogs(): LogMessage[]; // Method to retrieve logs
+  addLog(log: LogMessage): void; // Method to add a log
+  clearLogs(): void; // Method to clear logs
+  hasNewLogs(): boolean; // Method to check for new logs
+  markLogsRead(): void; // Method to reset new logs flag
 }
 
 export class MemStorage implements IStorage {
   private users: Map<number, User>;
   private alerts: Alert[];
+  private logs: LogMessage[]; // Define logs property
+  private maxLogs: number = 1000; // Max logs to keep
+  public newLogsAvailable: boolean = false; // Define flag
   currentId: number;
 
   constructor() {
     this.users = new Map();
     this.currentId = 1;
+    this.logs = []; // Initialize logs array
+    this.newLogsAvailable = false; // Initialize flag
     
     // Initialize with some sample alerts
     this.alerts = [
@@ -46,6 +66,7 @@ export class MemStorage implements IStorage {
     ];
   }
 
+  // --- User methods (keep as is) ---
   async getUser(id: number): Promise<User | undefined> {
     return this.users.get(id);
   }
@@ -63,8 +84,40 @@ export class MemStorage implements IStorage {
     return user;
   }
 
+  // --- Alert methods (keep as is) ---
   async getAlerts(): Promise<Alert[]> {
-    return this.alerts;
+    return [...this.alerts].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }
+
+  // --- Log methods (NEW/Refactored) ---
+  getLogs(): LogMessage[] {
+    // Return a copy to prevent external modification
+    return [...this.logs];
+  }
+
+  addLog(log: LogMessage): void {
+    // Add to beginning (newest first)
+    this.logs.unshift(log);
+    
+    // Limit size
+    if (this.logs.length > this.maxLogs) {
+      this.logs = this.logs.slice(0, this.maxLogs);
+    }
+    
+    this.newLogsAvailable = true; // Set flag
+  }
+
+  clearLogs(): void {
+    this.logs = [];
+    this.newLogsAvailable = false;
+  }
+
+  hasNewLogs(): boolean {
+    return this.newLogsAvailable;
+  }
+
+  markLogsRead(): void {
+    this.newLogsAvailable = false;
   }
 }
 

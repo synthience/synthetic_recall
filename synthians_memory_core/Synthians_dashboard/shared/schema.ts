@@ -2,6 +2,14 @@ import { pgTable, text, serial, integer, boolean, timestamp, jsonb } from "drizz
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+// Generic API Response Wrapper
+export interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: string | null;
+  message?: string; // Optional informational message
+}
+
 // Keep original user table
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
@@ -33,11 +41,7 @@ export interface ServiceStatusData {
   neural_memory_initialized?: boolean; // For Neural Memory
 }
 
-export interface ServiceStatusResponse {
-  success: boolean;
-  data?: ServiceStatusData;
-  error?: string | null;
-}
+export interface ServiceStatusResponse extends ApiResponse<ServiceStatusData> {}
 
 // UI representation (used in components)
 export interface ServiceStatus {
@@ -87,6 +91,8 @@ export interface MemoryCoreStatsData {
   pending_vector_updates: number;
   initialized: boolean;
   uptime_seconds?: number;
+  memory_count_cache?: number;
+  assembly_count_cache?: number;
 }
 
 export interface MemoryStatsData {
@@ -109,11 +115,7 @@ export interface MemoryStatsData {
   assemblies: MemoryAssemblyStats;
 }
 
-export interface MemoryStatsResponse {
-  success: boolean;
-  data?: MemoryStatsData;
-  error?: string | null;
-}
+export interface MemoryStatsResponse extends ApiResponse<MemoryStatsData> {}
 
 export interface NeuralMemoryStatus {
   initialized: boolean;
@@ -123,6 +125,8 @@ export interface NeuralMemoryStatus {
     layers: number;
   };
 }
+
+export interface NeuralMemoryStatusResponse extends ApiResponse<NeuralMemoryStatus> {}
 
 export interface NeuralMemoryDiagnostics {
   avg_loss: number;
@@ -143,11 +147,9 @@ export interface NeuralMemoryDiagnostics {
   recommendations: string[];
 }
 
-export interface NeuralMemoryDiagnosticsResponse {
-  success: boolean;
-  data?: NeuralMemoryDiagnostics;
-  error?: string | null;
-}
+export interface NeuralMemoryDiagnosticsResponse extends ApiResponse<NeuralMemoryDiagnostics> {}
+
+export interface NeuralMemoryConfigResponse extends ApiResponse<Record<string, any>> {}
 
 export interface CCEResponse {
   timestamp: string;
@@ -179,22 +181,14 @@ export interface CCEConfig {
   retry_attempts: number;
 }
 
-export interface CCEConfigResponse {
-  success: boolean;
-  data?: CCEConfig;
-  error?: string | null;
-}
+export interface CCEConfigResponse extends ApiResponse<CCEConfig> {}
 
 export interface CCEMetricsData {
   recent_responses: CCEResponse[];
   avg_response_time_ms?: number;
 }
 
-export interface CCEMetricsResponse {
-  success: boolean;
-  data?: CCEMetricsData;
-  error?: string | null;
-}
+export interface CCEMetricsResponse extends ApiResponse<CCEMetricsData> {}
 
 export interface Assembly {
   id: string;
@@ -210,11 +204,9 @@ export interface Assembly {
   memory_ids: string[];
 }
 
-export interface AssembliesResponse {
-  success: boolean;
-  data?: Assembly[];
-  error?: string | null;
-}
+export interface AssembliesResponse extends ApiResponse<Assembly[]> {}
+
+export interface AssemblyResponse extends ApiResponse<Assembly> {}
 
 export interface Alert {
   id: string;
@@ -226,11 +218,7 @@ export interface Alert {
   action?: string;
 }
 
-export interface AlertsResponse {
-  success: boolean;
-  data?: Alert[];
-  error?: string | null;
-}
+export interface AlertsResponse extends ApiResponse<Alert[]> {}
 
 // CCE Status interfaces for status endpoints
 export interface CCEStatusData {
@@ -246,11 +234,7 @@ export interface CCEStatusData {
   };
 }
 
-export interface CCEStatusResponse {
-  success: boolean;
-  data?: CCEStatusData;
-  error?: string | null;
-}
+export interface CCEStatusResponse extends ApiResponse<CCEStatusData> {}
 
 // --- Phase 5.9 Explainability Interfaces ---
 
@@ -278,6 +262,9 @@ export interface ExplainActivationResponse {
   error?: string | null;
 }
 
+// Extend from ApiResponse separately as an internal type (for consistent handling)
+export interface ExplainActivationResponseWrapper extends ApiResponse<ExplainActivationData | ExplainActivationEmpty> {}
+
 export interface ExplainMergeData {
   assembly_id: string;
   source_assembly_ids: string[];
@@ -301,6 +288,9 @@ export interface ExplainMergeResponse {
   error?: string | null;
 }
 
+// Extend from ApiResponse separately as an internal type (for consistent handling)
+export interface ExplainMergeResponseWrapper extends ApiResponse<ExplainMergeData | ExplainMergeEmpty> {}
+
 export interface LineageEntry {
   assembly_id: string;
   name?: string | null;
@@ -320,7 +310,8 @@ export interface LineageResponse {
   error?: string | null;
 }
 
-// --- Phase 5.9 Diagnostics Interfaces ---
+// Internal wrapper type for consistent handling
+export interface LineageResponseWrapper extends ApiResponse<{ target_assembly_id: string; lineage: LineageEntry[]; max_depth_reached: boolean; cycles_detected: boolean }> {}
 
 export interface ReconciledMergeLogEntry {
   merge_event_id: string;
@@ -342,13 +333,20 @@ export interface MergeLogResponse {
   error?: string | null;
 }
 
+// Internal wrapper type for consistent handling
+export interface MergeLogResponseWrapper extends ApiResponse<{ reconciled_log_entries: ReconciledMergeLogEntry[]; count: number; query_limit: number }> {}
+
 export interface RuntimeConfigResponse {
   success: boolean;
   service: string;
-  config: Record<string, any>; // Sanitized config keys/values
-  retrieval_timestamp: string; // ISO string
+  config: Record<string, any>;
+  retrieval_timestamp: string;
   error?: string | null;
+  _note?: string; // Added for fallback response identification
 }
+
+// Internal wrapper type for consistent handling
+export interface RuntimeConfigResponseWrapper extends ApiResponse<RuntimeConfigResponse> {}
 
 export interface ActivationStats {
   total_activations: number;
