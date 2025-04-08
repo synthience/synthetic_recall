@@ -1,102 +1,134 @@
 import axios from 'axios';
-import { useQuery, QueryFunction } from '@tanstack/react-query';
+import { useQuery, QueryFunction, QueryFunctionContext } from '@tanstack/react-query';
 import { 
-  ServiceStatus, 
-  ServiceStatusResponse,
+  ServiceStatusResponse, 
   MemoryStatsResponse, 
-  NeuralMemoryStatus, 
-  NeuralMemoryDiagnosticsResponse,
-  CCEResponse,
-  CCEMetricsResponse,
-  CCEConfig,
-  CCEConfigResponse,
-  Assembly,
-  AssembliesResponse,
-  Alert,
-  AlertsResponse,
-  ExplainActivationResponse,
-  ExplainMergeResponse,
-  LineageResponse,
-  MergeLogResponse,
-  RuntimeConfigResponse,
-  CCEStatusResponse
+  AssembliesResponse, 
+  AssemblyResponse, 
+  NeuralMemoryStatusResponse, 
+  NeuralMemoryStatus,
+  NeuralMemoryDiagnosticsResponse, 
+  CCEResponse, 
+  CCEMetricsResponse, 
+  CCEMetricsData,
+  CCEConfig, 
+  CCEConfigResponse, 
+  NeuralMemoryConfigResponse, 
+  Assembly, 
+  Alert, 
+  AlertsResponse, 
+  ExplainActivationResponse, 
+  ExplainMergeResponse, 
+  LineageResponse, 
+  MergeLogResponse, 
+  RuntimeConfigResponse, 
+  ApiResponse,
+  ServiceStatusData,
+  MemoryStatsData,
+  NeuralMemoryDiagnostics,
+  CCEStatusData
 } from '@shared/schema';
 
+type FetchDirection = 'forward' | 'backward';
+
 const api = axios.create({
-  baseURL: '/api'
+  baseURL: '/api/proxy',
 });
 
-const defaultQueryFn = async <TData>({ queryKey }: { queryKey: readonly unknown[] }): Promise<TData> => {
-  let url = '';
-  const params: Record<string, any> = {};
-  queryKey.forEach(part => {
-    if (typeof part === 'string') {
-      url += `/${part}`;
-    } else if (typeof part === 'object' && part !== null) {
-      Object.assign(params, part);
-    }
-  });
-  if (url.startsWith('/')) {
-    url = url.substring(1);
-  }
+type DefaultQueryContext = QueryFunctionContext<readonly unknown[], any>;
+
+const defaultQueryFn: QueryFunction<any, readonly unknown[], any> = async (context) => {
+  const { queryKey, signal, meta } = context;
+  // Ensure pageParam and direction have sensible defaults
+  const finalPageParam = context.pageParam !== undefined ? context.pageParam : null;
+  // We use 'as any' cast on context to extract direction, defaulting to 'forward'
+  const finalDirection = (context as any).direction !== undefined ? (context as any).direction as FetchDirection : 'forward';
+  
+  // Build URL from query key parts
+  const url = queryKey
+    .filter(key => typeof key === 'string' || key === null)
+    .map(key => encodeURIComponent(String(key)))
+    .join('/');
+
+  // Extract query parameters from the last item in queryKey if it's an object
+  const lastItem = queryKey[queryKey.length - 1];
+  const params = typeof lastItem === 'object' && lastItem !== null && !Array.isArray(lastItem)
+    ? lastItem
+    : {};
+
+  // Log the request details for better debugging
+  console.log(`[API] Making request to: /api/proxy/${url}`, { params });
+
   try {
-    const { data } = await api.get(url, { params });
-    return data as TData;
-  } catch (error: any) {
-    console.error(`API Query Error for ${url}:`, error.response?.data || error.message);
-    throw new Error(error.response?.data?.message || error.message || `Failed to fetch ${url}`);
+    const response = await api.get<ApiResponse<any>>(url, { params, signal });
+    const responseData = response.data;
+    
+    if (responseData.success) {
+      // Return the full API response so that UI code accessing properties like data, lineage, explanation, etc., remains valid
+      console.log(`[API] Successful response for ${url}:`, { 
+        success: responseData.success, 
+        dataKeys: responseData.data ? Object.keys(responseData.data) : 'none' 
+      });
+      return responseData;
+    } else {
+      console.error(`[API] Error response for ${url}:`, responseData.error || 'No error details');
+      throw new Error(responseData.error || 'Request failed');
+    }
+  } catch (error) {
+    console.error(`[API] Exception for ${url}:`, error);
+    throw error; // Re-throw to let TanStack Query handle retries
   }
 };
 
 export const useMemoryCoreHealth = () => {
-  return useQuery<ServiceStatusResponse>({
+  return useQuery<ApiResponse<ServiceStatusData>>({
     queryKey: ['memory-core', 'health'],
-    queryFn: () => defaultQueryFn<ServiceStatusResponse>({ queryKey: ['memory-core', 'health'] }),
+    queryFn: defaultQueryFn,
     refetchInterval: false, 
     retry: 2
   });
 };
 
 export const useNeuralMemoryHealth = () => {
-  return useQuery<ServiceStatusResponse>({
+  return useQuery<ApiResponse<ServiceStatusData>>({
     queryKey: ['neural-memory', 'health'],
-    queryFn: () => defaultQueryFn<ServiceStatusResponse>({ queryKey: ['neural-memory', 'health'] }),
+    queryFn: defaultQueryFn,
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useCCEHealth = () => {
-  return useQuery<ServiceStatusResponse>({
+  return useQuery<ApiResponse<ServiceStatusData>>({
     queryKey: ['cce', 'health'],
-    queryFn: () => defaultQueryFn<ServiceStatusResponse>({ queryKey: ['cce', 'health'] }),
+    queryFn: defaultQueryFn,
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useMemoryCoreStats = () => {
-  return useQuery<MemoryStatsResponse>({
+  return useQuery<ApiResponse<MemoryStatsData>>({
     queryKey: ['memory-core', 'stats'],
-    queryFn: () => defaultQueryFn<MemoryStatsResponse>({ queryKey: ['memory-core', 'stats'] }),
+    queryFn: defaultQueryFn,
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useAssemblies = () => {
-  return useQuery<AssembliesResponse>({
+  return useQuery<ApiResponse<Assembly[]>>({
     queryKey: ['memory-core', 'assemblies'],
-    queryFn: () => defaultQueryFn<AssembliesResponse>({ queryKey: ['memory-core', 'assemblies'] }),
+    queryFn: defaultQueryFn,
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useAssembly = (id: string | null) => {
-  return useQuery<Assembly>({
+  return useQuery<ApiResponse<Assembly>>({
     queryKey: ['memory-core', 'assemblies', id],
-    queryFn: () => defaultQueryFn<Assembly>({ queryKey: ['memory-core', 'assemblies', id] }),
+    queryFn: defaultQueryFn,
     enabled: !!id,
     refetchInterval: false,
     retry: 2
@@ -104,107 +136,119 @@ export const useAssembly = (id: string | null) => {
 };
 
 export const useNeuralMemoryStatus = () => {
-  return useQuery<NeuralMemoryStatus>({
+  return useQuery<ApiResponse<NeuralMemoryStatus>>({
     queryKey: ['neural-memory', 'status'],
-    queryFn: () => defaultQueryFn<NeuralMemoryStatus>({ queryKey: ['neural-memory', 'status'] }),
+    queryFn: defaultQueryFn,
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useNeuralMemoryDiagnostics = (window: string = '24h') => {
-  return useQuery<NeuralMemoryDiagnosticsResponse>({
+  return useQuery<ApiResponse<NeuralMemoryDiagnostics>>({
     queryKey: ['neural-memory', 'diagnose_emoloop', { window }],
-    queryFn: () => defaultQueryFn<NeuralMemoryDiagnosticsResponse>({ queryKey: ['neural-memory', 'diagnose_emoloop', { window }] }),
+    queryFn: defaultQueryFn,
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useCCEStatus = () => {
-  return useQuery<CCEStatusResponse>({
+  return useQuery<ApiResponse<CCEStatusData>>({
     queryKey: ['cce', 'status'],
-    queryFn: () => defaultQueryFn<CCEStatusResponse>({ queryKey: ['cce', 'status'] }),
+    queryFn: defaultQueryFn,
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useRecentCCEResponses = () => {
-  return useQuery<CCEMetricsResponse>({
+  return useQuery<ApiResponse<CCEMetricsData>>({
     queryKey: ['cce', 'metrics', 'recent_cce_responses'],
-    queryFn: () => defaultQueryFn<CCEMetricsResponse>({ queryKey: ['cce', 'metrics', 'recent_cce_responses'] }),
+    queryFn: defaultQueryFn,
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useNeuralMemoryConfig = () => {
-  return useQuery<CCEConfigResponse>({
+  return useQuery<ApiResponse<Record<string, any>>>({
     queryKey: ['neural-memory', 'config'],
-    queryFn: () => defaultQueryFn<CCEConfigResponse>({ queryKey: ['neural-memory', 'config'] }),
+    queryFn: defaultQueryFn,
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useCCEConfig = () => {
-  return useQuery<CCEConfigResponse>({
+  return useQuery<ApiResponse<CCEConfig>>({
     queryKey: ['cce', 'config'],
-    queryFn: () => defaultQueryFn<CCEConfigResponse>({ queryKey: ['cce', 'config'] }),
+    queryFn: defaultQueryFn,
     refetchInterval: false,
     retry: 2
   });
 };
 
 export const useAlerts = () => {
-  return useQuery<AlertsResponse>({
-    queryKey: ['alerts'],
-    queryFn: () => defaultQueryFn<AlertsResponse>({ queryKey: ['alerts'] }),
+  return useQuery<ApiResponse<Alert[]>>({
+    queryKey: ['memory-core', 'alerts'],
+    queryFn: defaultQueryFn,
     refetchInterval: false,
     retry: 2
   });
 };
 
-export const useExplainActivation = (assemblyId: string | null, memoryId?: string | null) => {
-  const queryParams = memoryId ? { memory_id: memoryId } : {};
-  const queryKey = ['memory-core', 'assemblies', assemblyId, 'explain_activation', queryParams] as const;
-  return useQuery<ExplainActivationResponse>({
-    queryKey: queryKey,
-    queryFn: () => defaultQueryFn<ExplainActivationResponse>({ queryKey }),
+export const useExplainActivation = (assemblyId: string | null, memoryId: string | undefined) => {
+  const queryKey = ['memory-core', 'assemblies', assemblyId, 'explain_activation', { memory_id: memoryId }] as const;
+  return useQuery<ApiResponse<ExplainActivationResponse>, Error>({
+    queryKey,
+    queryFn: defaultQueryFn, 
     enabled: false, 
-    retry: 1,
-    staleTime: Infinity,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
   });
 };
 
 export const useExplainMerge = (assemblyId: string | null) => {
   const queryKey = ['memory-core', 'assemblies', assemblyId, 'explain_merge'] as const;
-  return useQuery<ExplainMergeResponse>({
-    queryKey: queryKey,
-    queryFn: () => defaultQueryFn<ExplainMergeResponse>({ queryKey }),
+  return useQuery<ApiResponse<ExplainMergeResponse>, Error>({
+    queryKey,
+    queryFn: defaultQueryFn, 
+    enabled: false, 
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
+  });
+};
+
+export const useAssemblyLineage = (assemblyId: string | null, maxDepth: number = 5) => {
+  const queryKey = ['memory-core', 'assemblies', assemblyId, 'lineage', { max_depth: maxDepth }] as const;
+  return useQuery<ApiResponse<LineageResponse>, Error>({
+    queryKey,
+    queryFn: defaultQueryFn, 
+    enabled: false, 
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
+  });
+};
+
+// This is a duplicate of useAssemblyLineage with a different name - keeping for backward compatibility
+// Eventually, this should be removed and all components should use useAssemblyLineage
+export const useLineage = (assemblyId: string | null, maxDepth: number = 5) => {
+  const queryKey = ['memory-core', 'assemblies', assemblyId, 'lineage', { max_depth: maxDepth }] as const;
+  return useQuery<ApiResponse<LineageResponse>, Error>({
+    queryKey,
+    queryFn: defaultQueryFn,
     enabled: false, 
     retry: 1,
     staleTime: Infinity,
   });
 };
 
-export const useAssemblyLineage = (assemblyId: string | null) => {
-  const queryKey = ['memory-core', 'assemblies', assemblyId, 'lineage'] as const;
-  return useQuery<LineageResponse>({
-    queryKey: queryKey,
-    queryFn: () => defaultQueryFn<LineageResponse>({ queryKey }),
-    enabled: !!assemblyId, 
-    retry: 1,
-    staleTime: 5 * 60 * 1000, 
-  });
-};
-
 export const useMergeLog = (limit: number = 50) => {
   const queryKey = ['memory-core', 'diagnostics', 'merge_log', { limit }] as const;
-  return useQuery<MergeLogResponse>({
-    queryKey: queryKey,
-    queryFn: () => defaultQueryFn<MergeLogResponse>({ queryKey }),
+  return useQuery<ApiResponse<MergeLogResponse>, Error>({
+    queryKey,
+    queryFn: defaultQueryFn,
     refetchInterval: 30000, 
     staleTime: 15000, 
   });
@@ -212,28 +256,29 @@ export const useMergeLog = (limit: number = 50) => {
 
 export const useRuntimeConfig = (serviceName: string | null) => {
   const queryKey = ['memory-core', 'config', 'runtime', serviceName] as const;
-  return useQuery<RuntimeConfigResponse>({
-    queryKey: queryKey,
-    queryFn: () => defaultQueryFn<RuntimeConfigResponse>({ queryKey }),
+  return useQuery<ApiResponse<RuntimeConfigResponse>, Error>({
+    queryKey,
+    queryFn: defaultQueryFn,
     enabled: !!serviceName,
     staleTime: 10 * 60 * 1000, 
+    // Reduce retries since our proxy handles fallbacks
+    retry: 1,
+    retryDelay: 500,
+    // Set a longer timeout for config operations which might be slow
+    meta: { timeoutMs: 30000 }
   });
 };
 
-export const verifyMemoryCoreIndex = async () => { // Renamed back to original name to fix import error
-  // Correct method and path
-  return api.get('/memory-core/check_index_integrity');
+export const verifyMemoryCoreIndex = async () => { 
+  return api.post('/memory-core/admin/verify_index');
 };
 
 export const triggerMemoryCoreRetryLoop = async () => {
-  // Correct method and path (uses the NEWLY implemented endpoint)
-  return api.post('/memory-core/diagnostics/trigger_retry_loop');
+  return api.post('/memory-core/admin/trigger_retry_loop');
 };
 
-// Add missing function from plan
 export const repairMemoryCoreIndex = async (repairType: string = 'auto') => {
-  // Correct method and path
-  return api.post('/memory-core/repair_index', { repair_type: repairType });
+  return api.post('/memory-core/admin/repair_index', { repair_type: repairType });
 };
 
 export const initializeNeuralMemory = async () => {
