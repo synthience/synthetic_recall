@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { useQuery, QueryFunction, QueryFunctionContext } from '@tanstack/react-query';
+import { useQuery, QueryFunction, QueryFunctionContext, UseQueryOptions } from '@tanstack/react-query';
 import { 
   ServiceStatusResponse, 
   MemoryStatsResponse, 
@@ -80,49 +80,100 @@ const defaultQueryFn: QueryFunction<any, readonly unknown[], any> = async (conte
   }
 };
 
-export const useMemoryCoreHealth = () => {
-  return useQuery<ApiResponse<ServiceStatusData>>({
-    queryKey: ['memory-core', 'health'],
-    queryFn: defaultQueryFn,
-    refetchInterval: false, 
-    retry: 2
-  });
+export const useMemoryCoreHealth = (options?: Partial<UseQueryOptions<ApiResponse<ServiceStatusData>>>) => {
+  return useQuery<ApiResponse<ServiceStatusData>>(
+    {
+      queryKey: ['memory-core', 'health'],
+      queryFn: defaultQueryFn,
+      refetchInterval: false, 
+      retry: 2,
+      ...options
+    }
+  );
 };
 
-export const useNeuralMemoryHealth = () => {
-  return useQuery<ApiResponse<ServiceStatusData>>({
-    queryKey: ['neural-memory', 'health'],
-    queryFn: defaultQueryFn,
-    refetchInterval: false,
-    retry: 2
-  });
+export const useNeuralMemoryHealth = (options?: Partial<UseQueryOptions<ApiResponse<ServiceStatusData>>>) => {
+  return useQuery<ApiResponse<ServiceStatusData>>(
+    {
+      queryKey: ['neural-memory', 'health'],
+      queryFn: defaultQueryFn,
+      refetchInterval: false,
+      retry: 2,
+      ...options
+    }
+  );
 };
 
-export const useCCEHealth = () => {
-  return useQuery<ApiResponse<ServiceStatusData>>({
-    queryKey: ['cce', 'health'],
-    queryFn: defaultQueryFn,
-    refetchInterval: false,
-    retry: 2
-  });
+export const useCCEHealth = (options?: Partial<UseQueryOptions<ApiResponse<ServiceStatusData>>>) => {
+  return useQuery<ApiResponse<ServiceStatusData>>(
+    {
+      queryKey: ['cce', 'health'],
+      queryFn: defaultQueryFn,
+      refetchInterval: false,
+      retry: 2,
+      ...options
+    }
+  );
 };
 
-export const useMemoryCoreStats = () => {
-  return useQuery<ApiResponse<MemoryStatsData>>({
-    queryKey: ['memory-core', 'stats'],
-    queryFn: defaultQueryFn,
-    refetchInterval: false,
-    retry: 2
-  });
+export const useMemoryCoreStats = (options?: Partial<UseQueryOptions<ApiResponse<MemoryStatsData>>>) => {
+  return useQuery<ApiResponse<MemoryStatsData>>(
+    {
+      queryKey: ['memory-core', 'stats'],
+      queryFn: defaultQueryFn,
+      refetchInterval: false,
+      retry: 2,
+      ...options
+    }
+  );
 };
 
-export const useAssemblies = () => {
-  return useQuery<ApiResponse<Assembly[]>>({
-    queryKey: ['memory-core', 'assemblies'],
-    queryFn: defaultQueryFn,
-    refetchInterval: false,
-    retry: 2
-  });
+export const useAssemblies = (options?: Partial<UseQueryOptions<ApiResponse<Assembly[]>>>) => {
+  return useQuery<ApiResponse<Assembly[]>>(
+    {
+      queryKey: ['memory-core', 'assemblies'],
+      queryFn: defaultQueryFn,
+      refetchInterval: false,
+      retry: 2,
+      ...options
+    }
+  );
+};
+
+export const useNeuralMemoryDiagnostics = (window: string = '24h', options?: Partial<UseQueryOptions<ApiResponse<NeuralMemoryDiagnostics>>>) => {
+  return useQuery<ApiResponse<NeuralMemoryDiagnostics>>(
+    {
+      queryKey: ['neural-memory', 'diagnose_emoloop', { window }],
+      queryFn: defaultQueryFn,
+      refetchInterval: false,
+      retry: 2,
+      ...options
+    }
+  );
+};
+
+export const useRecentCCEResponses = (options?: Partial<UseQueryOptions<ApiResponse<CCEMetricsData>>>) => {
+  return useQuery<ApiResponse<CCEMetricsData>>(
+    {
+      queryKey: ['cce', 'metrics', 'recent_cce_responses'],
+      queryFn: defaultQueryFn,
+      refetchInterval: false,
+      retry: 2,
+      ...options
+    }
+  );
+};
+
+export const useAlerts = (options?: Partial<UseQueryOptions<ApiResponse<Alert[]>>>) => {
+  return useQuery<ApiResponse<Alert[]>>(
+    {
+      queryKey: ['memory-core', 'alerts'],
+      queryFn: defaultQueryFn,
+      refetchInterval: false,
+      retry: 2,
+      ...options
+    }
+  );
 };
 
 export const useAssembly = (id: string | null) => {
@@ -144,27 +195,9 @@ export const useNeuralMemoryStatus = () => {
   });
 };
 
-export const useNeuralMemoryDiagnostics = (window: string = '24h') => {
-  return useQuery<ApiResponse<NeuralMemoryDiagnostics>>({
-    queryKey: ['neural-memory', 'diagnose_emoloop', { window }],
-    queryFn: defaultQueryFn,
-    refetchInterval: false,
-    retry: 2
-  });
-};
-
 export const useCCEStatus = () => {
   return useQuery<ApiResponse<CCEStatusData>>({
     queryKey: ['cce', 'status'],
-    queryFn: defaultQueryFn,
-    refetchInterval: false,
-    retry: 2
-  });
-};
-
-export const useRecentCCEResponses = () => {
-  return useQuery<ApiResponse<CCEMetricsData>>({
-    queryKey: ['cce', 'metrics', 'recent_cce_responses'],
     queryFn: defaultQueryFn,
     refetchInterval: false,
     retry: 2
@@ -183,15 +216,6 @@ export const useNeuralMemoryConfig = () => {
 export const useCCEConfig = () => {
   return useQuery<ApiResponse<CCEConfig>>({
     queryKey: ['cce', 'config'],
-    queryFn: defaultQueryFn,
-    refetchInterval: false,
-    retry: 2
-  });
-};
-
-export const useAlerts = () => {
-  return useQuery<ApiResponse<Alert[]>>({
-    queryKey: ['memory-core', 'alerts'],
     queryFn: defaultQueryFn,
     refetchInterval: false,
     retry: 2
@@ -244,13 +268,14 @@ export const useLineage = (assemblyId: string | null, maxDepth: number = 5) => {
   });
 };
 
-export const useMergeLog = (limit: number = 50) => {
+export const useMergeLog = (limit: number = 50, options?: Partial<UseQueryOptions<ApiResponse<MergeLogResponse>, Error>>) => {
   const queryKey = ['memory-core', 'diagnostics', 'merge_log', { limit }] as const;
   return useQuery<ApiResponse<MergeLogResponse>, Error>({
     queryKey,
     queryFn: defaultQueryFn,
     refetchInterval: 30000, 
-    staleTime: 15000, 
+    staleTime: 15000,
+    ...options
   });
 };
 

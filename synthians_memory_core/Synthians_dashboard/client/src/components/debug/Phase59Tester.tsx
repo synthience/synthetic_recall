@@ -71,7 +71,7 @@ const Phase59Tester: React.FC = () => {
               <p>Loading merge log...</p>
             ) : mergeLogError ? (
               <p className="text-red-600">Error loading merge log</p>
-            ) : !mergeLogData?.reconciled_log_entries?.length ? (
+            ) : !mergeLogData?.data?.reconciled_log_entries?.length ? (
               <p>No merge log entries available</p>
             ) : (
               <div className="overflow-auto max-h-64">
@@ -84,7 +84,7 @@ const Phase59Tester: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {mergeLogData?.reconciled_log_entries?.map((entry: ReconciledMergeLogEntry, idx: number) => (
+                    {mergeLogData?.data?.reconciled_log_entries?.map((entry: ReconciledMergeLogEntry, idx: number) => (
                       <tr key={idx}>
                         <td className="px-6 py-4 whitespace-nowrap">{new Date(entry.creation_timestamp).toLocaleString()}</td>
                         <td className="px-6 py-4 whitespace-nowrap">{entry.merge_event_id?.substring(0, 8)}...</td>
@@ -123,13 +123,13 @@ const Phase59Tester: React.FC = () => {
                 <p>Loading lineage...</p>
               ) : lineageError ? (
                 <p className="text-red-600">Error loading lineage for assembly {testAssemblyId}</p>
-              ) : !lineageData?.lineage?.length ? (
+              ) : !lineageData?.data?.lineage?.length ? (
                 <p>No lineage found for this assembly or assembly does not exist</p>
               ) : (
                 <div className="overflow-auto max-h-64">
-                  <h4 className="font-medium mb-2">Lineage Chain ({lineageData.lineage.length} entries):</h4>
+                  <h4 className="font-medium mb-2">Lineage Chain ({lineageData.data.lineage.length} entries):</h4>
                   <ul className="space-y-2">
-                    {lineageData.lineage.map((entry: LineageEntry, idx: number) => (
+                    {lineageData.data.lineage.map((entry: LineageEntry, idx: number) => (
                       <li key={idx} className="p-2 border rounded">
                         <div className="flex justify-between">
                           <span className="font-medium">{entry.assembly_id}</span>

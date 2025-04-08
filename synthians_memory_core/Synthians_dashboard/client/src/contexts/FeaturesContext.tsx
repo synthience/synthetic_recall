@@ -20,138 +20,116 @@ const FeaturesContext = createContext<FeaturesContextType>({
 });
 
 export const FeaturesProvider = ({ children }: { children: ReactNode }) => {
-  const { data, isLoading, isError, error } = useRuntimeConfig('memory-core');
-  const [explainabilityEnabled, setExplainabilityEnabled] = useState(false);
-  const [debugMode, setDebugMode] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [usingFallbackConfig, setUsingFallbackConfig] = useState(false); // Track fallback usage
+  const { data: apiResponse, isLoading: configIsLoading, isError: configIsError, error: configError } = useRuntimeConfig('memory-core');
   
+  // Start with a stable initial state - this prevents excessive re-renders
+  const [featuresState, setFeaturesState] = useState<FeaturesContextType>({
+    explainabilityEnabled: false, // Start disabled until config is loaded
+    isLoading: true, // Start in loading state
+    error: null,
+    debugMode: false,
+    usingFallbackConfig: false
+  });
+  
+  // Only update the state ONCE when the config fetch settles
   useEffect(() => {
-    console.log('[FeaturesContext] useEffect triggered. isLoading:', isLoading, 'isError:', isError, 'data:', data);
+    console.log('[FeaturesContext] Config fetch status: isLoading:', configIsLoading, 'isError:', configIsError, 'has data:', !!apiResponse);
 
-    if (!isLoading) {
-      let isFallback = false;
+    // Only process when loading is complete (either success or error)
+    if (!configIsLoading) {
+      let newExplainability = false;
+      let newDebug = false;
+      let newError: string | null = null;
+      let newIsFallback = false;
       let note = '';
 
-      // PRIORITIZE SUCCESSFUL DATA, even if 'isError' might be momentarily true from a failed retry
-      if (data && (data as ApiResponse<RuntimeConfigResponse>).success && (data as ApiResponse<RuntimeConfigResponse>).data) {
-        console.log('[FeaturesContext] Processing successful data:', (data as ApiResponse<RuntimeConfigResponse>).data);
+      // CASE 1: We have a successful response with data
+      if (apiResponse && apiResponse.success && apiResponse.data) {
+        console.log('[FeaturesContext] Processing successful data:', apiResponse.data);
         
-        // For temporary solution: check if data.data directly contains config
-        // or if it's health data with version/status
-        let configData = (data as ApiResponse<RuntimeConfigResponse>).data;
+        const configData = apiResponse.data;
         
-        // If it looks like health data, create a temporary config
-        // This is a temporary workaround until the proper config endpoint is fixed
-        if (configData && 'status' in configData && 'version' in configData) {
-          console.log('[FeaturesContext] Detected health data instead of config, creating temporary config');
-          // Enable explainability features in development by default
-          setExplainabilityEnabled(true);
-          setDebugMode(true);
-          setErrorMessage(null);
-          isFallback = true;
-          note = 'Using health data as config';
-        } else if (configData?.config) {
-          // Check for fallback config
-          if (configData._note?.includes('FALLBACK CONFIG')) {
-            isFallback = true;
-            note = configData._note;
-            console.warn(`[FeaturesContext] Using fallback configuration: ${note}`);
-            
-            // Display a dev-only toast/banner for fallback config
-            if (process.env.NODE_ENV === 'development') {
-              toast({
-                title: "Using Fallback Config",
-                description: `Could not reach Memory Core config. Explainability features enabled by default for dev. Reason: ${(configData as any)?._original_error || 'Unknown Proxy Error'}`,
-                variant: "default", // Use default or a custom 'warning' variant
-                duration: 10000, // Show for 10 seconds
-              });
-            }
-          }
-
-          // Normal config data processing
-          const enabled = isFallback || (configData.config.ENABLE_EXPLAINABILITY ?? false);
-          const debug = isFallback || (configData.config.DEBUG_MODE ?? false);
-          console.log('[FeaturesContext] Config loaded successfully. ENABLE_EXPLAINABILITY:', enabled, 'Fallback:', isFallback);
-          setExplainabilityEnabled(enabled);
-          setDebugMode(debug);
-          setErrorMessage(isFallback ? `Using fallback configuration: ${note}` : null);
-        } else {
-          console.warn('[FeaturesContext] Successful response but unexpected data structure:', configData);
-          // Data exists but doesn't have expected structure - still better than nothing
-          // Try to enable features for development if possible
-          isFallback = typeof configData?._note === 'string' && (configData?._note?.includes('FALLBACK') ?? false);
-          note = configData?._note || 'unknown structure';
+        // Check if we received fallback config (added by the proxy on error)
+        if (configData._note?.includes('FALLBACK CONFIG')) {
+          newIsFallback = true;
+          note = configData._note;
+          console.warn(`[FeaturesContext] Using fallback configuration: ${note}`);
           
-          if (isFallback) {
-            console.log('[FeaturesContext] Detected fallback data, enabling features for development');
-            setExplainabilityEnabled(true);
-            setDebugMode(true);
-            setErrorMessage(`Using fallback configuration: ${note}`);
-            
-            // Display dev toast for fallback
-            if (process.env.NODE_ENV === 'development') {
-              toast({
-                title: "Using Fallback Config",
-                description: `Config has unexpected structure. Features enabled by default for dev.`,
-                variant: "default",
-                duration: 8000,
-              });
-            }
-          } else {
-            // Unknown data structure
-            setExplainabilityEnabled(false);
-            setDebugMode(false);
-            setErrorMessage('Unexpected API response structure');
+          // For development, use fallback values (enable features)
+          if (process.env.NODE_ENV === 'development') {
+            newExplainability = true;
+            newDebug = true;
+            newError = `Using fallback configuration: ${note}`;
           }
+        } else if (configData.config) {
+          // Normal config data processing - use actual values
+          newExplainability = configData.config.ENABLE_EXPLAINABILITY ?? false;
+          newDebug = configData.config.DEBUG_MODE ?? false;
+          newError = null; // Clear any previous error
+          console.log('[FeaturesContext] Config loaded successfully. ENABLE_EXPLAINABILITY:', newExplainability);
+        } else {
+          // Response has unexpected structure - treat as fallback
+          console.warn('[FeaturesContext] Successful response but unexpected data structure:', configData);
+          newIsFallback = true;
+          note = 'Response missing config field';
+          
+          // For development, enable features by default
+          if (process.env.NODE_ENV === 'development') {
+            newExplainability = true;
+            newDebug = true;
+          }
+          newError = `Unexpected API response structure: ${note}`;
         }
-      } else {
-        // Handle error or unsuccessful response ONLY IF data is not successfully present
-        const message = isError
-          ? `Hook Error: ${error?.message || 'Unknown error'}`
-          : data ? `API Error: ${(data as ApiResponse<RuntimeConfigResponse>).error || 'Unknown API error'}` : 'Data fetch failed or response malformed';
+      } 
+      // CASE 2: We have an error or unsuccessful response
+      else {
+        const message = configIsError
+          ? `Config Hook Error: ${configError?.message || 'Unknown error'}`
+          : apiResponse ? `Config API Error: ${apiResponse.error || 'Unknown API error'}` : 'Config fetch failed';
 
-        console.warn(`[FeaturesContext] Failed to load config OR data invalid: ${message}`);
-        console.warn('[FeaturesContext] Using default configuration (explainability=false)');
-
-        setExplainabilityEnabled(false);
-        setDebugMode(false);
-        setErrorMessage(message);
-        isFallback = false;
+        console.warn(`[FeaturesContext] Failed to load config: ${message}`);
+        
+        // Enable features by default in development even on error
+        if (process.env.NODE_ENV === 'development') {
+          newExplainability = true;
+          newDebug = true;
+          newIsFallback = true;
+        }
+        newError = message;
       }
       
-      // Update fallback status
-      setUsingFallbackConfig(isFallback);
+      // Update state ONCE with all computed values
+      const newState = {
+        explainabilityEnabled: newExplainability,
+        isLoading: false, // No longer loading
+        error: newError,
+        debugMode: newDebug,
+        usingFallbackConfig: newIsFallback
+      };
+      
+      console.log('[FeaturesContext] Setting new state:', newState);
+      setFeaturesState(newState);
+      
+      // Display toast ONLY in development mode and only if using fallback
+      if (newIsFallback && process.env.NODE_ENV === 'development') {
+        toast({
+          title: "Using Fallback Config",
+          description: `Could not reach Memory Core config. Features ${newExplainability ? 'enabled' : 'disabled'} by default. Reason: ${newError || note}`,
+          variant: "default",
+          duration: 10000,
+        });
+      }
     }
-  }, [data, isLoading, isError, error]);
-  
-  // Debug information
-  useEffect(() => {
-    console.log('[FeaturesContext] Current state:', {
-      isLoading,
-      isError,
-      hasData: !!data,
-      dataSuccess: data ? (data as ApiResponse<RuntimeConfigResponse>).success : undefined,
-      explainabilityEnabled,
-      debugMode,
-      errorMessage,
-      usingFallbackConfig
-    });
-  }, [isLoading, isError, data, explainabilityEnabled, debugMode, errorMessage, usingFallbackConfig]);
+    // Only depend on loading state and data, not internal state
+  }, [configIsLoading, apiResponse, configIsError, configError]);
   
   return (
-    <FeaturesContext.Provider value={{ 
-      explainabilityEnabled, 
-      isLoading, 
-      error: errorMessage, 
-      debugMode, 
-      usingFallbackConfig 
-    }}>
+    <FeaturesContext.Provider value={featuresState}>
       {children}
       {/* Render a small persistent banner if using fallback in dev mode */}
-      {usingFallbackConfig && process.env.NODE_ENV === 'development' && (
+      {featuresState.usingFallbackConfig && process.env.NODE_ENV === 'development' && (
         <div className="fixed bottom-2 left-2 bg-yellow-500 text-black text-xs p-1 rounded z-50">
-          Using Fallback Config
+          Using Fallback Config (404: /config/runtime/memory-core)
         </div>
       )}
     </FeaturesContext.Provider>

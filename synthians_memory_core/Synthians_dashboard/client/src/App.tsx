@@ -36,6 +36,7 @@ function Router() {
     <DashboardShell>
       <Switch>
         <Route path="/" component={Overview} />
+        <Route path="/overview" component={Overview} />
         <Route path="/memory-core" component={MemoryCore} />
         <Route path="/neural-memory" component={NeuralMemory} />
         <Route path="/cce" component={CCE} />
