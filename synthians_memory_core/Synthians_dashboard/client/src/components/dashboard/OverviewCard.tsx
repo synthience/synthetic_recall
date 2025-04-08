@@ -13,9 +13,10 @@ interface OverviewCardProps {
   isLoading: boolean;
   isError?: boolean;
   error?: any;
+  errorMessage?: string | null;
 }
 
-export function OverviewCard({ title, icon, service, metrics, isLoading, isError = false, error }: OverviewCardProps) {
+export function OverviewCard({ title, icon, service, metrics, isLoading, isError = false, error, errorMessage }: OverviewCardProps) {
   return (
     <Card className="overflow-hidden">
       <CardHeader className="px-4 py-3 bg-muted border-b border-border flex justify-between items-center">
@@ -44,15 +45,15 @@ export function OverviewCard({ title, icon, service, metrics, isLoading, isError
           <Alert variant="destructive" className="mb-4">
             <AlertTitle>Failed to load data</AlertTitle>
             <AlertDescription>
-              {error?.message || "There was an error fetching data for this service."}
+              {errorMessage || error?.message || "There was an error fetching data for this service."}
             </AlertDescription>
           </Alert>
-        ) : metrics ? (
+        ) : metrics && Object.keys(metrics).length > 0 ? (
           <div className="grid grid-cols-2 gap-4 mb-4">
             {Object.entries(metrics).map(([key, value], index) => (
               <div key={index} className="bg-muted p-3 rounded-md">
                 <div className="text-xs text-gray-500 mb-1">{key}</div>
-                <div className="text-lg font-mono">{value}</div>
+                <div className="text-lg font-mono">{value ?? "N/A"}</div>
               </div>
             ))}
           </div>
@@ -64,8 +65,8 @@ export function OverviewCard({ title, icon, service, metrics, isLoading, isError
         )}
         {service && (
           <div className="text-xs text-gray-400 flex justify-between">
-            {service.uptime && <span>Uptime: {service.uptime}</span>}
-            {service.version && <span>Version: {service.version}</span>}
+            {service.uptime !== null && service.uptime !== undefined && <span>Uptime: {service.uptime}</span>}
+            {service.version !== null && service.version !== undefined && <span>Version: {service.version}</span>}
           </div>
         )}
       </CardContent>

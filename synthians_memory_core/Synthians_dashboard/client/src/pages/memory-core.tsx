@@ -27,7 +27,7 @@ export default function MemoryCore() {
   const serviceStatus = memoryCoreHealth.data?.success && memoryCoreHealth.data.data ? {
     name: "Memory Core",
     // Access status from nested data property and use robust check
-    status: ["ok", "healthy"].includes(memoryCoreHealth.data.data.status?.toLowerCase()) ? "Healthy" : "Unhealthy",
+    status: ["ok", "healthy"].includes((memoryCoreHealth.data.data.status || "").toLowerCase()) ? "Healthy" : "Unhealthy",
     url: "/api/memory-core/health",
     // Handle both uptime formats (string or number)
     uptime: memoryCoreHealth.data.data.uptime || 
@@ -171,13 +171,13 @@ export default function MemoryCore() {
                         <TableRow>
                           <TableCell className="font-medium">Dirty Memories</TableCell>
                           <TableCell className="text-right">
-                            {memoryCoreStats.data?.data?.core_stats?.dirty_memories?.toLocaleString() ?? 0}
+                            {memoryCoreStats.data?.data?.core_stats?.dirty_memories?.toLocaleString() ?? '0'}
                           </TableCell>
                         </TableRow>
                         <TableRow>
                           <TableCell className="font-medium">Pending Vector Updates</TableCell>
                           <TableCell className="text-right">
-                            {memoryCoreStats.data?.data?.core_stats?.pending_vector_updates?.toLocaleString() ?? 0}
+                            {memoryCoreStats.data?.data?.core_stats?.pending_vector_updates?.toLocaleString() ?? '0'}
                           </TableCell>
                         </TableRow>
                         <TableRow>

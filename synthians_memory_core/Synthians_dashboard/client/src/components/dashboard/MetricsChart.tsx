@@ -13,13 +13,20 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
+// Define a more specific type for chart data
+interface ChartDataPoint {
+  timestamp: string;
+  [key: string]: any; // Allow for various metric keys
+}
+
 interface MetricsChartProps {
   title: string;
-  data: any[];
+  data: ChartDataPoint[];
   dataKeys: { key: string; color: string; name: string }[];
   isLoading: boolean;
   isError?: boolean;
   error?: any;
+  errorMessage?: string | null;
   timeRange: string;
   onTimeRangeChange: (range: string) => void;
   summary?: { label: string; value: string | number; color?: string }[];
@@ -32,14 +39,15 @@ export function MetricsChart({
   isLoading,
   isError = false,
   error,
+  errorMessage,
   timeRange,
   onTimeRangeChange,
-  summary
+  summary = [],
 }: MetricsChartProps) {
   const timeRanges = ["24h", "12h", "6h", "1h"];
   
   // Empty data for initial state or errors - no random values
-  const emptyData = [
+  const emptyData: ChartDataPoint[] = [
     { timestamp: "2025-04-05T10:00:00Z" },
     { timestamp: "2025-04-05T11:00:00Z" },
     { timestamp: "2025-04-05T12:00:00Z" },
@@ -48,12 +56,22 @@ export function MetricsChart({
   ];
   
   // Use empty data only if we're not in error state and have no data
-  const chartData = isError ? [] : (data && data.length > 0 ? data : emptyData);
+  const chartData = isError ? [] : (Array.isArray(data) && data.length > 0 ? data : emptyData);
   
-  // Format date for display in chart
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return `${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
+  // Format date for display in chart with robust error handling
+  const formatDate = (dateString: string | number | undefined): string => {
+    if (!dateString) return "--:--";
+    
+    try {
+      const date = new Date(dateString);
+      // Check if the date is valid by ensuring getTime doesn't return NaN
+      if (isNaN(date.getTime())) return "--:--";
+      
+      return `${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
+    } catch (error) {
+      console.warn("Failed to format date:", dateString, error);
+      return "--:--";
+    }
   };
 
   return (
@@ -76,7 +94,7 @@ export function MetricsChart({
         {isLoading ? (
           <div className="space-y-4">
             <Skeleton className="h-[240px] w-full" />
-            {summary && (
+            {summary && summary.length > 0 && (
               <div className="grid grid-cols-3 gap-4">
                 {summary.map((_, i) => (
                   <Skeleton key={i} className="h-16" />
@@ -88,7 +106,7 @@ export function MetricsChart({
           <Alert variant="destructive" className="mb-4">
             <AlertTitle>Failed to load chart data</AlertTitle>
             <AlertDescription>
-              {error?.message || "There was an error fetching the metrics data. Please try again later."}
+              {errorMessage || error?.message || "There was an error fetching the metrics data. Please try again later."}
             </AlertDescription>
           </Alert>
         ) : (
@@ -107,6 +125,7 @@ export function MetricsChart({
                   <Tooltip 
                     labelFormatter={(label) => formatDate(label)}
                     contentStyle={{ backgroundColor: '#1e1e2d', borderColor: '#333' }}
+                    formatter={(value) => [(value ?? 'N/A').toString()]}
                   />
                   <Legend />
                   {dataKeys.map((dataKey) => (
@@ -125,13 +144,13 @@ export function MetricsChart({
               </ResponsiveContainer>
             </div>
             
-            {summary && (
+            {summary && summary.length > 0 && (
               <div className="grid grid-cols-3 gap-4 mt-4">
                 {summary.map((item, index) => (
                   <div key={index} className="bg-muted p-3 rounded">
                     <div className="text-xs text-gray-500 mb-1">{item.label}</div>
                     <div className={`text-xl font-mono ${item.color || 'text-white'}`}>
-                      {item.value}
+                      {item.value ?? 'N/A'}
                     </div>
                   </div>
                 ))}

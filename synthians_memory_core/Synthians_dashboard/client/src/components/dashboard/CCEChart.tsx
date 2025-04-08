@@ -13,18 +13,40 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
+// Define proper types for the CCE response data
+interface VariantSelection {
+  selected_variant: string;
+  confidence?: number;
+  selection_time?: number;
+}
+
+interface CCEResponse {
+  timestamp: string;
+  variant_selection?: VariantSelection;
+  [key: string]: any; // Allow for other fields
+}
+
+// Type for the prepared chart data
+interface ChartDataPoint {
+  hour: string;
+  MAC: number;
+  MAG: number;
+  MAL: number;
+}
+
 interface CCEChartProps {
-  data: any[];
+  data: CCEResponse[];
   isLoading: boolean;
   isError?: boolean;
   error?: any;
+  errorMessage?: string | null;
   title: string;
 }
 
-export function CCEChart({ data, isLoading, isError = false, error, title }: CCEChartProps) {
+export function CCEChart({ data, isLoading, isError = false, error, errorMessage, title }: CCEChartProps) {
   // Prepare data for the stacked bar chart
-  const prepareStackedData = (rawData: any[]) => {
-    if (!rawData || rawData.length === 0 || isError) {
+  const prepareStackedData = (rawData: CCEResponse[]): ChartDataPoint[] => {
+    if (!Array.isArray(rawData) || rawData.length === 0 || isError) {
       // Empty dataset - no data to display
       return []; // Return empty array if we're in an error state
     }
@@ -35,16 +57,29 @@ export function CCEChart({ data, isLoading, isError = false, error, title }: CCE
     // Create empty hourly buckets for the last 12 hours
     const now = new Date();
     for (let i = 0; i < 12; i++) {
-      const hour = new Date(now.getTime() - (i * 60 * 60 * 1000)).getHours();
-      const hourLabel = `${hour}h`;
-      hourlyData[hourLabel] = { mac7b: 0, mac13b: 0, titan7b: 0 };
+      const hourDate = new Date(now.getTime() - (i * 60 * 60 * 1000));
+      // Make sure we have a valid date
+      if (!isNaN(hourDate.getTime())) {
+        const hour = hourDate.getHours();
+        const hourLabel = `${hour}h`;
+        hourlyData[hourLabel] = { mac7b: 0, mac13b: 0, titan7b: 0 };
+      }
     }
     
     // Fill in the actual data
     rawData.forEach(response => {
-      if (!response.variant_selection) return;
+      if (!response?.variant_selection?.selected_variant) return;
       
-      const timestamp = new Date(response.timestamp);
+      let timestamp: Date;
+      try {
+        timestamp = new Date(response.timestamp);
+        // Check if the date is valid
+        if (isNaN(timestamp.getTime())) return;
+      } catch (e) {
+        console.warn("Invalid timestamp in CCE response:", response.timestamp);
+        return;
+      }
+      
       const hour = timestamp.getHours();
       const hourLabel = `${hour}h`;
       
@@ -52,7 +87,7 @@ export function CCEChart({ data, isLoading, isError = false, error, title }: CCE
         hourlyData[hourLabel] = { mac7b: 0, mac13b: 0, titan7b: 0 };
       }
       
-      const variant = response.variant_selection.selected_variant.toLowerCase();
+      const variant = (response.variant_selection.selected_variant || "").toLowerCase();
       if (variant.includes('mac-7b')) {
         hourlyData[hourLabel].mac7b += 1;
       } else if (variant.includes('mac-13b')) {
@@ -75,15 +110,17 @@ export function CCEChart({ data, isLoading, isError = false, error, title }: CCE
   
   // Calculate percentages for the legend
   const calculatePercentages = () => {
-    if (!data || data.length === 0 || isError) return { mac7b: 0, mac13b: 0, titan7b: 0 };
+    if (!Array.isArray(data) || data.length === 0 || isError) {
+      return { mac7b: 0, mac13b: 0, titan7b: 0 };
+    }
     
     let mac7b = 0, mac13b = 0, titan7b = 0;
     let total = 0;
     
     data.forEach(response => {
-      if (!response.variant_selection) return;
+      if (!response?.variant_selection?.selected_variant) return;
       
-      const variant = response.variant_selection.selected_variant.toLowerCase();
+      const variant = (response.variant_selection.selected_variant || "").toLowerCase();
       if (variant.includes('mac-7b')) {
         mac7b += 1;
       } else if (variant.includes('mac-13b')) {
@@ -127,12 +164,12 @@ export function CCEChart({ data, isLoading, isError = false, error, title }: CCE
           </div>
         ) : isError ? (
           <Alert variant="destructive" className="mb-4">
-            <AlertTitle>Failed to load variant data</AlertTitle>
+            <AlertTitle>Failed to load CCE data</AlertTitle>
             <AlertDescription>
-              {error?.message || "There was an error fetching the CCE variant data. Please try again later."}
+              {errorMessage || error?.message || "There was an error fetching CCE data. Please try again later."}
             </AlertDescription>
           </Alert>
-        ) : data.length === 0 ? (
+        ) : (!Array.isArray(data) || data.length === 0) ? (
           <div className="text-center py-8 text-muted-foreground">
             <p>No variant selection data available</p>
           </div>
@@ -146,6 +183,7 @@ export function CCEChart({ data, isLoading, isError = false, error, title }: CCE
                   <YAxis stroke="#888" tick={{ fontSize: 12 }} />
                   <Tooltip 
                     contentStyle={{ backgroundColor: '#1e1e2d', borderColor: '#333' }}
+                    formatter={(value) => [(value ?? 0).toString()]}
                   />
                   <Legend />
                   <Bar dataKey="MAC" stackId="a" fill={colors['MAC']} name="MAC (7B)" />
@@ -158,15 +196,15 @@ export function CCEChart({ data, isLoading, isError = false, error, title }: CCE
             <div className="grid grid-cols-3 gap-4 mt-4">
               <div className="bg-muted p-3 rounded">
                 <div className="text-xs text-gray-500 mb-1">MAC: 7B</div>
-                <div className="text-xl font-mono text-blue-500">{percentages.mac7b}%</div>
+                <div className="text-xl font-mono text-blue-500">{percentages?.mac7b ?? 0}%</div>
               </div>
               <div className="bg-muted p-3 rounded">
                 <div className="text-xs text-gray-500 mb-1">MAG: 13B</div>
-                <div className="text-xl font-mono text-purple-500">{percentages.mac13b}%</div>
+                <div className="text-xl font-mono text-purple-500">{percentages?.mac13b ?? 0}%</div>
               </div>
               <div className="bg-muted p-3 rounded">
                 <div className="text-xs text-gray-500 mb-1">MAL: Titan</div>
-                <div className="text-xl font-mono text-pink-500">{percentages.titan7b}%</div>
+                <div className="text-xl font-mono text-pink-500">{percentages?.titan7b ?? 0}%</div>
               </div>
             </div>
           </>
