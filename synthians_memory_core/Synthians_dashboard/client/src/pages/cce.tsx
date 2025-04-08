@@ -25,15 +25,15 @@ export default function CCE() {
   const recentCCEResponses = useRecentCCEResponses();
   
   // Prepare service status object
-  const serviceStatus: ServiceStatus | null = cceHealth.data?.success && cceHealth.data.data ? {
+  const serviceStatus: ServiceStatus | null = cceHealth.data?.data ? {
     name: "Context Cascade Engine",
     // Access status from nested data property and use robust check
-    status: ["ok", "healthy"].includes(cceHealth.data.data.status?.toLowerCase()) ? "Healthy" : "Unhealthy",
+    status: ["ok", "healthy"].includes((cceHealth.data?.data?.status || "").toLowerCase()) ? "Healthy" : "Unhealthy",
     url: "/api/cce/health",
     // Handle both uptime formats (string or number)
-    uptime: cceHealth.data.data.uptime || 
-           (cceHealth.data.data.uptime_seconds ? formatDuration(cceHealth.data.data.uptime_seconds) : "Unknown"),
-    version: cceHealth.data.data.version || "Unknown"
+    uptime: cceHealth.data?.data?.uptime || 
+           (cceHealth.data?.data?.uptime_seconds ? formatDuration(cceHealth.data?.data?.uptime_seconds) : "Unknown"),
+    version: cceHealth.data?.data?.version || "Unknown"
   } : null;
   
   // Get active variant from the most recent response
@@ -266,7 +266,7 @@ export default function CCE() {
                   <div>
                     <div className="h-32 mb-4 text-center text-gray-400">
                       <CCEChart 
-                        data={recentResponses} 
+                        data={variantSelections} 
                         isLoading={recentCCEResponses.isLoading}
                         isError={recentCCEResponses.isError}
                         error={recentCCEResponses.error}

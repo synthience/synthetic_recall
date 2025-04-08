@@ -3,17 +3,18 @@ import { useLocation, useParams } from 'wouter';
 import { useAssemblyDetails } from '@/lib/api/hooks/useAssemblyDetails';
 import { useAssemblyLineage, useExplainMerge, useExplainActivation } from '@/lib/api';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useFeatures } from '@/contexts/FeaturesContext';
+import { ExplainMergeData, ExplainActivationData } from '@shared/schema';
 import { LineageView } from '@/components/dashboard/LineageView';
 import { MergeExplanationView } from '@/components/dashboard/MergeExplanationView';
 import { ActivationExplanationView } from '@/components/dashboard/ActivationExplanationView';
 import { ArrowLeft, Calendar, Tag } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { useFeatures } from '@/contexts/FeaturesContext';
-import { ExplainMergeData, ExplainActivationData } from '@shared/schema';
 
 export default function AssemblyInspector() {
   const [, setLocation] = useLocation();
@@ -34,7 +35,7 @@ export default function AssemblyInspector() {
   const mergeExplanationQuery = useExplainMerge(assemblyId);
   
   // Prepare activation explanation query (triggered manually)
-  const activationExplanationQuery = useExplainActivation(assemblyId, selectedMemoryId);
+  const activationExplanationQuery = useExplainActivation(assemblyId, selectedMemoryId || undefined);
   
   // Handle memory selection for activation explanation
   const handleMemorySelect = (memoryId: string) => {
@@ -174,12 +175,18 @@ export default function AssemblyInspector() {
           </TabsList>
           
           <TabsContent value="lineage" className="pt-4">
-            <LineageView 
-              lineage={lineageQuery.data?.lineage} 
-              isLoading={lineageQuery.isLoading} 
-              isError={lineageQuery.isError} 
-              error={lineageQuery.error as Error}
-            />
+            {lineageQuery.isLoading ? (
+              <Skeleton className="h-64 w-full" />
+            ) : lineageQuery.isError ? (
+              <Alert variant="destructive">
+                <AlertTitle>Failed to load lineage data</AlertTitle>
+                <AlertDescription>
+                  {lineageQuery.error?.message || "Could not retrieve lineage data."}
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <LineageView lineage={lineageQuery.data?.data?.lineage || null} />
+            )}
           </TabsContent>
           
           <TabsContent value="merge" className="pt-4">
@@ -193,13 +200,17 @@ export default function AssemblyInspector() {
                 </div>
               )}
               
-              {(mergeExplanationQuery.data || mergeExplanationQuery.isLoading) && (
-                <MergeExplanationView 
-                  mergeData={mergeExplanationQuery.data?.explanation as ExplainMergeData | undefined} 
-                  isLoading={mergeExplanationQuery.isLoading} 
-                  isError={mergeExplanationQuery.isError} 
-                  error={mergeExplanationQuery.error as Error}
-                />
+              {mergeExplanationQuery.isLoading ? (
+                <Skeleton className="h-64 w-full" />
+              ) : mergeExplanationQuery.isError ? (
+                <Alert variant="destructive">
+                  <AlertTitle>Failed to load merge explanation</AlertTitle>
+                  <AlertDescription>
+                    {mergeExplanationQuery.error?.message || "Could not retrieve merge explanation data."}
+                  </AlertDescription>
+                </Alert>
+              ) : mergeExplanationQuery.data && (
+                <MergeExplanationView explanation={mergeExplanationQuery.data?.data?.explanation || null} />
               )}
             </div>
           </TabsContent>
@@ -245,13 +256,33 @@ export default function AssemblyInspector() {
                       </div>
                     </CardContent>
                   </Card>
+                ) : activationExplanationQuery.isLoading ? (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Memory Activation Details</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <Skeleton className="h-48 w-full" />
+                    </CardContent>
+                  </Card>
+                ) : activationExplanationQuery.isError ? (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Memory Activation Details</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <Alert variant="destructive">
+                        <AlertTitle>Failed to load activation data</AlertTitle>
+                        <AlertDescription>
+                          {activationExplanationQuery.error?.message || "Could not retrieve activation explanation data."}
+                        </AlertDescription>
+                      </Alert>
+                    </CardContent>
+                  </Card>
                 ) : (
                   <ActivationExplanationView 
-                    activationData={activationExplanationQuery.data?.explanation as ExplainActivationData | undefined} 
+                    explanation={activationExplanationQuery.data?.data?.explanation || null} 
                     memoryId={selectedMemoryId}
-                    isLoading={activationExplanationQuery.isLoading} 
-                    isError={activationExplanationQuery.isError} 
-                    error={activationExplanationQuery.error as Error}
                   />
                 )}
               </div>

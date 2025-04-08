@@ -22,10 +22,10 @@ export default function LLMGuidance() {
   
   // Filter responses that have LLM advice
   const llmResponses = React.useMemo(() => {
-    if (!data?.recent_responses) return [];
+    if (!data?.data?.recent_responses) return [];
     
     // Only include responses with LLM advice
-    let filtered = data.recent_responses.filter(
+    let filtered = data.data.recent_responses.filter(
       (response: CCEResponse) => response.llm_advice_used
     );
     
@@ -59,7 +59,7 @@ export default function LLMGuidance() {
   
   // Calculate statistics
   const stats = React.useMemo(() => {
-    if (!data?.recent_responses) {
+    if (!data?.data?.recent_responses) {
       return {
         totalRequests: 0,
         avgConfidence: 0,
@@ -67,7 +67,7 @@ export default function LLMGuidance() {
       };
     }
     
-    const llmResponses = data.recent_responses.filter(
+    const llmResponses = data.data.recent_responses.filter(
       (response: CCEResponse) => response.llm_advice_used
     );
     

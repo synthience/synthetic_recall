@@ -85,7 +85,7 @@ export default function MemoryCoreDiagnostics() {
         
         {/* Merge Log */}
         <MergeLogView
-          entries={mergeLogQuery.data?.reconciled_log_entries}
+          entries={mergeLogQuery.data?.data?.reconciled_log_entries}
           isLoading={mergeLogQuery.isLoading}
           isError={mergeLogQuery.isError}
           error={mergeLogQuery.error as Error}
@@ -135,7 +135,7 @@ export default function MemoryCoreDiagnostics() {
                     </tr>
                   </thead>
                   <tbody className="divide-y">
-                    {configQuery.data?.config && Object.entries(configQuery.data.config).map(([key, value]) => (
+                    {configQuery.data?.data?.config && Object.entries(configQuery.data.data.config).map(([key, value]) => (
                       <tr key={key} className="hover:bg-muted/50">
                         <td className="py-2 font-mono text-sm">{key}</td>
                         <td className="py-2 font-mono text-sm">
