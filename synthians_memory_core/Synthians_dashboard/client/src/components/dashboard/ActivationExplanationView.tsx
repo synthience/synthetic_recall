@@ -8,54 +8,22 @@ import { ExplainActivationData, ExplainActivationEmpty } from '@shared/schema';
 import { formatTimeAgo } from '@/lib/utils';
 
 interface ActivationExplanationViewProps {
-  activationData: ExplainActivationData | ExplainActivationEmpty | undefined;
+  explanation: ExplainActivationData | ExplainActivationEmpty | null;
   memoryId: string;
-  isLoading: boolean;
-  isError: boolean;
-  error: Error | null;
 }
 
-export function ActivationExplanationView({ activationData, memoryId, isLoading, isError, error }: ActivationExplanationViewProps) {
-  if (isLoading) {
+export function ActivationExplanationView({ explanation, memoryId }: ActivationExplanationViewProps) {
+  if (!explanation) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Memory Activation Explanation</CardTitle>
-          <CardDescription>Details about how this memory was activated</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <Skeleton className="h-6 w-3/4" />
-            <Skeleton className="h-6 w-1/2" />
-            <Skeleton className="h-24 w-full" />
-            <Skeleton className="h-12 w-full" />
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  if (isError || !activationData) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Memory Activation Explanation</CardTitle>
-          <CardDescription>Details about how this memory was activated</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Alert variant="destructive">
-            <AlertTitle>Error</AlertTitle>
-            <AlertDescription>
-              {error?.message || 'Failed to load activation explanation data'}
-            </AlertDescription>
-          </Alert>
-        </CardContent>
-      </Card>
+      <div className="text-center py-8 text-gray-400">
+        <i className="fas fa-info-circle mr-2"></i>
+        No activation explanation data available for memory {memoryId}
+      </div>
     );
   }
 
   // Check if this is an empty explanation (no activation record available)
-  if ('notes' in activationData && !('check_timestamp' in activationData)) {
+  if ('notes' in explanation && !('check_timestamp' in explanation)) {
     return (
       <Card>
         <CardHeader>
@@ -66,7 +34,7 @@ export function ActivationExplanationView({ activationData, memoryId, isLoading,
           <Alert>
             <AlertTitle>No Activation Record</AlertTitle>
             <AlertDescription>
-              {activationData.notes || "No activation record found for this memory in this assembly."}
+              {explanation.notes || "No activation record found for this memory in this assembly."}
             </AlertDescription>
           </Alert>
         </CardContent>
@@ -74,8 +42,8 @@ export function ActivationExplanationView({ activationData, memoryId, isLoading,
     );
   }
   
-  // At this point TypeScript knows activationData has the ExplainActivationData shape
-  const activationDataDetailed = activationData as ExplainActivationData;
+  // At this point TypeScript knows explanation has the ExplainActivationData shape
+  const activationDataDetailed = explanation as ExplainActivationData;
 
   // Calculate how close the similarity is to the threshold as a percentage
   const similarityPercentage = activationDataDetailed.calculated_similarity != null && 

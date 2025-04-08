@@ -7,47 +7,16 @@ import { LineageEntry } from '@shared/schema';
 import { formatTimeAgo } from '@/lib/utils';
 
 interface LineageViewProps {
-  lineage: LineageEntry[] | undefined;
-  isLoading: boolean;
-  isError: boolean;
-  error: Error | null;
+  lineage: LineageEntry[] | null;
 }
 
-export function LineageView({ lineage, isLoading, isError, error }: LineageViewProps) {
-  if (isLoading) {
+export function LineageView({ lineage }: LineageViewProps) {
+  if (!lineage) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Assembly Lineage</CardTitle>
-          <CardDescription>Showing the ancestry and merge history</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <Skeleton className="h-24 w-full" />
-            <Skeleton className="h-24 w-full" />
-            <Skeleton className="h-24 w-full" />
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  if (isError || !lineage) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Assembly Lineage</CardTitle>
-          <CardDescription>Showing the ancestry and merge history</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Alert variant="destructive">
-            <AlertTitle>Error</AlertTitle>
-            <AlertDescription>
-              {error?.message || 'Failed to load lineage data'}
-            </AlertDescription>
-          </Alert>
-        </CardContent>
-      </Card>
+      <div className="text-center py-8 text-gray-400">
+        <i className="fas fa-info-circle mr-2"></i>
+        No lineage data available
+      </div>
     );
   }
 

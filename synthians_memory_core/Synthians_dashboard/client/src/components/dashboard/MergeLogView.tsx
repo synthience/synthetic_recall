@@ -1,9 +1,11 @@
 import React from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { ReconciledMergeLogEntry } from '@shared/schema';
 import { formatTimeAgo } from '@/lib/utils';
+import { AlertCircle, Info } from 'lucide-react';
 
 interface MergeLogViewProps {
   entries: ReconciledMergeLogEntry[] | undefined;
@@ -15,60 +17,94 @@ interface MergeLogViewProps {
 export function MergeLogView({ entries, isLoading, isError, error }: MergeLogViewProps) {
   if (isLoading) {
     return (
-      <Card className="col-span-full">
+      <Card>
         <CardHeader>
           <CardTitle>Merge Activity Log</CardTitle>
+          <CardDescription>Historical record of assembly merge operations</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           <div className="space-y-2">
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-3/4" />
-            <Skeleton className="h-4 w-5/6" />
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
           </div>
         </CardContent>
       </Card>
     );
   }
 
-  if (isError || !entries) {
+  if (isError) {
     return (
-      <Card className="col-span-full">
+      <Card>
         <CardHeader>
           <CardTitle>Merge Activity Log</CardTitle>
+          <CardDescription>Historical record of assembly merge operations</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="p-4 text-center">
-            <p className="text-red-500">
-              {error?.message || 'Failed to load merge log data'}
-            </p>
-          </div>
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Failed to load merge log data</AlertTitle>
+            <AlertDescription>
+              {error?.message || 'An error occurred while loading the merge log data'}
+            </AlertDescription>
+          </Alert>
         </CardContent>
       </Card>
     );
   }
 
-  if (entries.length === 0) {
+  if (!entries || entries.length === 0) {
     return (
-      <Card className="col-span-full">
+      <Card>
         <CardHeader>
           <CardTitle>Merge Activity Log</CardTitle>
+          <CardDescription>Historical record of assembly merge operations</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="p-4 text-center italic text-muted-foreground">
-            <p>No merge events have been recorded yet.</p>
-          </div>
+          <Alert>
+            <Info className="h-4 w-4" />
+            <AlertTitle>No Merge Events</AlertTitle>
+            <AlertDescription>
+              No assembly merge events have been recorded yet. Merge events will appear here when assemblies are combined.
+            </AlertDescription>
+          </Alert>
         </CardContent>
       </Card>
     );
   }
+
+  // Helper function to get status badge variant
+  const getStatusBadgeVariant = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'completed':
+        return 'default';
+      case 'pending':
+        return 'secondary';
+      case 'failed':
+        return 'destructive';
+      default:
+        return 'outline';
+    }
+  };
+
+  // Helper function for similarity display
+  const formatSimilarity = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return 'N/A';
+    return `${(value * 100).toFixed(2)}%`;
+  };
 
   return (
-    <Card className="col-span-full">
+    <Card>
       <CardHeader>
-        <CardTitle className="flex items-center justify-between">
-          <span>Merge Activity Log</span>
+        <div className="flex justify-between items-center">
+          <div>
+            <CardTitle>Merge Activity Log</CardTitle>
+            <CardDescription>Historical record of assembly merge operations</CardDescription>
+          </div>
           <Badge variant="outline">{entries.length} events</Badge>
-        </CardTitle>
+        </div>
       </CardHeader>
       <CardContent>
         <div className="overflow-x-auto">
@@ -79,6 +115,7 @@ export function MergeLogView({ entries, isLoading, isError, error }: MergeLogVie
                 <th className="text-left py-2 font-medium">Timestamp</th>
                 <th className="text-left py-2 font-medium">Source Assemblies</th>
                 <th className="text-left py-2 font-medium">Target Assembly</th>
+                <th className="text-left py-2 font-medium">Similarity</th>
                 <th className="text-left py-2 font-medium">Status</th>
               </tr>
             </thead>
@@ -86,11 +123,13 @@ export function MergeLogView({ entries, isLoading, isError, error }: MergeLogVie
               {entries.map(entry => {
                 return (
                   <tr key={entry.merge_event_id} className="hover:bg-muted/50 text-sm">
-                    <td className="py-3 font-mono">
+                    <td className="py-3 font-mono text-xs">
                       {entry.merge_event_id.substring(0, 8)}...
                     </td>
                     <td className="py-3">
-                      {formatTimeAgo(entry.creation_timestamp)}
+                      <span title={new Date(entry.creation_timestamp).toLocaleString()}>
+                        {formatTimeAgo(entry.creation_timestamp)}
+                      </span>
                     </td>
                     <td className="py-3">
                       <div className="flex flex-wrap gap-1 max-w-xs">
@@ -101,27 +140,28 @@ export function MergeLogView({ entries, isLoading, isError, error }: MergeLogVie
                         )) || 'N/A'}
                       </div>
                     </td>
-                    <td className="py-3 font-mono">
-                      {entry.target_assembly_id.substring(0, 8)}...
+                    <td className="py-3 font-mono text-xs">
+                      {entry.target_assembly_id ? `${entry.target_assembly_id.substring(0, 8)}...` : 'N/A'}
                     </td>
                     <td className="py-3">
-                      {entry.final_cleanup_status === "pending" && (
-                        <Badge variant="outline" className="bg-yellow-100 text-yellow-800 dark:bg-yellow-800 dark:text-yellow-100">
-                          Pending
-                        </Badge>
+                      {formatSimilarity(entry.similarity_at_merge)}
+                      {entry.merge_threshold && (
+                        <span className="text-xs text-muted-foreground ml-1">
+                          (threshold: {formatSimilarity(entry.merge_threshold)})
+                        </span>
                       )}
-                      {entry.final_cleanup_status === "completed" && (
-                        <Badge className="bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-100">
-                          Completed
-                        </Badge>
-                      )}
-                      {entry.final_cleanup_status === "failed" && (
-                        <Badge variant="destructive">
-                          Failed
-                          {entry.cleanup_error && (
-                            <span className="ml-1 cursor-help" title={entry.cleanup_error}>ⓘ</span>
-                          )}
-                        </Badge>
+                    </td>
+                    <td className="py-3">
+                      <Badge 
+                        variant={getStatusBadgeVariant(entry.final_cleanup_status)}
+                        className="text-xs capitalize"
+                      >
+                        {entry.final_cleanup_status}
+                      </Badge>
+                      {entry.cleanup_error && (
+                        <span className="block text-xs text-destructive mt-1" title={entry.cleanup_error}>
+                          Error: {entry.cleanup_error.substring(0, 20)}...
+                        </span>
                       )}
                     </td>
                   </tr>

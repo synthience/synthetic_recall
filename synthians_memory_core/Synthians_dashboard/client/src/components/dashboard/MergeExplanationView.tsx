@@ -7,53 +7,21 @@ import { ExplainMergeData, ExplainMergeEmpty } from '@shared/schema';
 import { formatTimeAgo } from '@/lib/utils';
 
 interface MergeExplanationViewProps {
-  mergeData: ExplainMergeData | ExplainMergeEmpty | undefined;
-  isLoading: boolean;
-  isError: boolean;
-  error: Error | null;
+  explanation: ExplainMergeData | ExplainMergeEmpty | null;
 }
 
-export function MergeExplanationView({ mergeData, isLoading, isError, error }: MergeExplanationViewProps) {
-  if (isLoading) {
+export function MergeExplanationView({ explanation }: MergeExplanationViewProps) {
+  if (!explanation) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Assembly Merge Explanation</CardTitle>
-          <CardDescription>Details about how this assembly was formed</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <Skeleton className="h-6 w-3/4" />
-            <Skeleton className="h-6 w-1/2" />
-            <Skeleton className="h-24 w-full" />
-            <Skeleton className="h-12 w-full" />
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  if (isError || !mergeData) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Assembly Merge Explanation</CardTitle>
-          <CardDescription>Details about how this assembly was formed</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Alert variant="destructive">
-            <AlertTitle>Error</AlertTitle>
-            <AlertDescription>
-              {error?.message || 'Failed to load merge explanation data'}
-            </AlertDescription>
-          </Alert>
-        </CardContent>
-      </Card>
+      <div className="text-center py-8 text-gray-400">
+        <i className="fas fa-info-circle mr-2"></i>
+        No merge explanation data available
+      </div>
     );
   }
 
   // Check if this is an empty explanation (not a merged assembly)
-  if ('notes' in mergeData && !('source_assembly_ids' in mergeData)) {
+  if ('notes' in explanation && !('source_assembly_ids' in explanation)) {
     return (
       <Card>
         <CardHeader>
@@ -64,7 +32,7 @@ export function MergeExplanationView({ mergeData, isLoading, isError, error }: M
           <Alert>
             <AlertTitle>Not a Merged Assembly</AlertTitle>
             <AlertDescription>
-              {mergeData.notes || "This assembly was created directly, not through a merge operation."}
+              {explanation.notes || "This assembly was created directly, not through a merge operation."}
             </AlertDescription>
           </Alert>
         </CardContent>
@@ -72,8 +40,8 @@ export function MergeExplanationView({ mergeData, isLoading, isError, error }: M
     );
   }
   
-  // At this point TypeScript knows mergeData has the ExplainMergeData shape
-  const mergeDataDetailed = mergeData as ExplainMergeData;
+  // At this point TypeScript knows explanation has the ExplainMergeData shape
+  const explanationDetailed = explanation as ExplainMergeData;
 
   return (
     <Card>
@@ -91,14 +59,14 @@ export function MergeExplanationView({ mergeData, isLoading, isError, error }: M
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-muted/40 p-3 rounded-md">
             <div>
               <h3 className="text-sm font-medium text-muted-foreground">Merge Timestamp</h3>
-              <p>{mergeDataDetailed.merge_timestamp ? 
-                 formatTimeAgo(mergeDataDetailed.merge_timestamp) : 
+              <p>{explanationDetailed.merge_timestamp ? 
+                 formatTimeAgo(explanationDetailed.merge_timestamp) : 
                  'Unknown'}</p>
             </div>
 
             <div>
               <h3 className="text-sm font-medium text-muted-foreground">Similarity Threshold</h3>
-              <p className="font-mono">{mergeDataDetailed.merge_threshold?.toFixed(4) || 'Not available'}</p>
+              <p className="font-mono">{explanationDetailed.merge_threshold?.toFixed(4) || 'Not available'}</p>
             </div>
           </div>
 
@@ -106,12 +74,12 @@ export function MergeExplanationView({ mergeData, isLoading, isError, error }: M
             <h3 className="text-sm font-medium text-muted-foreground mb-2">Source Assemblies</h3>
             <div className="bg-muted/30 p-3 rounded-md">
               <div className="flex flex-wrap gap-2">
-                {mergeDataDetailed.source_assembly_ids.map(id => (
+                {explanationDetailed.source_assembly_ids.map(id => (
                   <Badge key={id} variant="secondary" className="font-mono">{id.substring(0, 8)}...</Badge>
                 ))}
               </div>
               <p className="text-xs text-muted-foreground mt-2">
-                {mergeDataDetailed.source_assembly_ids.length} source {mergeDataDetailed.source_assembly_ids.length === 1 ? 'assembly' : 'assemblies'} merged
+                {explanationDetailed.source_assembly_ids.length} source {explanationDetailed.source_assembly_ids.length === 1 ? 'assembly' : 'assemblies'} merged
               </p>
             </div>
           </div>
@@ -121,29 +89,29 @@ export function MergeExplanationView({ mergeData, isLoading, isError, error }: M
             <div className="bg-muted/30 p-3 rounded-md">
               <div className="flex items-center">
                 <span className="mr-2">Cleanup:</span>
-                {mergeDataDetailed.cleanup_status === 'completed' && (
+                {explanationDetailed.cleanup_status === 'completed' && (
                   <Badge className="bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-100">
                     <i className="fas fa-check mr-1"></i> Completed
                   </Badge>
                 )}
-                {mergeDataDetailed.cleanup_status === 'pending' && (
+                {explanationDetailed.cleanup_status === 'pending' && (
                   <Badge variant="outline" className="bg-yellow-100 text-yellow-800 dark:bg-yellow-800 dark:text-yellow-100">
                     <i className="fas fa-clock mr-1"></i> Pending
                   </Badge>
                 )}
-                {mergeDataDetailed.cleanup_status === 'failed' && (
+                {explanationDetailed.cleanup_status === 'failed' && (
                   <Badge variant="destructive">
                     <i className="fas fa-exclamation-triangle mr-1"></i> Failed
                   </Badge>
                 )}
               </div>
 
-              {mergeDataDetailed.cleanup_status === 'failed' && mergeDataDetailed.cleanup_error && (
+              {explanationDetailed.cleanup_status === 'failed' && explanationDetailed.cleanup_error && (
                 <div className="mt-3">
                   <Alert variant="destructive">
                     <AlertTitle>Error Details</AlertTitle>
                     <AlertDescription className="font-mono text-sm break-all">
-                      {mergeDataDetailed.cleanup_error}
+                      {explanationDetailed.cleanup_error}
                     </AlertDescription>
                   </Alert>
                 </div>
@@ -151,10 +119,10 @@ export function MergeExplanationView({ mergeData, isLoading, isError, error }: M
             </div>
           </div>
           
-          {mergeDataDetailed.notes && (
+          {explanationDetailed.notes && (
             <div>
               <h3 className="text-sm font-medium text-muted-foreground mb-2">Notes</h3>
-              <p className="text-sm italic bg-muted/30 p-3 rounded-md">{mergeDataDetailed.notes}</p>
+              <p className="text-sm italic bg-muted/30 p-3 rounded-md">{explanationDetailed.notes}</p>
             </div>
           )}
         </div>

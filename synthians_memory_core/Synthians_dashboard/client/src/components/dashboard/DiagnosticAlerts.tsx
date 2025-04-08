@@ -11,9 +11,16 @@ interface DiagnosticAlertsProps {
   isLoading: boolean;
   isError?: boolean;
   error?: Error | null;
+  errorMessage?: string | null;
 }
 
-export function DiagnosticAlerts({ alerts, isLoading, isError = false, error = null }: DiagnosticAlertsProps) {
+export function DiagnosticAlerts({ 
+  alerts, 
+  isLoading, 
+  isError = false, 
+  error = null,
+  errorMessage 
+}: DiagnosticAlertsProps) {
   const getAlertIcon = (type: string) => {
     switch (type) {
       case 'error':
@@ -96,12 +103,14 @@ export function DiagnosticAlerts({ alerts, isLoading, isError = false, error = n
             </div>
           ))
         ) : isError ? (
-          <Alert variant="destructive" className="mb-4">
-            <AlertTitle>Failed to load alerts</AlertTitle>
-            <AlertDescription>
-              {error?.message || "There was an error fetching diagnostic alerts. Please try again later."}
-            </AlertDescription>
-          </Alert>
+          <div className="space-y-4">
+            <Alert variant="destructive">
+              <AlertTitle>Failed to load alerts</AlertTitle>
+              <AlertDescription>
+                {errorMessage || error?.message || "There was an error fetching diagnostic alerts. Please try again later."}
+              </AlertDescription>
+            </Alert>
+          </div>
         ) : !alerts || alerts.length === 0 ? (
           <div className="p-4 text-center text-sm text-gray-400">
             <i className="fas fa-info-circle mr-2"></i>
