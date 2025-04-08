@@ -24,35 +24,42 @@ export default function NeuralMemory() {
   const neuralMemoryStatus = useNeuralMemoryStatus();
   const neuralMemoryDiagnostics = useNeuralMemoryDiagnostics(timeWindow);
   
-  // Prepare service status object
-  const serviceStatus = neuralMemoryHealth.data?.success && neuralMemoryHealth.data.data ? {
-    name: "Neural Memory",
-    // Access status from nested data property and use robust check
-    status: ["ok", "healthy"].includes(neuralMemoryHealth.data.data.status?.toLowerCase()) ? "Healthy" : "Unhealthy",
-    url: "/api/neural-memory/health",
-    // Handle both uptime formats (string or number)
-    uptime: neuralMemoryHealth.data.data.uptime || 
-           (neuralMemoryHealth.data.data.uptime_seconds ? formatDuration(neuralMemoryHealth.data.data.uptime_seconds) : "Unknown"),
-    version: neuralMemoryHealth.data.data.version || "Unknown"
-  } as ServiceStatusType : null;
+  // Prepare service status object safely
+  const serviceStatus: ServiceStatusType | null = neuralMemoryHealth.data?.success 
+    ? {
+        name: "Neural Memory",
+        status: ["ok", "healthy"].includes((neuralMemoryHealth.data.data?.status || "").toLowerCase()) ? "Healthy" : "Unhealthy",
+        url: "/api/neural-memory/health",
+        uptime: neuralMemoryHealth.data.data?.uptime || (neuralMemoryHealth.data.data?.uptime_seconds ? formatDuration(neuralMemoryHealth.data.data.uptime_seconds) : "Unknown"),
+        version: neuralMemoryHealth.data.data?.version || "Unknown"
+      } 
+    : null;
   
-  // Prepare chart data
+  // Prepare chart data with robust null checking
   const prepareChartData = () => {
-    if (!neuralMemoryDiagnostics.data?.data?.history) {
-      return [];
+    // Add checks for data structure before accessing history
+    // **CRITICAL:** Access nested data safely
+    const history = neuralMemoryDiagnostics.data?.data?.history;
+    if (!history || !Array.isArray(history)) { 
+      // Reduce console noise, only log if it's unexpected (e.g., not loading)
+      if (!neuralMemoryDiagnostics.isLoading) {
+        console.warn("[prepareChartData] History data is missing or not an array.");
+      }
+      return []; // Return empty array if history is not available or invalid
     }
     
-    return neuralMemoryDiagnostics.data.data.history.map((item: any) => ({
+    return history.map((item: any) => ({
       timestamp: item.timestamp,
-      loss: item.loss,
-      grad_norm: item.grad_norm,
-      qr_boost: item.qr_boost
-    }));
+      // Add nullish coalescing for safety
+      loss: item.loss ?? null, // Keep null if missing, chart can handle gaps
+      grad_norm: item.grad_norm ?? null,
+      qr_boost: item.qr_boost ?? null,
+    })).filter(item => item.timestamp); // Ensure timestamp exists
   };
   
   const chartData = prepareChartData();
   
-  // Determine if any metrics are in warning/critical state
+  // Determine if any metrics are in warning/critical state - safe access
   const isGradNormHigh = 
     (neuralMemoryDiagnostics.data?.data?.avg_grad_norm ?? 0) > 0.8;
     
@@ -171,17 +178,17 @@ export default function NeuralMemory() {
                       <Skeleton className="h-16 w-full" />
                       <Skeleton className="h-16 w-full" />
                     </div>
-                  ) : neuralMemoryDiagnostics.data?.data ? (
+                  ) : neuralMemoryDiagnostics.data?.data ? ( // **CRITICAL:** Check if data.data exists
                     <div className="space-y-4">
                       <div>
                         <div className="flex justify-between mb-1">
                           <p className="text-sm text-gray-500">Average Loss</p>
                           <p className="text-sm font-mono">
-                            {neuralMemoryDiagnostics.data.data.avg_loss.toFixed(5)}
+                            {(neuralMemoryDiagnostics.data.data.avg_loss ?? 0).toFixed(5)}
                           </p>
                         </div>
                         <Progress 
-                          value={Math.min(neuralMemoryDiagnostics.data.data.avg_loss * 100, 100)} 
+                          value={Math.min((neuralMemoryDiagnostics.data.data.avg_loss ?? 0) * 100, 100)} 
                           className="h-2" 
                         />
                       </div>
@@ -189,12 +196,12 @@ export default function NeuralMemory() {
                         <div className="flex justify-between mb-1">
                           <p className="text-sm text-gray-500">Gradient Norm</p>
                           <p className={`text-sm font-mono ${isGradNormHigh ? "text-amber-500" : ""}`}>
-                            {neuralMemoryDiagnostics.data.data.avg_grad_norm.toFixed(5)}
+                            {(neuralMemoryDiagnostics.data.data.avg_grad_norm ?? 0).toFixed(5)}
                             {isGradNormHigh && <span className="ml-2 text-amber-500">⚠</span>}
                           </p>
                         </div>
                         <Progress 
-                          value={Math.min(neuralMemoryDiagnostics.data.data.avg_grad_norm * 100, 100)} 
+                          value={Math.min((neuralMemoryDiagnostics.data.data.avg_grad_norm ?? 0) * 100, 100)} 
                           className={isGradNormHigh ? "h-2 bg-amber-900/20" : "h-2"} 
                         />
                       </div>
@@ -202,17 +209,17 @@ export default function NeuralMemory() {
                         <div className="flex justify-between mb-1">
                           <p className="text-sm text-gray-500">QR Boost</p>
                           <p className="text-sm font-mono">
-                            {neuralMemoryDiagnostics.data.data.avg_qr_boost.toFixed(5)}
+                            {(neuralMemoryDiagnostics.data.data.avg_qr_boost ?? 0).toFixed(5)}
                           </p>
                         </div>
                         <Progress 
-                          value={Math.min(neuralMemoryDiagnostics.data.data.avg_qr_boost * 100, 100)} 
+                          value={Math.min((neuralMemoryDiagnostics.data.data.avg_qr_boost ?? 0) * 100, 100)} 
                           className="h-2" 
                         />
                       </div>
                     </div>
                   ) : (
-                    <p className="text-gray-400 text-center py-8">No diagnostic data available</p>
+                    <p className="text-gray-400 text-center py-8">No diagnostic data available</p> // State when data is missing/empty
                   )}
                 </CardContent>
               </Card>
@@ -229,26 +236,29 @@ export default function NeuralMemory() {
                       <Skeleton className="h-16 w-full" />
                       <Skeleton className="h-16 w-full" />
                     </div>
-                  ) : neuralMemoryDiagnostics.data?.data?.emotional_loop ? (
+                  ) : neuralMemoryDiagnostics.data?.data?.emotional_loop ? ( // Check nested loop data
                     <div className="space-y-4">
                       <div>
                         <p className="text-sm text-gray-500 mb-1">Dominant Emotions</p>
                         <div className="flex flex-wrap gap-1">
-                          {neuralMemoryDiagnostics.data.data.emotional_loop.dominant_emotions.map((emotion: string, index: number) => (
+                          {Array.isArray(neuralMemoryDiagnostics.data.data.emotional_loop.dominant_emotions) ? 
+                           neuralMemoryDiagnostics.data.data.emotional_loop.dominant_emotions.map((emotion: string, index: number) => (
                             <Badge key={index} variant="secondary">{emotion}</Badge>
-                          ))}
+                          )) : (
+                            <span className="text-xs text-gray-400">N/A</span>
+                          )}
                         </div>
                       </div>
                       <div>
                         <p className="text-sm text-gray-500 mb-1">Entropy</p>
                         <p className="text-lg">
-                          {neuralMemoryDiagnostics.data.data.emotional_loop.entropy.toFixed(3)}
+                          {(neuralMemoryDiagnostics.data.data.emotional_loop.entropy ?? 0).toFixed(3)}
                         </p>
                       </div>
                       <div>
                         <p className="text-sm text-gray-500 mb-1">Bias Index</p>
                         <p className="text-lg">
-                          {neuralMemoryDiagnostics.data.data.emotional_loop.bias_index.toFixed(3)}
+                          {(neuralMemoryDiagnostics.data.data.emotional_loop.bias_index ?? 0).toFixed(3)}
                         </p>
                       </div>
                       <div>
@@ -256,11 +266,11 @@ export default function NeuralMemory() {
                         <div className="flex justify-between mb-1">
                           <span></span>
                           <p className="text-sm font-mono">
-                            {(neuralMemoryDiagnostics.data.data.emotional_loop.match_rate * 100).toFixed(1)}%
+                            {((neuralMemoryDiagnostics.data.data.emotional_loop.match_rate ?? 0) * 100).toFixed(1)}%
                           </p>
                         </div>
                         <Progress 
-                          value={neuralMemoryDiagnostics.data.data.emotional_loop.match_rate * 100} 
+                          value={(neuralMemoryDiagnostics.data.data.emotional_loop.match_rate ?? 0) * 100} 
                           className="h-2" 
                         />
                       </div>
@@ -293,7 +303,7 @@ export default function NeuralMemory() {
               <div>
                 <p className="text-sm text-gray-500 mb-1">Initialization Status</p>
                 <p className="text-lg">
-                  {neuralMemoryStatus.data.initialized ? (
+                  {neuralMemoryStatus.data.data?.initialized ? (
                     <span className="text-green-400">Initialized</span>
                   ) : (
                     <span className="text-yellow-400">Not Initialized</span>
@@ -303,13 +313,13 @@ export default function NeuralMemory() {
               <div>
                 <p className="text-sm text-gray-500 mb-1">Dimensions</p>
                 <p className="text-lg font-mono">
-                  {neuralMemoryStatus.data.config?.dimensions || "Unknown"}
+                  {neuralMemoryStatus.data.data?.config?.dimensions || "Unknown"}
                 </p>
               </div>
               <div>
                 <p className="text-sm text-gray-500 mb-1">Hidden Size</p>
                 <p className="text-lg font-mono">
-                  {neuralMemoryStatus.data.config?.hidden_size || "Unknown"}
+                  {neuralMemoryStatus.data.data?.config?.hidden_size || "Unknown"}
                 </p>
               </div>
             </div>
@@ -343,7 +353,7 @@ export default function NeuralMemory() {
               <div className="grid grid-cols-1 gap-6">
                 <MetricsChart
                   title="Neural Memory Performance"
-                  data={chartData}
+                  data={chartData} // Already prepared safely
                   dataKeys={[
                     { key: "loss", color: "#FF008C", name: "Loss" },
                     { key: "grad_norm", color: "#1EE4FF", name: "Gradient Norm" },
@@ -357,24 +367,25 @@ export default function NeuralMemory() {
                   summary={[
                     { 
                       label: "Avg. Loss", 
-                      value: neuralMemoryDiagnostics.data?.data?.avg_loss?.toFixed(4) || "--", 
+                      value: (neuralMemoryDiagnostics.data.data.avg_loss ?? 0).toFixed(4), 
                       color: "text-primary" 
                     },
                     { 
                       label: "Avg. Grad Norm", 
-                      value: neuralMemoryDiagnostics.data?.data?.avg_grad_norm?.toFixed(4) || "--",
+                      value: (neuralMemoryDiagnostics.data.data.avg_grad_norm ?? 0).toFixed(4),
                       color: isGradNormHigh ? "text-destructive" : "text-secondary"
                     },
                     { 
                       label: "Avg. QR Boost", 
-                      value: neuralMemoryDiagnostics.data?.data?.avg_qr_boost?.toFixed(4) || "--",
+                      value: (neuralMemoryDiagnostics.data.data.avg_qr_boost ?? 0).toFixed(4),
                       color: "text-primary" 
                     }
                   ]}
                 />
                 
                 {/* Recommendations section */}
-                {neuralMemoryDiagnostics.data?.data?.recommendations?.length > 0 && (
+                {Array.isArray(neuralMemoryDiagnostics.data?.data?.recommendations) && 
+                 neuralMemoryDiagnostics.data.data.recommendations.length > 0 && (
                   <Card>
                     <CardHeader className="pb-2">
                       <CardTitle>System Recommendations</CardTitle>
@@ -382,7 +393,7 @@ export default function NeuralMemory() {
                     <CardContent>
                       <ul className="list-disc list-inside space-y-2">
                         {neuralMemoryDiagnostics.data.data.recommendations.map((rec: string, idx: number) => (
-                          <li key={idx} className="text-sm">{rec}</li>
+                          <li key={idx} className="text-sm">{rec || "Invalid recommendation entry"}</li>
                         ))}
                       </ul>
                     </CardContent>
@@ -390,7 +401,8 @@ export default function NeuralMemory() {
                 )}
                 
                 {/* Alerts section */}
-                {neuralMemoryDiagnostics.data?.data?.alerts?.length > 0 && (
+                {Array.isArray(neuralMemoryDiagnostics.data?.data?.alerts) && 
+                 neuralMemoryDiagnostics.data.data.alerts.length > 0 && (
                   <Card>
                     <CardHeader className="pb-2">
                       <CardTitle>System Alerts</CardTitle>
@@ -399,7 +411,7 @@ export default function NeuralMemory() {
                       <div className="space-y-2">
                         {neuralMemoryDiagnostics.data.data.alerts.map((alert: string, idx: number) => (
                           <Alert key={idx} variant="destructive">
-                            <AlertDescription>{alert}</AlertDescription>
+                            <AlertDescription>{alert || "Invalid alert entry"}</AlertDescription>
                           </Alert>
                         ))}
                       </div>
@@ -409,7 +421,7 @@ export default function NeuralMemory() {
               </div>
             ) : (
               <div className="text-center py-8 text-gray-400">
-                <p>No metrics data available</p>
+                <p>No metrics data available</p> // Message when data.data is missing/empty
               </div>
             )}
           </TabsContent>

@@ -20,6 +20,7 @@ interface AssemblyTableProps {
   isLoading: boolean;
   isError?: boolean;
   error?: Error | null;
+  errorMessage?: string | null;
   title?: string;
   showFilters?: boolean;
 }
@@ -29,8 +30,9 @@ export function AssemblyTable({
   isLoading,
   isError = false,
   error = null,
+  errorMessage,
   title = "Assemblies",
-  showFilters = true
+  showFilters = true,
 }: AssemblyTableProps) {
   // Helper function to get sync status
   const getSyncStatus = (assembly: Assembly) => {
@@ -119,7 +121,7 @@ export function AssemblyTable({
                 <TableCell colSpan={6} className="text-center py-4 text-destructive">
                   <div className="flex flex-col items-center">
                     <i className="fas fa-exclamation-triangle mb-2"></i>
-                    <span>{error?.message || 'Failed to load assembly data'}</span>
+                    <span>{error?.message || errorMessage || 'Failed to load assembly data'}</span>
                   </div>
                 </TableCell>
               </TableRow>
